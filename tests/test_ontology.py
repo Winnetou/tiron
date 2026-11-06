@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.ontology import Correction, Edition, Page, Work
+from app.ontology import Collection, Correction, Edition, Page, Work
 
 WORK_ID = uuid4()
 
@@ -19,9 +19,11 @@ def test_work_ids_are_unique():
     assert Work(author="a").id != Work(author="a").id
 
 
-def test_work_author_required():
-    with pytest.raises(ValidationError):
-        Work()
+def test_work_author_and_title_are_optional():
+    work = Work()
+
+    assert work.author is None
+    assert work.title is None
 
 
 def test_edition_generates_uuid():
@@ -83,9 +85,13 @@ def test_page_required_fields(missing):
         Page(**data)
 
 
-def test_page_number_must_be_positive():
+def test_page_number_can_be_zero():
+    assert Page(edition_id=uuid4(), number=0, raw_content="x").number == 0
+
+
+def test_page_number_cannot_be_negative():
     with pytest.raises(ValidationError):
-        Page(edition_id=uuid4(), number=0, raw_content="x")
+        Page(edition_id=uuid4(), number=-1, raw_content="x")
 
 
 def test_correction_fields():
@@ -115,3 +121,35 @@ def test_correction_required_fields(missing):
 
     with pytest.raises(ValidationError):
         Correction(**data)
+
+
+def test_collection_is_list_of_uuids():
+    ids = [uuid4(), uuid4()]
+
+    assert Collection(ids).root == ids
+    assert Collection([]).root == []
+
+
+def test_collection_parses_uuid_strings():
+    uid = uuid4()
+
+    assert Collection.model_validate([str(uid)]).root == [uid]
+
+
+def test_collection_rejects_duplicates():
+    uid = uuid4()
+
+    with pytest.raises(ValidationError):
+        Collection([uid, uid])
+
+
+def test_collection_rejects_non_uuid():
+    with pytest.raises(ValidationError):
+        Collection(["not-a-uuid"])
+
+
+def test_edition_place_and_year_are_optional():
+    edition = Edition(work_id=WORK_ID)
+
+    assert edition.place is None
+    assert edition.year is None

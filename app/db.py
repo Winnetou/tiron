@@ -36,20 +36,21 @@ def get_conninfo() -> str:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS works (
     id uuid PRIMARY KEY,
-    author text NOT NULL
+    author text,
+    title text
 );
 
 CREATE TABLE IF NOT EXISTS editions (
     id uuid PRIMARY KEY,
     work_id uuid NOT NULL REFERENCES works (id),
-    place text NOT NULL,
-    year integer NOT NULL CHECK (year BETWEEN 1500 AND 2030)
+    place text,
+    year integer CHECK (year BETWEEN 1500 AND 2030)
 );
 
 CREATE TABLE IF NOT EXISTS pages (
     id uuid PRIMARY KEY,
     edition_id uuid NOT NULL REFERENCES editions (id),
-    number integer NOT NULL CHECK (number >= 1),
+    number integer NOT NULL CHECK (number >= 0),
     raw_content text NOT NULL,
     corrected_content text,
     UNIQUE (edition_id, number)
@@ -61,6 +62,21 @@ CREATE TABLE IF NOT EXISTS corrections (
     "before" text NOT NULL CHECK ("before" <> ''),
     "after" text NOT NULL CHECK ("after" <> '')
 );
+
+CREATE TABLE IF NOT EXISTS collection (
+    id uuid PRIMARY KEY
+);
+
+-- migrations for databases created before these changes
+ALTER TABLE works ADD COLUMN IF NOT EXISTS title text;
+ALTER TABLE works ALTER COLUMN author DROP NOT NULL;
+ALTER TABLE editions ALTER COLUMN place DROP NOT NULL;
+ALTER TABLE editions ALTER COLUMN year DROP NOT NULL;
+
+-- one work per (author, title), case-insensitive; unknown values never match
+CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
+    ON works (lower(author), lower(title))
+    WHERE author IS NOT NULL AND title IS NOT NULL;
 """
 
 
@@ -81,8 +97,8 @@ class Database:
 
     def create_work(self, work: Work) -> Work:
         row = self.conn.execute(
-            "INSERT INTO works (id, author) VALUES (%s, %s) RETURNING *",
-            (work.id, work.author),
+            "INSERT INTO works (id, author, title) VALUES (%s, %s, %s) RETURNING *",
+            (work.id, work.author, work.title),
         ).fetchone()
         return Work.model_validate(row)
 
@@ -100,6 +116,49 @@ class Database:
             " VALUES (%s, %s, %s, %s) RETURNING *",
             (edition.id, edition.work_id, edition.place, edition.year),
         ).fetchone()
+        return Edition.model_validate(row)
+
+    def _get_or_create_work(self, work: Work) -> Work:
+        """Return the stored work with the same (author, title), ignoring case,
+        or store the given one. Works with an unknown author or title never match."""
+        row = self.conn.execute(
+            "INSERT INTO works (id, author, title) VALUES (%s, %s, %s)"
+            " ON CONFLICT (lower(author), lower(title))"
+            " WHERE author IS NOT NULL AND title IS NOT NULL"
+            " DO NOTHING RETURNING *",
+            (work.id, work.author, work.title),
+        ).fetchone()
+        if row is None:
+            row = self.conn.execute(
+                "SELECT * FROM works WHERE lower(author) = lower(%s)"
+                " AND lower(title) = lower(%s)",
+                (work.author, work.title),
+            ).fetchone()
+        return Work.model_validate(row)
+
+    def upsert_edition(self, work: Work, edition: Edition) -> Edition:
+        """Store the edition unless it already exists, in which case the stored
+        edition is returned and nothing is written.
+
+        The edition is attached to the stored work with the same (author, title)
+        if there is one, so many editions share a work; `work` is stored only
+        when there is no such work. Atomic: a work is never stored without its
+        edition. The returned edition carries the work_id actually used."""
+        row = None
+        with self.conn.transaction():
+            if self.get_edition(edition.id) is not None:
+                raise psycopg.Rollback
+            stored_work = self._get_or_create_work(work)
+            row = self.conn.execute(
+                "INSERT INTO editions (id, work_id, place, year)"
+                " VALUES (%s, %s, %s, %s)"
+                " ON CONFLICT (id) DO NOTHING RETURNING *",
+                (edition.id, stored_work.id, edition.place, edition.year),
+            ).fetchone()
+            if row is None:
+                raise psycopg.Rollback  # created concurrently: discard our work
+        if row is None:
+            return self.get_edition(edition.id)
         return Edition.model_validate(row)
 
     def get_edition(self, edition_id: UUID) -> Edition | None:
@@ -167,3 +226,12 @@ class Database:
             "SELECT * FROM corrections WHERE id = %s", (correction_id,)
         ).fetchone()
         return Correction.model_validate(row) if row else None
+
+    # Collection
+
+    def check_edition_in_collection(self, edition_id: UUID) -> bool:
+        row = self.conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM collection WHERE id = %s) AS present",
+            (edition_id,),
+        ).fetchone()
+        return row["present"]
