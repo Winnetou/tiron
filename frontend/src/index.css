@@ -1,0 +1,91 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(28rem, 90vw);
+}
+
+input {
+  font: inherit;
+  padding: 0.5rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.5rem;
+}
+
+[role='alert'] {
+  color: #b00020;
+}
+
+.viewer {
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.viewer-half {
+  overflow: auto;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.viewer-half + .viewer-half {
+  border-left: 1px solid #ccc;
+}
+
+.viewer-half img {
+  display: block;
+  max-width: none; /* width is set by the zoom level */
+}
+
+.zoom-controls {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  margin-bottom: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #ccc;
+  border-radius: 0.25rem;
+}
+
+.zoom-controls button {
+  min-width: 2rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.viewer-half pre {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.page-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.25rem 0;
+  background: #fff;
+}
