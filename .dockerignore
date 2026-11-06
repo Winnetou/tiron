@@ -4,3 +4,4 @@ __pycache__
 *.pyc
 .ruff_cache
 .pre-commit-config.yaml
+frontend
