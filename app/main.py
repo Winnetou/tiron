@@ -1,5 +1,9 @@
 from fastapi import FastAPI
 
+from app.db import Database
+
+db = Database()
+
 app = FastAPI(title="tiron")
 
 
