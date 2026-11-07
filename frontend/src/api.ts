@@ -28,12 +28,8 @@ export function pageNumberFromUrl(search: string): number {
     : DEFAULT_PAGE_NUMBER
 }
 
-/** Calls GET /editions/{editionId}/pages/{number}. */
-export async function getPage(
-  editionId: string,
-  number: number = DEFAULT_PAGE_NUMBER,
-): Promise<Page> {
-  const response = await fetch(`/editions/${editionId}/pages/${number}`)
+async function request(url: string, init?: RequestInit): Promise<Page> {
+  const response = await (init ? fetch(url, init) : fetch(url))
   if (!response.ok) {
     let detail = response.statusText
     try {
@@ -45,4 +41,34 @@ export async function getPage(
     throw new ApiError(response.status, detail)
   }
   return response.json()
+}
+
+const pageUrl = (editionId: string, number: number) =>
+  `/editions/${editionId}/pages/${number}`
+
+/** Calls GET /editions/{editionId}/pages/{number}. */
+export function getPage(
+  editionId: string,
+  number: number = DEFAULT_PAGE_NUMBER,
+): Promise<Page> {
+  return request(pageUrl(editionId, number))
+}
+
+/** The only things of a page that can be edited. */
+export interface PageChanges {
+  corrected_content?: string | null
+  ready?: boolean
+}
+
+/** Calls PATCH /editions/{editionId}/pages/{number}; returns the updated page. */
+export function updatePage(
+  editionId: string,
+  number: number,
+  changes: PageChanges,
+): Promise<Page> {
+  return request(pageUrl(editionId, number), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  })
 }

@@ -81,8 +81,8 @@ describe('App', () => {
 
     const image = await screen.findByRole('img')
     expect(image).toHaveAttribute('src', PAGE.scan_uri)
-    const text = screen.getByText(/Ala ma kota/)
-    expect(text).toHaveTextContent('Ala ma kota kota ma Ala')
+    const text = screen.getByRole('textbox', { name: 'Page text' })
+    expect(text).toHaveValue('Ala ma kota\nkota ma Ala')
     // two halves: image first (left), text second (right)
     const [left, right] = Array.from(
       document.querySelectorAll('.viewer-half'),
@@ -121,7 +121,7 @@ describe('App', () => {
     )
     // stubs: clicking does nothing
     await userEvent.click(buttons[0])
-    expect(screen.getByText(/Ala ma kota/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Page text')).toHaveValue(PAGE.content)
   })
 
   it('zooms the scan in and out within limits', async () => {
@@ -178,7 +178,7 @@ describe('App', () => {
       render(<App />)
       await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
       await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-      await screen.findByText(`text of page ${number}`)
+      await screen.findByDisplayValue(`text of page ${number}`)
       return fetchMock
     }
 
@@ -198,7 +198,7 @@ describe('App', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
-      expect(await screen.findByText('text of page 1')).toBeInTheDocument()
+      expect(await screen.findByDisplayValue('text of page 1')).toBeInTheDocument()
       expect(fetchMock).toHaveBeenLastCalledWith(`/editions/${UUID}/pages/1`)
       expect(screen.getByRole('img')).toHaveAttribute(
         'src',
@@ -217,7 +217,7 @@ describe('App', () => {
         screen.getByRole('button', { name: 'Previous page' }),
       )
 
-      expect(await screen.findByText('text of page 1')).toBeInTheDocument()
+      expect(await screen.findByDisplayValue('text of page 1')).toBeInTheDocument()
       expect(fetchMock).toHaveBeenLastCalledWith(`/editions/${UUID}/pages/1`)
       expect(window.location.search).toBe('?page=1')
     })
@@ -230,7 +230,7 @@ describe('App', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'Page not found',
       )
-      expect(screen.getByText('text of page 3')).toBeInTheDocument()
+      expect(screen.getByDisplayValue('text of page 3')).toBeInTheDocument()
       expect(window.location.search).toBe('?page=3')
     })
   })
@@ -260,5 +260,172 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+  })
+
+  describe('editing', () => {
+    type Handler = (url: string, init?: RequestInit) => unknown
+    let calls: { url: string; init?: RequestInit }[]
+
+    async function openEditable(page: Partial<typeof PAGE> = {}, patch?: Handler) {
+      calls = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          calls.push({ url, init })
+          if (init?.method === 'PATCH') {
+            const result = patch
+              ? patch(url, init)
+              : serverAfterPatch(page, JSON.parse(String(init.body)))
+            if (result instanceof Error) {
+              return {
+                ok: false,
+                status: 500,
+                statusText: 'Server Error',
+                json: async () => ({ detail: result.message }),
+              }
+            }
+            return { ok: true, status: 200, statusText: 'OK', json: async () => result }
+          }
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => ({ ...PAGE, ...page }),
+          }
+        }),
+      )
+      render(<App />)
+      await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
+      await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+      return screen.findByRole('textbox', { name: 'Page text' })
+    }
+
+    /** What the backend would answer: content is the correction, or the raw text. */
+    function serverAfterPatch(
+      page: Partial<typeof PAGE>,
+      changes: { corrected_content?: string | null; ready?: boolean },
+    ) {
+      const result = { ...PAGE, ...page }
+      if ('ready' in changes) result.ready = changes.ready as boolean
+      if ('corrected_content' in changes) {
+        result.content = changes.corrected_content || 'raw text'
+      }
+      return result
+    }
+
+    const patchCalls = () => calls.filter((c) => c.init?.method === 'PATCH')
+
+    it('has Save and Mark as ready buttons; Save waits for an edit', async () => {
+      await openEditable()
+
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+      expect(
+        screen.getByRole('button', { name: 'Mark as ready' }),
+      ).toBeEnabled()
+    })
+
+    it('saves the edited text as the corrected content', async () => {
+      const textbox = await openEditable()
+
+      await userEvent.clear(textbox)
+      await userEvent.type(textbox, 'Ala ma kota.')
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() => expect(patchCalls()).toHaveLength(1))
+      const [{ url, init }] = patchCalls()
+      expect(url).toBe(`/editions/${UUID}/pages/0`)
+      expect(JSON.parse(String(init?.body))).toEqual({
+        corrected_content: 'Ala ma kota.',
+      })
+      await waitFor(() =>
+        expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument(),
+      )
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+      expect(textbox).toHaveValue('Ala ma kota.')
+    })
+
+    it('marks the page as ready, sending only the flag', async () => {
+      await openEditable()
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Mark as ready' }),
+      )
+
+      const readyButton = await screen.findByRole('button', { name: 'Ready' })
+      expect(readyButton).toBeDisabled()
+      expect(patchCalls()).toHaveLength(1)
+      expect(JSON.parse(String(patchCalls()[0].init?.body))).toEqual({
+        ready: true,
+      })
+    })
+
+    it('shows an already ready page as Ready', async () => {
+      await openEditable({ ready: true })
+
+      expect(screen.getByRole('button', { name: 'Ready' })).toBeDisabled()
+    })
+
+    it('keeps the text on the page after marking it ready', async () => {
+      const textbox = await openEditable()
+      await userEvent.type(textbox, '!')
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Mark as ready' }),
+      )
+      await screen.findByRole('button', { name: 'Ready' })
+
+      // the unsaved edit was not sent, and is not thrown away either
+      expect(textbox).toHaveValue(`${PAGE.content}!`)
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+    })
+
+    it('blocks page navigation while there are unsaved changes', async () => {
+      const textbox = await openEditable()
+      await userEvent.type(textbox, '!')
+
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+      expect(
+        screen.getByRole('button', { name: 'Previous page' }),
+      ).toBeDisabled()
+    })
+
+    it('shows an error and keeps the edit when saving fails', async () => {
+      const textbox = await openEditable({}, () => new Error('Page not found'))
+      await userEvent.type(textbox, '!')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Page not found',
+      )
+      expect(textbox).toHaveValue(`${PAGE.content}!`)
+      expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    })
+
+    it('shows an error when marking as ready fails', async () => {
+      await openEditable({}, () => new Error('Edition not found'))
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Mark as ready' }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Edition not found',
+      )
+      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
+    })
+
+    it('shows the server version after saving (e.g. an emptied text falls back to raw)', async () => {
+      const textbox = await openEditable({}, () => ({
+        ...PAGE,
+        content: 'raw text again',
+      }))
+      await userEvent.clear(textbox)
+
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      await waitFor(() => expect(textbox).toHaveValue('raw text again'))
+    })
   })
 })

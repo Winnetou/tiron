@@ -274,3 +274,115 @@ def test_page_view_content(raw, corrected, expected):
         page.number,
     )
     assert (view.scan_uri, view.ready) == (page.scan_uri, True)
+
+
+class TestUpdatePage:
+    @pytest.fixture
+    def update(self, monkeypatch):
+        mock_update = mock.Mock(
+            side_effect=lambda edition_id, number, **changes: Page(
+                edition_id=edition_id,
+                number=number,
+                raw_content="raw text",
+                scan_uri="https://polona.pl/s.jpg",
+                **changes,
+            )
+        )
+        monkeypatch.setattr(db, "update_page", mock_update)
+        return mock_update
+
+    def test_updates_corrected_content_and_ready(self, update):
+        edition_id = uuid4()
+
+        response = client.patch(
+            f"/editions/{edition_id}/pages/3",
+            json={"corrected_content": "fixed text", "ready": True},
+        )
+
+        assert response.status_code == 200
+        update.assert_called_once_with(
+            edition_id, 3, corrected_content="fixed text", ready=True
+        )
+        body = response.json()
+        assert body["content"] == "fixed text"
+        assert body["ready"] is True
+        assert body["number"] == 3
+
+    def test_only_given_fields_are_passed_on(self, update):
+        edition_id = uuid4()
+
+        client.patch(f"/editions/{edition_id}/pages/3", json={"ready": True})
+        client.patch(f"/editions/{edition_id}/pages/3", json={"corrected_content": "x"})
+
+        assert update.call_args_list == [
+            mock.call(edition_id, 3, ready=True),
+            mock.call(edition_id, 3, corrected_content="x"),
+        ]
+
+    def test_null_corrected_content_clears_the_correction(self, update):
+        edition_id = uuid4()
+
+        response = client.patch(
+            f"/editions/{edition_id}/pages/3", json={"corrected_content": None}
+        )
+
+        assert response.status_code == 200
+        update.assert_called_once_with(edition_id, 3, corrected_content=None)
+        assert response.json()["content"] == "raw text"  # falls back to raw
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"raw_content": "x"},
+            {"scan_uri": "https://evil.example/s.jpg"},
+            {"number": 9},
+            {"id": str(uuid4())},
+            {"edition_id": str(uuid4())},
+            {"ready": True, "raw_content": "x"},  # valid + forbidden field
+            {},  # nothing to update
+            {"ready": None},  # ready cannot be null
+            {"ready": "maybe"},
+            {"corrected_content": 5},
+        ],
+    )
+    def test_rejects_anything_else(self, update, body):
+        response = client.patch(f"/editions/{uuid4()}/pages/3", json=body)
+
+        assert response.status_code == 422
+        update.assert_not_called()
+
+    def test_does_not_check_the_collection(self, update, monkeypatch):
+        check = mock.Mock(return_value=False)
+        monkeypatch.setattr(db, "check_edition_in_collection", check)
+
+        response = client.patch(f"/editions/{uuid4()}/pages/3", json={"ready": True})
+
+        assert response.status_code == 200
+        check.assert_not_called()
+        update.assert_called_once()
+
+    def test_page_not_stored(self, update):
+        update.side_effect = None
+        update.return_value = None
+
+        response = client.patch(f"/editions/{uuid4()}/pages/3", json={"ready": True})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Page not found"
+
+    def test_never_calls_polona(self, update, polona):
+        client.patch(f"/editions/{uuid4()}/pages/3", json={"ready": True})
+
+        polona.assert_not_called()
+
+    def test_invalid_path_arguments(self, update):
+        assert (
+            client.patch("/editions/nope/pages/3", json={"ready": True}).status_code
+            == 422
+        )
+        assert (
+            client.patch(
+                f"/editions/{uuid4()}/pages/-1", json={"ready": True}
+            ).status_code
+            == 422
+        )

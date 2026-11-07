@@ -10,9 +10,11 @@ Connection details are read from environment variables:
 """
 
 import os
+from typing import Any
 from uuid import UUID
 
 import psycopg
+from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
@@ -74,6 +76,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
     ON works (lower(author), lower(title))
     WHERE author IS NOT NULL AND title IS NOT NULL;
 """
+
+
+UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 
 class Database:
@@ -189,8 +194,41 @@ class Database:
         ).fetchone()
         return Page.model_validate(row) if row else None
 
-    def update_page(self, page: Page) -> Page:
-        raise NotImplementedError
+    def update_page(
+        self,
+        edition_id: UUID,
+        number: int,
+        *,
+        corrected_content: str | None = UNSET,
+        ready: bool = UNSET,
+    ) -> Page | None:
+        """Change the corrected content and/or the ready flag of a page, and
+        return the updated page (None if there is no such page).
+
+        These are the only two columns that can be changed: the signature has
+        no way to reach the others. An argument left out is not touched;
+        corrected_content=None clears the correction.
+        """
+        changes = {
+            column: value
+            for column, value in (
+                ("corrected_content", corrected_content),
+                ("ready", ready),
+            )
+            if value is not UNSET
+        }
+        if not changes:
+            raise ValueError("Nothing to update")
+        assignments = sql.SQL(", ").join(
+            sql.SQL("{} = %s").format(sql.Identifier(column)) for column in changes
+        )
+        query = sql.SQL(
+            "UPDATE pages SET {} WHERE edition_id = %s AND number = %s RETURNING *"
+        ).format(assignments)
+        row = self.conn.execute(
+            query, (*changes.values(), edition_id, number)
+        ).fetchone()
+        return Page.model_validate(row) if row else None
 
     def get_page_by_number(self, edition_id: UUID, number: int) -> Page | None:
         row = self.conn.execute(

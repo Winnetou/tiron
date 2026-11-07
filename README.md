@@ -70,6 +70,19 @@ Corrections are stored separately, as `corrected_content`, so the original OCR
 text is never overwritten. If a page is ever fetched again, only the fetched
 data is refreshed, and its corrected content, `ready` flag and `id` are kept.
 
+### Editing a page
+
+`PATCH /editions/{edition_id}/pages/{number}` with a JSON body.
+
+Only two things can be edited: `corrected_content` and `ready`. Fields left out
+are not touched, and `"corrected_content": null` removes the correction, so
+`content` falls back to the raw text. Any other field in the body (for example
+`raw_content` or `scan_uri`) is rejected with 422, and so is an empty body.
+
+The page must already be stored: open it with `GET` first. `PATCH` never
+fetches from Polona, and answers 404 if the page is not stored. It does not
+check the collection. It returns the updated `PageView`.
+
 ### When Polona fails
 
 `app/polona_connector.py` turns every failure into one exception,
