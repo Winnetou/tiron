@@ -11,6 +11,7 @@ const PAGE = {
   number: 0,
   raw_content: 'Ala ma kota\nkota ma Ala',
   corrected_content: null,
+  ready: false,
   scan_page_url: 'https://polona.pl/iiif/3/x/full/max/0/default.jpg',
 }
 

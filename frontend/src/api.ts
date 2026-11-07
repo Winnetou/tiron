@@ -7,6 +7,7 @@ export interface PageView {
   number: number
   raw_content: string
   corrected_content: string | null
+  ready: boolean
   scan_page_url: string
 }
 

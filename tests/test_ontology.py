@@ -66,6 +66,7 @@ def test_page_fields():
     assert page.number == 1
     assert page.raw_content == "Ala ma kota"
     assert page.corrected_content is None
+    assert page.ready is False
 
 
 def test_page_with_corrected_content():
@@ -153,3 +154,8 @@ def test_edition_place_and_year_are_optional():
 
     assert edition.place is None
     assert edition.year is None
+
+
+def test_page_ready_defaults_to_false_and_can_be_set():
+    assert Page(edition_id=uuid4(), number=1, raw_content="x").ready is False
+    assert Page(edition_id=uuid4(), number=1, raw_content="x", ready=True).ready
