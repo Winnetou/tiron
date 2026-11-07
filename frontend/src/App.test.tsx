@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -90,6 +90,38 @@ describe('App', () => {
     expect(left).toContainElement(image)
     expect(right).toContainElement(text)
     expect(screen.queryByLabelText('Edition UUID')).not.toBeInTheDocument()
+  })
+
+  it('has a right sidebar with three tool buttons', async () => {
+    mockFetch({})
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    await screen.findByRole('img')
+
+    const sidebar = screen.getByRole('complementary', { name: 'Tools' })
+    const buttons = within(sidebar).getAllByRole('button')
+
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Structure',
+      'Correction',
+      'Named entity recognition',
+    ])
+    // hover text and an icon on each button
+    for (const button of buttons) {
+      expect(button).toHaveAttribute(
+        'data-tooltip',
+        button.getAttribute('aria-label'),
+      )
+      expect(button.querySelector('svg')).not.toBeNull()
+    }
+    // it is the last column, to the right of the two halves
+    expect(sidebar.previousElementSibling).toBe(
+      document.querySelectorAll('.viewer-half')[1],
+    )
+    // stubs: clicking does nothing
+    await userEvent.click(buttons[0])
+    expect(screen.getByText(/Ala ma kota/)).toBeInTheDocument()
   })
 
   it('zooms the scan in and out within limits', async () => {

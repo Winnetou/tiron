@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { Page } from './api'
+import type { PageView } from './api'
+import Sidebar from './Sidebar'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
@@ -73,6 +74,7 @@ export default function PageViewer({
         {error && <p role="alert">{error}</p>}
         <pre>{page.content}</pre>
       </section>
+      <Sidebar />
     </div>
   )
 }
