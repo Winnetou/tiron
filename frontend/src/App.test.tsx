@@ -9,10 +9,9 @@ const PAGE = {
   id: 'a8ae3c6d-c4cf-4d11-82d0-112582bb355f',
   edition_id: UUID,
   number: 0,
-  raw_content: 'Ala ma kota\nkota ma Ala',
-  corrected_content: null,
+  content: 'Ala ma kota\nkota ma Ala',
+  scan_uri: 'https://polona.pl/iiif/3/x/full/max/0/default.jpg',
   ready: false,
-  scan_page_url: 'https://polona.pl/iiif/3/x/full/max/0/default.jpg',
 }
 
 function mockFetch(response: Partial<Response> & { json?: () => Promise<unknown> }) {
@@ -81,7 +80,7 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
     const image = await screen.findByRole('img')
-    expect(image).toHaveAttribute('src', PAGE.scan_page_url)
+    expect(image).toHaveAttribute('src', PAGE.scan_uri)
     const text = screen.getByText(/Ala ma kota/)
     expect(text).toHaveTextContent('Ala ma kota kota ma Ala')
     // two halves: image first (left), text second (right)
@@ -170,8 +169,8 @@ describe('App', () => {
           json: async () => ({
             ...PAGE,
             number: n,
-            raw_content: `text of page ${n}`,
-            scan_page_url: `https://polona.pl/scan/${n}.jpg`,
+            content: `text of page ${n}`,
+            scan_uri: `https://polona.pl/scan/${n}.jpg`,
           }),
         }
       })

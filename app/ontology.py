@@ -24,6 +24,7 @@ class Page(BaseModel):
     number: int = Field(ge=0)
     raw_content: str
     corrected_content: str | None = None
+    scan_uri: str | None = None
     ready: bool = False
 
 

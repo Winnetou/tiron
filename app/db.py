@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
     number integer NOT NULL CHECK (number >= 0),
     raw_content text NOT NULL,
     corrected_content text,
+    scan_uri text,
     ready boolean NOT NULL DEFAULT false,
     UNIQUE (edition_id, number)
 );
@@ -67,13 +68,6 @@ CREATE TABLE IF NOT EXISTS corrections (
 CREATE TABLE IF NOT EXISTS collection (
     id uuid PRIMARY KEY
 );
-
--- migrations for databases created before these changes
-ALTER TABLE pages ADD COLUMN IF NOT EXISTS ready boolean NOT NULL DEFAULT false;
-ALTER TABLE works ADD COLUMN IF NOT EXISTS title text;
-ALTER TABLE works ALTER COLUMN author DROP NOT NULL;
-ALTER TABLE editions ALTER COLUMN place DROP NOT NULL;
-ALTER TABLE editions ALTER COLUMN year DROP NOT NULL;
 
 -- one work per (author, title), case-insensitive; unknown values never match
 CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
@@ -174,14 +168,16 @@ class Database:
     def create_page(self, page: Page) -> Page:
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content, ready)"
-            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            " (id, edition_id, number, raw_content, corrected_content,"
+            " scan_uri, ready)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 page.id,
                 page.edition_id,
                 page.number,
                 page.raw_content,
                 page.corrected_content,
+                page.scan_uri,
                 page.ready,
             ),
         ).fetchone()
@@ -193,17 +189,30 @@ class Database:
         ).fetchone()
         return Page.model_validate(row) if row else None
 
-    def upsert_page(self, page: Page) -> Page:
-        """Insert the page, or update the content of the existing page with
-        the same (edition_id, number). The stored page keeps its original id."""
+    def update_page(self, page: Page) -> Page:
+        raise NotImplementedError
+
+    def get_page_by_number(self, edition_id: UUID, number: int) -> Page | None:
+        row = self.conn.execute(
+            "SELECT * FROM pages WHERE edition_id = %s AND number = %s",
+            (edition_id, number),
+        ).fetchone()
+        return Page.model_validate(row) if row else None
+
+    def save_fetched_page(self, page: Page) -> Page:
+        """Store a page freshly fetched from Polona and return the stored page.
+
+        If the page (same edition and number) is already stored, only the
+        fetched data (raw_content, scan_uri) is refreshed: its id, corrected
+        content and ready flag are kept, so re-fetching never loses work."""
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content, ready)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
+            " (id, edition_id, number, raw_content, corrected_content,"
+            " scan_uri, ready)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (edition_id, number) DO UPDATE SET"
             " raw_content = EXCLUDED.raw_content,"
-            " corrected_content = EXCLUDED.corrected_content,"
-            " ready = EXCLUDED.ready"
+            " scan_uri = EXCLUDED.scan_uri"
             " RETURNING *",
             (
                 page.id,
@@ -211,6 +220,7 @@ class Database:
                 page.number,
                 page.raw_content,
                 page.corrected_content,
+                page.scan_uri,
                 page.ready,
             ),
         ).fetchone()

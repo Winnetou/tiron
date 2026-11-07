@@ -1,10 +1,16 @@
 import json
+import urllib.error
 from uuid import uuid4
 
 import pytest
 
 from app import polona_connector
-from app.polona_connector import alto_to_text, fetch_edition_metadata, fetch_page
+from app.polona_connector import (
+    PolonaError,
+    alto_to_text,
+    fetch_edition_metadata,
+    fetch_page,
+)
 
 ALTO = b"""<alto xmlns="http://www.loc.gov/standards/alto/ns-v2#"><Layout><Page>
 <PrintSpace>
@@ -73,7 +79,7 @@ def test_fetch_page_returns_scan_url_and_content(polona):
     result = fetch_page(edition_id, 1)
 
     assert result == {
-        "scan_page_url": "https://polona.pl/iiif/3/img2/full/max/0/default.jpg",
+        "scan_uri": "https://polona.pl/iiif/3/img2/full/max/0/default.jpg",
         "raw_content": "Ala ma\nkota.\n\nprzypis\n",
     }
     assert calls == [
@@ -83,8 +89,8 @@ def test_fetch_page_returns_scan_url_and_content(polona):
 
 
 def test_fetch_page_is_zero_based(polona):
-    first = fetch_page(uuid4(), 0)["scan_page_url"]
-    last = fetch_page(uuid4(), 2)["scan_page_url"]
+    first = fetch_page(uuid4(), 0)["scan_uri"]
+    last = fetch_page(uuid4(), 2)["scan_uri"]
 
     assert first.endswith("img1/full/max/0/default.jpg")
     assert last.endswith("img3/full/max/0/default.jpg")
@@ -92,8 +98,9 @@ def test_fetch_page_is_zero_based(polona):
 
 @pytest.mark.parametrize("page_number", [-1, 3])
 def test_fetch_page_out_of_range(polona, page_number):
-    with pytest.raises(ValueError):
+    with pytest.raises(PolonaError) as error:
         fetch_page(uuid4(), page_number)
+    assert error.value.not_found
 
 
 def test_fetch_page_without_ocr(polona):
@@ -109,7 +116,7 @@ def test_fetch_page_tiff_fallback(polona):
     _, contents = polona
     contents["pages"][1]["content"] = [entry(1, iiif=False)]
 
-    assert fetch_page(uuid4(), 0)["scan_page_url"] == (
+    assert fetch_page(uuid4(), 0)["scan_uri"] == (
         "https://polona.pl/iiif/3/img1/full/max/0/default.jpg"
     )
 
@@ -118,8 +125,9 @@ def test_fetch_page_no_scans(polona):
     _, contents = polona
     contents["pages"] = []
 
-    with pytest.raises(LookupError):
+    with pytest.raises(PolonaError) as error:
         fetch_page(uuid4(), 0)
+    assert error.value.not_found
 
 
 @pytest.mark.parametrize(
@@ -198,8 +206,9 @@ def test_fetch_edition_metadata_url_and_missing_metadata(monkeypatch):
     monkeypatch.setattr(polona_connector, "_fetch", fake_fetch)
     edition_id = uuid4()
 
-    with pytest.raises(LookupError):
+    with pytest.raises(PolonaError) as error:
         fetch_edition_metadata(edition_id)
+    assert error.value.not_found
     assert calls == [
         f"https://polona.pl/api/library-object-query/digital-objects/{edition_id}"
     ]
@@ -230,3 +239,66 @@ def test_title_normalisation(monkeypatch, title, expected):
     )
 
     assert fetch_edition_metadata(uuid4())["title"] == expected
+
+
+def http_error(code):
+    return urllib.error.HTTPError("https://polona.pl/x", code, "msg", {}, None)
+
+
+@pytest.mark.parametrize(
+    ("raised", "not_found", "message"),
+    [
+        (http_error(404), True, "Not found on polona.pl"),
+        (http_error(500), False, "polona.pl returned HTTP 500"),
+        (urllib.error.URLError("down"), False, "Could not reach polona.pl"),
+        (TimeoutError("slow"), False, "Could not reach polona.pl"),
+        (ConnectionResetError(), False, "Could not reach polona.pl"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: fetch_page(uuid4(), 0),
+        lambda: fetch_edition_metadata(uuid4()),
+    ],
+    ids=["fetch_page", "fetch_edition_metadata"],
+)
+def test_network_errors_become_a_single_polona_error(
+    monkeypatch, call, raised, not_found, message
+):
+    def failing_fetch(url):
+        raise raised
+
+    monkeypatch.setattr(polona_connector, "_fetch", failing_fetch)
+
+    with pytest.raises(PolonaError, match=message) as error:
+        call()
+
+    assert error.value.not_found is not_found
+    assert error.value.__cause__ is raised
+
+
+@pytest.mark.parametrize("body", [b"<html>not json</html>", b""])
+def test_invalid_json_is_not_reported_as_not_found(monkeypatch, body):
+    monkeypatch.setattr(polona_connector, "_fetch", lambda url: body)
+
+    with pytest.raises(PolonaError, match="invalid response") as error:
+        fetch_page(uuid4(), 0)
+
+    assert error.value.not_found is False
+
+
+def test_invalid_ocr_layer_is_a_polona_error(polona, monkeypatch):
+    def fetch(url):
+        if url.endswith("/contents"):
+            return json.dumps(
+                {"pages": [{"isDefault": True, "content": [entry(1)]}]}
+            ).encode()
+        return b"<alto><unclosed>"
+
+    monkeypatch.setattr(polona_connector, "_fetch", fetch)
+
+    with pytest.raises(PolonaError, match="invalid OCR layer") as error:
+        fetch_page(uuid4(), 0)
+
+    assert error.value.not_found is False

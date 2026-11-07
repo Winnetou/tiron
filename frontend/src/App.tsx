@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { getPage, pageNumberFromUrl, type PageView } from './api'
+import { getPage, pageNumberFromUrl, type Page } from './api'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
@@ -8,7 +8,7 @@ const UUID_PATTERN =
 type Status =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'done'; page: PageView }
+  | { kind: 'done'; page: Page }
   | { kind: 'error'; message: string }
 
 function errorMessage(error: unknown): string {

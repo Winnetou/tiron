@@ -3,8 +3,11 @@
 import json
 import re
 import statistics
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TypedDict
 from uuid import UUID
 
@@ -13,8 +16,43 @@ HEADERS = {"User-Agent": "tiron/0.1"}
 TIMEOUT = 120
 
 
+class PolonaError(Exception):
+    """The only exception the public functions of this module raise.
+
+    `not_found` is True when polona.pl has no such edition/page/metadata, and
+    False when polona.pl could not be reached or answered unexpectedly.
+    """
+
+    def __init__(self, message: str, *, not_found: bool = False) -> None:
+        super().__init__(message)
+        self.not_found = not_found
+
+
+@contextmanager
+def _polona_errors() -> Iterator[None]:
+    """Translate everything that can go wrong while talking to polona.pl (and
+    reading its answers) into PolonaError. Also usable as a decorator."""
+    try:
+        yield
+    except PolonaError:
+        raise
+    except (ValueError, LookupError) as exc:
+        # raised by our own lookups: page out of range, no scans/image/metadata
+        if isinstance(exc, json.JSONDecodeError):
+            raise PolonaError("polona.pl sent an invalid response") from exc
+        raise PolonaError(str(exc), not_found=True) from exc
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise PolonaError("Not found on polona.pl", not_found=True) from exc
+        raise PolonaError(f"polona.pl returned HTTP {exc.code}") from exc
+    except ET.ParseError as exc:
+        raise PolonaError("polona.pl sent an invalid OCR layer") from exc
+    except OSError as exc:  # URLError, timeouts, connection resets
+        raise PolonaError("Could not reach polona.pl") from exc
+
+
 class PolonaPage(TypedDict):
-    scan_page_url: str
+    scan_uri: str
     raw_content: str
 
 
@@ -120,6 +158,7 @@ def alto_to_text(xml_bytes: bytes) -> str:
     return "\n".join(out) + "\n"
 
 
+@_polona_errors()
 def fetch_page(edition_id: UUID, page_number: int) -> PolonaPage:
     """Fetch a page of an edition from polona.pl.
 
@@ -127,17 +166,18 @@ def fetch_page(edition_id: UUID, page_number: int) -> PolonaPage:
     Page.number and Polona's own ?page= URL parameter (page_number=99 is
     "Skan 100" in the viewer).
 
-    Returns the full-resolution scan URL under "scan_page_url" and the text of
+    Returns the full-resolution scan URL under "scan_uri" and the text of
     the OCR layer under "raw_content" ("" if the page has no OCR layer).
 
-    Raises ValueError if the page is out of range, LookupError if there are no
-    scans or no image, and urllib.error.URLError on network failures.
+    Raises PolonaError, and nothing else: with `not_found` set if the edition
+    has no scans or image, the page is out of range, or polona.pl answers 404;
+    otherwise (network failure, HTTP error, invalid response) without it.
     """
     entry = _get_page_entry(edition_id, page_number)
-    scan_page_url = _scan_url(entry)
+    scan_uri = _scan_url(entry)
     alto = _stream(entry, "OCR_ALTO")
     raw_content = alto_to_text(_fetch(f"{BASE}/api{alto}")) if alto else ""
-    return {"scan_page_url": scan_page_url, "raw_content": raw_content}
+    return {"scan_uri": scan_uri, "raw_content": raw_content}
 
 
 def _first(metadata: dict, *keys: str) -> str | None:
@@ -193,6 +233,7 @@ def _parse_year(metadata: dict) -> int | None:
     return None
 
 
+@_polona_errors()
 def fetch_edition_metadata(edition_id: UUID) -> EditionMetadata:
     """Fetch the bibliographic metadata of an edition from polona.pl.
 
@@ -205,8 +246,7 @@ def fetch_edition_metadata(edition_id: UUID) -> EditionMetadata:
     - year: first 4-digit year in "date", "dateDescriptive" or "imprint"
       (the first year of a range), if within 1500-2030.
 
-    Raises LookupError if the object has no metadata and
-    urllib.error.URLError on network failures.
+    Raises PolonaError, and nothing else, like fetch_page.
     """
     data = json.loads(
         _fetch(f"{BASE}/api/library-object-query/digital-objects/{edition_id}")

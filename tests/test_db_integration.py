@@ -61,22 +61,6 @@ def test_page_roundtrip(db, edition):
     assert db.get_page(uuid4()) is None
 
 
-def test_upsert_page_inserts_then_updates(db, edition):
-    first = db.upsert_page(Page(edition_id=edition.id, number=1, raw_content="Aia"))
-    second = db.upsert_page(
-        Page(
-            edition_id=edition.id,
-            number=1,
-            raw_content="Aia",
-            corrected_content="Ala",
-        )
-    )
-
-    assert second.id == first.id
-    assert second.corrected_content == "Ala"
-    assert db.get_page(first.id) == second
-
-
 def test_correction_roundtrip(db, edition):
     page = db.create_page(Page(edition_id=edition.id, number=1, raw_content="Aia"))
 
@@ -166,23 +150,6 @@ def test_unknown_author_or_title_never_matches(db):
     assert len({e.work_id for e in editions}) == 4
 
 
-def test_schema_migrates_older_database(db):
-    db.conn.execute("DROP TABLE corrections, pages, editions, works")
-    db.conn.execute("CREATE TABLE works (id uuid PRIMARY KEY, author text NOT NULL)")
-    db.conn.execute(
-        "CREATE TABLE editions (id uuid PRIMARY KEY,"
-        " work_id uuid NOT NULL REFERENCES works (id),"
-        " place text NOT NULL, year integer NOT NULL)"
-    )
-
-    migrated = Database()  # re-runs the schema on the old tables
-    work = Work(author=None, title=None)
-    stored = migrated.upsert_edition(work, Edition(work_id=work.id))
-    migrated.close()
-
-    assert stored.place is None
-
-
 def test_page_edition_and_number_are_unique_together(db, edition):
     db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
 
@@ -208,32 +175,62 @@ def test_page_ready_defaults_to_false_and_roundtrips(db, edition):
     assert db.get_page(ready.id).ready is True
 
 
-def test_upsert_page_updates_ready(db, edition):
-    db.upsert_page(Page(edition_id=edition.id, number=1, raw_content="a"))
-
-    updated = db.upsert_page(
-        Page(edition_id=edition.id, number=1, raw_content="a", ready=True)
+def test_page_scan_uri_roundtrips(db, edition):
+    uri = "https://polona.pl/iiif/3/x/full/max/0/default.jpg"
+    page = db.create_page(
+        Page(edition_id=edition.id, number=1, raw_content="a", scan_uri=uri)
     )
+    without = db.create_page(Page(edition_id=edition.id, number=2, raw_content="b"))
 
-    assert updated.ready is True
+    assert db.get_page(page.id).scan_uri == uri
+    assert db.get_page(without.id).scan_uri is None
 
 
-def test_schema_adds_ready_to_older_pages_table(db, edition):
-    db.conn.execute("DROP TABLE corrections, pages")
+def test_save_fetched_page_inserts(db, edition):
+    page = Page(edition_id=edition.id, number=3, raw_content="raw", scan_uri="u")
+
+    stored = db.save_fetched_page(page)
+
+    assert stored == page
+    assert db.get_page(page.id) == page
+
+
+def test_save_fetched_page_refreshes_fetched_data_but_keeps_work(db, edition):
+    first = db.save_fetched_page(
+        Page(edition_id=edition.id, number=3, raw_content="raw", scan_uri="u1")
+    )
+    # a user's work on the page
     db.conn.execute(
-        "CREATE TABLE pages (id uuid PRIMARY KEY,"
-        " edition_id uuid NOT NULL REFERENCES editions (id),"
-        " number integer NOT NULL, raw_content text NOT NULL,"
-        " corrected_content text, UNIQUE (edition_id, number))"
-    )
-    db.conn.execute(
-        "INSERT INTO pages (id, edition_id, number, raw_content)"
-        " VALUES (%s, %s, 1, 'old')",
-        (uuid4(), edition.id),
+        "UPDATE pages SET corrected_content = 'fixed', ready = true WHERE id = %s",
+        (first.id,),
     )
 
-    migrated = Database()  # re-runs the schema on the old table
-    row = migrated.conn.execute("SELECT ready FROM pages").fetchone()
-    migrated.close()
+    stored = db.save_fetched_page(
+        Page(edition_id=edition.id, number=3, raw_content="raw v2", scan_uri="u2")
+    )
 
-    assert row["ready"] is False
+    assert stored.id == first.id
+    assert stored.raw_content == "raw v2"
+    assert stored.scan_uri == "u2"
+    assert stored.corrected_content == "fixed"
+    assert stored.ready is True
+    count = db.conn.execute("SELECT count(*) AS n FROM pages").fetchone()["n"]
+    assert count == 1
+
+
+def test_save_fetched_page_requires_existing_edition(db):
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        db.save_fetched_page(Page(edition_id=uuid4(), number=0, raw_content="x"))
+
+
+def test_get_page_by_number(db, edition):
+    page = db.create_page(
+        Page(edition_id=edition.id, number=5, raw_content="a", scan_uri="u")
+    )
+    work = Work(author="Other")
+    other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
+    db.create_page(Page(edition_id=other.id, number=6, raw_content="b"))
+
+    assert db.get_page_by_number(edition.id, 5) == page
+    assert db.get_page_by_number(edition.id, 6) is None  # number of another edition
+    assert db.get_page_by_number(uuid4(), 5) is None

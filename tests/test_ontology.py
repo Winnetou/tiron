@@ -66,6 +66,7 @@ def test_page_fields():
     assert page.number == 1
     assert page.raw_content == "Ala ma kota"
     assert page.corrected_content is None
+    assert page.scan_uri is None
     assert page.ready is False
 
 
@@ -159,3 +160,12 @@ def test_edition_place_and_year_are_optional():
 def test_page_ready_defaults_to_false_and_can_be_set():
     assert Page(edition_id=uuid4(), number=1, raw_content="x").ready is False
     assert Page(edition_id=uuid4(), number=1, raw_content="x", ready=True).ready
+
+
+def test_page_scan_uri():
+    uri = "https://polona.pl/iiif/3/x/full/max/0/default.jpg"
+
+    assert (
+        Page(edition_id=uuid4(), number=1, raw_content="x", scan_uri=uri).scan_uri
+        == uri
+    )
