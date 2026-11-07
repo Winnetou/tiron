@@ -33,7 +33,7 @@ button {
 .viewer {
   height: 100vh;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr auto;
 }
 
 .viewer-half {
@@ -73,9 +73,16 @@ button {
 }
 
 .viewer-half pre {
-  margin: 0;
-  font: inherit;
-  white-space: pre-wrap;
+  margin: 0 auto;
+  max-width: 38rem;
+  /* A serif face suits the old print, and is easier to read at length. */
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.25rem;
+  line-height: 1.7;
+  color: #1a1a1a;
+  white-space: pre-wrap; /* keep the OCR's line breaks and blank lines */
+  overflow-wrap: anywhere;
+  font-variant-ligatures: none; /* show characters as OCR'd */
 }
 
 .page-nav {
@@ -88,4 +95,46 @@ button {
   margin-bottom: 0.75rem;
   padding: 0.25rem 0;
   background: #fff;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-left: 1px solid #ccc;
+  background: #f7f7f7;
+}
+
+.sidebar-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Hover/focus label, shown to the left of the button. */
+.sidebar-button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: calc(100% + 0.5rem);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: #fff;
+  background: #333;
+  border-radius: 0.25rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.sidebar-button:hover::after,
+.sidebar-button:focus-visible::after {
+  opacity: 1;
 }
