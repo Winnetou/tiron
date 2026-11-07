@@ -72,29 +72,13 @@ button {
   padding: 0.25rem 0.5rem;
 }
 
-.viewer-half pre {
-  margin: 0 auto;
-  max-width: 38rem;
-  /* A serif face suits the old print, and is easier to read at length. */
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 1.25rem;
-  line-height: 1.7;
-  color: #1a1a1a;
-  white-space: pre-wrap; /* keep the OCR's line breaks and blank lines */
-  overflow-wrap: anywhere;
-  font-variant-ligatures: none; /* show characters as OCR'd */
-}
 
 .page-nav {
-  position: sticky;
-  top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  padding: 0.25rem 0;
-  background: #fff;
+  margin-bottom: 0.5rem;
 }
 
 .sidebar {
@@ -137,4 +121,39 @@ button {
 .sidebar-button:hover::after,
 .sidebar-button:focus-visible::after {
   opacity: 1;
+}
+
+/* Right half: fixed header, and a text area that fills the rest. */
+.text-half {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.unsaved {
+  font-size: 0.85rem;
+  color: #8a5a00;
+}
+
+.text-half textarea {
+  flex: 1;
+  width: 100%;
+  max-width: 38rem;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  resize: none;
+  /* A serif face suits the old print, and is easier to read at length. */
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.25rem;
+  line-height: 1.7;
+  color: #1a1a1a;
+  font-variant-ligatures: none; /* show characters as OCR'd */
 }

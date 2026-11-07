@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Path, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.db import Database
 from app.ontology import Correction, Edition, Page, Work
@@ -34,6 +34,24 @@ class PageView(BaseModel):
             ready=page.ready,
             content=page.corrected_content or page.raw_content,
         )
+
+
+class PageUpdate(BaseModel):
+    """The only things of a page that can be edited. Any other field in the
+    request is rejected, so nothing else can be changed through the API."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    corrected_content: str | None = None
+    ready: bool | None = None
+
+    @model_validator(mode="after")
+    def check_fields(self) -> PageUpdate:
+        if not self.model_fields_set:
+            raise ValueError("Give corrected_content and/or ready")
+        if "ready" in self.model_fields_set and self.ready is None:
+            raise ValueError("ready cannot be null")
+        return self
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
@@ -87,6 +105,26 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
             scan_uri=polona_page["scan_uri"],
         )
     )
+    return PageView.from_page(page)
+
+
+@app.patch("/editions/{edition_id}/pages/{number}", response_model=PageView)
+def update_page(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], update: PageUpdate
+) -> PageView:
+    """Edit a page: only `corrected_content` and `ready` can be changed.
+
+    Fields left out of the request are not touched, and
+    `"corrected_content": null` (or an empty string) removes the correction, so
+    `content` falls back to the raw text. Any other field in the request, such
+    as `raw_content` or `scan_uri`, is rejected with 422. The page must already
+    be stored (open it with GET first); it is never fetched from Polona here.
+
+    404 if the page is not stored. Returns the updated page as a PageView.
+    """
+    page = db.update_page(edition_id, number, **update.model_dump(exclude_unset=True))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
     return PageView.from_page(page)
 
 

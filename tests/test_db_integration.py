@@ -234,3 +234,66 @@ def test_get_page_by_number(db, edition):
     assert db.get_page_by_number(edition.id, 5) == page
     assert db.get_page_by_number(edition.id, 6) is None  # number of another edition
     assert db.get_page_by_number(uuid4(), 5) is None
+
+
+@pytest.fixture
+def stored_page(db, edition):
+    return db.create_page(
+        Page(
+            edition_id=edition.id,
+            number=7,
+            raw_content="raw text",
+            corrected_content="old fix",
+            scan_uri="https://polona.pl/s.jpg",
+        )
+    )
+
+
+def test_update_page_changes_both_fields(db, stored_page):
+    updated = db.update_page(
+        stored_page.edition_id, 7, corrected_content="new fix", ready=True
+    )
+
+    assert updated.corrected_content == "new fix"
+    assert updated.ready is True
+    assert db.get_page(stored_page.id) == updated
+
+
+def test_update_page_leaves_everything_else_alone(db, stored_page):
+    updated = db.update_page(stored_page.edition_id, 7, ready=True)
+
+    assert updated == stored_page.model_copy(update={"ready": True})
+    assert updated.corrected_content == "old fix"  # not given: untouched
+
+
+def test_update_page_can_clear_the_correction(db, stored_page):
+    updated = db.update_page(stored_page.edition_id, 7, corrected_content=None)
+
+    assert updated.corrected_content is None
+    assert updated.raw_content == "raw text"
+
+
+def test_update_page_only_touches_that_page(db, stored_page):
+    other = db.create_page(
+        Page(edition_id=stored_page.edition_id, number=8, raw_content="other")
+    )
+
+    db.update_page(stored_page.edition_id, 7, corrected_content="x", ready=True)
+
+    assert db.get_page(other.id) == other
+
+
+def test_update_page_unknown_page(db, stored_page):
+    assert db.update_page(stored_page.edition_id, 99, ready=True) is None
+    assert db.update_page(uuid4(), 7, ready=True) is None
+
+
+def test_update_page_needs_something_to_update(db, stored_page):
+    with pytest.raises(ValueError):
+        db.update_page(stored_page.edition_id, 7)
+
+
+@pytest.mark.parametrize("field", ["raw_content", "scan_uri", "number", "id"])
+def test_update_page_cannot_change_other_columns(db, stored_page, field):
+    with pytest.raises(TypeError):
+        db.update_page(stored_page.edition_id, 7, **{field: "x"})

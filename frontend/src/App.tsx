@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { getPage, pageNumberFromUrl, type Page } from './api'
+import { getPage, pageNumberFromUrl, updatePage, type Page, type PageChanges } from './api'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
@@ -18,8 +18,8 @@ function errorMessage(error: unknown): string {
 export default function App() {
   const [uuid, setUuid] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
-  const [navigating, setNavigating] = useState(false)
-  const [navError, setNavError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const trimmed = uuid.trim()
   const valid = UUID_PATTERN.test(trimmed)
@@ -39,21 +39,33 @@ export default function App() {
     }
   }
 
-  /** Show another page of the same edition and reflect it in the URL. */
-  async function goToPage(editionId: string, number: number) {
-    setNavigating(true)
-    setNavError(null)
+  /** Run a request for the open page, showing the page it returns. */
+  async function run(request: Promise<Page>, onSuccess?: (page: Page) => void) {
+    setBusy(true)
+    setActionError(null)
     try {
-      const page = await getPage(editionId, number)
+      const page = await request
+      onSuccess?.(page)
+      setStatus({ kind: 'done', page })
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Show another page of the same edition and reflect it in the URL. */
+  function goToPage(editionId: string, number: number) {
+    return run(getPage(editionId, number), () => {
       const url = new URL(window.location.href)
       url.searchParams.set('page', String(number))
       window.history.replaceState(null, '', url)
-      setStatus({ kind: 'done', page })
-    } catch (error) {
-      setNavError(errorMessage(error))
-    } finally {
-      setNavigating(false)
-    }
+    })
+  }
+
+  /** Change the corrected content and/or the ready flag of the open page. */
+  function savePage(page: Page, changes: PageChanges) {
+    return run(updatePage(page.edition_id, page.number, changes))
   }
 
   if (status.kind === 'done') {
@@ -61,10 +73,12 @@ export default function App() {
     return (
       <PageViewer
         page={page}
-        busy={navigating}
-        error={navError}
+        busy={busy}
+        error={actionError}
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
+        onSave={(content) => savePage(page, { corrected_content: content })}
+        onMarkReady={() => savePage(page, { ready: true })}
       />
     )
   }
