@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import type { PageView } from './api'
+import type { Page } from './api'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
 interface Props {
-  page: PageView
+  page: Page
   busy: boolean
   error: string | null
   onPrevious: () => void
@@ -48,11 +48,13 @@ export default function PageViewer({
             +
           </button>
         </div>
-        <img
-          src={page.scan_page_url}
-          alt={`Scan of page ${page.number}`}
-          style={{ width: `${zoom}%` }}
-        />
+        {page.scan_uri && (
+          <img
+            src={page.scan_uri}
+            alt={`Scan of page ${page.number}`}
+            style={{ width: `${zoom}%` }}
+          />
+        )}
       </section>
       <section className="viewer-half">
         <nav className="page-nav">
@@ -69,7 +71,7 @@ export default function PageViewer({
           </button>
         </nav>
         {error && <p role="alert">{error}</p>}
-        <pre>{page.raw_content}</pre>
+        <pre>{page.content}</pre>
       </section>
     </div>
   )

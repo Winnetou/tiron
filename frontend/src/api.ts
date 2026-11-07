@@ -1,14 +1,14 @@
 export const DEFAULT_PAGE_NUMBER = 0
 
 /** Response of GET /editions/{edition_id}/pages/{number} (PageView). */
-export interface PageView {
+export interface Page {
   id: string
   edition_id: string
   number: number
-  raw_content: string
-  corrected_content: string | null
+  scan_uri: string | null
   ready: boolean
-  scan_page_url: string
+  /** The corrected text if there is one, else the raw OCR text. */
+  content: string
 }
 
 export class ApiError extends Error {
@@ -32,7 +32,7 @@ export function pageNumberFromUrl(search: string): number {
 export async function getPage(
   editionId: string,
   number: number = DEFAULT_PAGE_NUMBER,
-): Promise<PageView> {
+): Promise<Page> {
   const response = await fetch(`/editions/${editionId}/pages/${number}`)
   if (!response.ok) {
     let detail = response.statusText

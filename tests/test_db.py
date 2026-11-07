@@ -5,6 +5,7 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from app.db import Database, get_conninfo
+from app.ontology import Page
 
 ENV = {
     "POSTGRES_DB": "tiron",
@@ -91,3 +92,12 @@ def test_check_edition_in_collection_returns_bool(monkeypatch, present):
     args = connect.return_value.execute.call_args.args
     assert "FROM collection" in args[0]
     assert args[1] == (edition_id,)
+
+
+def test_update_page_is_a_stub(monkeypatch):
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("app.db.psycopg.connect", mock.Mock())
+
+    with pytest.raises(NotImplementedError):
+        Database().update_page(Page(edition_id=uuid4(), number=0, raw_content="x"))
