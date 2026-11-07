@@ -196,3 +196,44 @@ def test_same_page_number_allowed_in_different_editions(db, edition):
 
     db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
     db.create_page(Page(edition_id=other.id, number=1, raw_content="b"))
+
+
+def test_page_ready_defaults_to_false_and_roundtrips(db, edition):
+    page = db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
+    ready = db.create_page(
+        Page(edition_id=edition.id, number=2, raw_content="b", ready=True)
+    )
+
+    assert db.get_page(page.id).ready is False
+    assert db.get_page(ready.id).ready is True
+
+
+def test_upsert_page_updates_ready(db, edition):
+    db.upsert_page(Page(edition_id=edition.id, number=1, raw_content="a"))
+
+    updated = db.upsert_page(
+        Page(edition_id=edition.id, number=1, raw_content="a", ready=True)
+    )
+
+    assert updated.ready is True
+
+
+def test_schema_adds_ready_to_older_pages_table(db, edition):
+    db.conn.execute("DROP TABLE corrections, pages")
+    db.conn.execute(
+        "CREATE TABLE pages (id uuid PRIMARY KEY,"
+        " edition_id uuid NOT NULL REFERENCES editions (id),"
+        " number integer NOT NULL, raw_content text NOT NULL,"
+        " corrected_content text, UNIQUE (edition_id, number))"
+    )
+    db.conn.execute(
+        "INSERT INTO pages (id, edition_id, number, raw_content)"
+        " VALUES (%s, %s, 1, 'old')",
+        (uuid4(), edition.id),
+    )
+
+    migrated = Database()  # re-runs the schema on the old table
+    row = migrated.conn.execute("SELECT ready FROM pages").fetchone()
+    migrated.close()
+
+    assert row["ready"] is False

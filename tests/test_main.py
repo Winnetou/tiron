@@ -71,6 +71,7 @@ def test_get_page_returns_polona_content(in_collection, polona):
     assert body["number"] == 0
     assert body["raw_content"] == "Ala ma kota"
     assert body["corrected_content"] is None
+    assert body["ready"] is False
     assert body["scan_page_url"].endswith("default.jpg")
     polona.assert_called_once_with(edition_id, 0)
 

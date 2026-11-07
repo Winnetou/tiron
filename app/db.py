@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
     number integer NOT NULL CHECK (number >= 0),
     raw_content text NOT NULL,
     corrected_content text,
+    ready boolean NOT NULL DEFAULT false,
     UNIQUE (edition_id, number)
 );
 
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS collection (
 );
 
 -- migrations for databases created before these changes
+ALTER TABLE pages ADD COLUMN IF NOT EXISTS ready boolean NOT NULL DEFAULT false;
 ALTER TABLE works ADD COLUMN IF NOT EXISTS title text;
 ALTER TABLE works ALTER COLUMN author DROP NOT NULL;
 ALTER TABLE editions ALTER COLUMN place DROP NOT NULL;
@@ -172,14 +174,15 @@ class Database:
     def create_page(self, page: Page) -> Page:
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING *",
+            " (id, edition_id, number, raw_content, corrected_content, ready)"
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 page.id,
                 page.edition_id,
                 page.number,
                 page.raw_content,
                 page.corrected_content,
+                page.ready,
             ),
         ).fetchone()
         return Page.model_validate(row)
@@ -195,11 +198,12 @@ class Database:
         the same (edition_id, number). The stored page keeps its original id."""
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content)"
-            " VALUES (%s, %s, %s, %s, %s)"
+            " (id, edition_id, number, raw_content, corrected_content, ready)"
+            " VALUES (%s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (edition_id, number) DO UPDATE SET"
             " raw_content = EXCLUDED.raw_content,"
-            " corrected_content = EXCLUDED.corrected_content"
+            " corrected_content = EXCLUDED.corrected_content,"
+            " ready = EXCLUDED.ready"
             " RETURNING *",
             (
                 page.id,
@@ -207,6 +211,7 @@ class Database:
                 page.number,
                 page.raw_content,
                 page.corrected_content,
+                page.ready,
             ),
         ).fetchone()
         return Page.model_validate(row)
