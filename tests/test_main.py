@@ -1,12 +1,16 @@
+import logging
 from unittest import mock
 from uuid import uuid4
 
 import pytest
+import spacy
 from fastapi.testclient import TestClient
 
 import app.main as app_main
+import app.ner as ner
 from app.main import app, db
-from app.models import PageView
+from app.models import Entity, PageView
+from app.ner import NerModelUnavailable
 from app.ontology import Edition, Page
 from app.polona_connector import PolonaError
 from app.tei_xml import text_to_tei_xml
@@ -501,3 +505,154 @@ class TestTeiToText:
         paths = client.get("/openapi.json").json()["paths"]
 
         assert "post" in paths["/tei/text"]
+
+
+class TestNer:
+    ENTITIES = [
+        Entity(text="Adam Mickiewicz", label="persName", start=0, end=15),
+        Entity(text="Warszawie", label="placeName", start=29, end=38),
+    ]
+
+    @pytest.fixture
+    def find(self, monkeypatch):
+        mock_find = mock.Mock(return_value=self.ENTITIES)
+        monkeypatch.setattr("app.main.find_entities", mock_find)
+        return mock_find
+
+    def test_returns_the_recognized_entities(self, find):
+        text = "Adam Mickiewicz mieszkał w Warszawie."
+
+        response = client.post("/ner", json={"text": text})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "entities": [
+                {"text": "Adam Mickiewicz", "label": "persName", "start": 0, "end": 15},
+                {"text": "Warszawie", "label": "placeName", "start": 29, "end": 38},
+            ]
+        }
+        find.assert_called_once_with(text)
+
+    def test_no_entities_is_an_empty_list(self, find):
+        find.return_value = []
+
+        response = client.post("/ner", json={"text": "Ala ma kota."})
+
+        assert response.status_code == 200
+        assert response.json() == {"entities": []}
+
+    def test_model_not_installed_is_a_503(self, find):
+        find.side_effect = NerModelUnavailable("The spaCy model x is not installed")
+
+        response = client.post("/ner", json={"text": "text"})
+
+        assert response.status_code == 503
+        assert "not installed" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "body", [{}, {"text": None}, {"text": 5}, {"xml": "x"}, []]
+    )
+    def test_bad_request_bodies(self, find, body):
+        assert client.post("/ner", json=body).status_code == 422
+        find.assert_not_called()
+
+    def test_text_length_limit(self, find):
+        assert client.post("/ner", json={"text": "x" * 100_000}).status_code == 200
+        assert client.post("/ner", json={"text": "x" * 100_001}).status_code == 422
+
+    def test_touches_neither_the_database_nor_polona(self, find, polona, monkeypatch):
+        for name in ("get_page_by_number", "save_fetched_page", "update_page"):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        client.post("/ner", json={"text": "text"})
+
+        db.get_page_by_number.assert_not_called()
+        db.save_fetched_page.assert_not_called()
+        db.update_page.assert_not_called()
+        polona.assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "post" in schema["paths"]["/ner"]
+        assert {"NerRequest", "NerResult", "Entity"} <= schema["components"][
+            "schemas"
+        ].keys()
+
+
+class TestModelLoadedAtStartup:
+    @pytest.fixture(autouse=True)
+    def fresh_model_state(self, monkeypatch):
+        monkeypatch.setattr(ner, "_nlp", None)
+
+    def test_the_model_is_loaded_when_the_backend_starts(self, monkeypatch):
+        loaded = mock.Mock()
+        monkeypatch.setattr("app.main.get_nlp", loaded)
+
+        with TestClient(app):
+            loaded.assert_called_once_with()
+
+    def test_the_backend_only_serves_once_the_model_is_loaded(self, monkeypatch):
+        events = []
+        monkeypatch.setattr("app.main.get_nlp", lambda: events.append("loaded"))
+
+        with TestClient(app) as started:
+            events.append("first request")
+            started.get("/openapi.json")
+
+        assert events == ["loaded", "first request"]
+
+    def test_requests_use_the_model_loaded_at_startup(self, monkeypatch):
+        loads = []
+
+        def load(name):
+            loads.append(name)
+            return spacy.blank("pl")
+
+        monkeypatch.setattr(ner.spacy, "load", load)
+
+        with TestClient(app) as started:
+            assert loads == ["pl_core_news_lg"]  # loaded before any request
+            for _ in range(3):
+                assert started.post("/ner", json={"text": "Ala"}).status_code == 200
+
+        assert loads == ["pl_core_news_lg"]  # and never again
+
+    def test_it_is_not_loaded_without_starting_the_backend(self, monkeypatch):
+        # the tests' plain `client` does not run the startup: no model needed
+        loaded = mock.Mock()
+        monkeypatch.setattr("app.main.get_nlp", loaded)
+
+        client.get("/openapi.json")
+
+        loaded.assert_not_called()
+
+    def test_a_missing_model_does_not_stop_the_backend(self, monkeypatch, caplog):
+        def missing(name):
+            raise OSError("[E050] Can't find model")
+
+        monkeypatch.setattr(ner.spacy, "load", missing)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="uvicorn.error"),
+            TestClient(app) as started,
+        ):
+            response = started.post("/ner", json={"text": "Ala"})
+            other = started.post("/tei/text", json={"xml": "x"})
+
+        assert "pl_core_news_lg is not installed" in caplog.text
+        assert "503" in caplog.text
+        assert response.status_code == 503
+        assert other.status_code == 422  # the rest of the API works
+
+    def test_the_model_is_still_loaded_on_demand_if_startup_could_not(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            ner.spacy, "load", mock.Mock(side_effect=OSError("not yet"))
+        )
+        with TestClient(app) as started:
+            assert started.post("/ner", json={"text": "Ala"}).status_code == 503
+            monkeypatch.setattr(ner.spacy, "load", lambda name: spacy.blank("pl"))
+
+            assert started.post("/ner", json={"text": "Ala"}).status_code == 200

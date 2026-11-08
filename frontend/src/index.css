@@ -138,21 +138,6 @@ button {
 }
 
 
-.text-half textarea {
-  flex: 1;
-  width: 100%;
-  max-width: 38rem;
-  margin: 0 auto;
-  box-sizing: border-box;
-  padding: 0.5rem;
-  resize: none;
-  /* A serif face suits the old print, and is easier to read at length. */
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 1.25rem;
-  line-height: 1.7;
-  color: #1a1a1a;
-  font-variant-ligatures: none; /* show characters as OCR'd */
-}
 
 .view-switch {
   display: flex;
@@ -179,7 +164,8 @@ button {
 
 /* XML view: the content in the same type as the text view, and the markup
    (tags, comments, the declaration) smaller, on grey. */
-.xml-view {
+/* The box the page is shown in, for the text and for the XML. */
+.page-box {
   flex: 1;
   overflow: auto;
   width: 100%;
@@ -189,12 +175,19 @@ button {
   padding: 0.5rem;
   border: 1px solid #767676;
   border-radius: 0.25rem;
+  /* A serif face suits the old print, and is easier to read at length. */
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 1.25rem;
-  line-height: 1.9;
+  line-height: 1.7;
   color: #1a1a1a;
-  white-space: pre-wrap;
+  white-space: pre-wrap; /* keep the line breaks and blank lines */
   overflow-wrap: anywhere;
+  font-variant-ligatures: none; /* show characters as OCR'd */
+}
+
+.xml-view {
+  /* more room for the small markup */
+  line-height: 1.9;
 }
 
 .xml-markup {
@@ -204,4 +197,35 @@ button {
   color: #555;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
+}
+
+/* Named entities in the text: highlighted in red. */
+.entity {
+  padding: 0 0.1em;
+  border-radius: 0.2rem;
+  background: #fde0e0;
+  color: #c00000;
+  font-weight: 600;
+}
+
+.entity-count {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: #c00000;
+}
+
+.entity-count + .view-switch {
+  margin-left: 0.75rem;
+}
+
+/* Shown while a recognition request is running. */
+.sidebar-button[aria-busy='true'] {
+  cursor: progress;
+  animation: sidebar-busy 1s ease-in-out infinite;
+}
+
+@keyframes sidebar-busy {
+  50% {
+    opacity: 0.35;
+  }
 }

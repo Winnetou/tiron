@@ -104,6 +104,38 @@ are separated by a blank line and line breaks (`lb`, ...) become newlines, so a
 page converted by `text_to_tei_xml` comes back as the same text. Indentation in
 hand-edited XML does not matter.
 
+### Named entity recognition
+
+`POST /ner` with `{"text": "..."}` returns the named entities found in the
+text: people, places, organisations, dates and so on. The text is the plain
+text of a page, not XML (`POST /tei/text` turns TEI into text). Nothing is
+stored.
+
+```json
+{"entities": [
+  {"text": "Adam Mickiewicz", "label": "persName", "start": 0, "end": 15},
+  {"text": "Paryżu", "label": "placeName", "start": 57, "end": 63}
+]}
+```
+
+- Entities come in the order they appear in the text. `start` and `end` are
+  character offsets into the submitted text, so `text[start:end]` is the
+  entity's `text`. A text without entities gives an empty list.
+- Recognition is done by [spaCy](https://spacy.io) with its large Polish
+  model, `pl_core_news_lg`. The labels are the model's (for example
+  `persName`, `placeName`, `orgName`, `geogName`, `date`).
+- The model is loaded when the backend starts, so no request has to wait for
+  it: the first one takes about as long as any other (a fraction of a second
+  for a page). The price is the startup: the backend does not accept requests
+  until the model is loaded, which takes about 20 s in the Docker image (the
+  log says "Loading the spaCy model ..." and then "... is loaded"). Once loaded
+  it uses about 1 GB of memory.
+- The model is installed in the Docker image. When running the backend
+  without Docker it has to be installed separately. Without it the backend
+  still starts (everything else works), logs a warning, and `/ner` answers 503;
+  the model is tried again on the next request.
+- The text can have up to 100,000 characters; longer text gets a 422.
+
 ### What the frontend shows
 
 A page's `content` is TEI XML, but the frontend never shows it, and it never
@@ -128,6 +160,20 @@ only highlighting: the frontend splits the text at `<...>` to style it and
 checks nothing, so it still leaves the judging of the XML to the backend. Switching makes no request, and the chosen view is kept when
 moving to another page. The XML view also works when the backend rejects the
 XML, which is when it is most useful for seeing what is wrong.
+
+The "Named entity recognition" button in the sidebar sends the text on the
+screen (the plain text, not the XML) to `POST /ner`, and the entities the
+backend finds are highlighted in red in the text view, with how many were found
+next to the switch. Hovering over one shows its label (`persName`,
+`placeName`, ...). The highlighting follows the `start`/`end` offsets from the
+backend rather than searching for the words, so a word is only marked where the
+model found an entity, not everywhere it appears. The offsets count characters
+the way Python does, which the frontend converts for strings with emoji and the
+like. An entity that doesn't fit the text is skipped, not guessed at. Each click
+sends a new request. The highlights are cleared when another page is shown, and
+clicking the button while the XML is displayed switches to the text. The first
+click is as fast as any other, because the backend loads its model when it
+starts; the button pulses while a request is running.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.

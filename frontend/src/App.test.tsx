@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Page } from './api'
 import App from './App'
+import type { Entity } from './entities'
 import './index.css'
 
 const UUID = '4a2cfdf3-006a-4613-9aee-42b300be604b'
@@ -36,6 +37,8 @@ interface Options {
   tei?: (xml: string) => { text: string } | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
+  /** Answer of POST /ner; defaults to no entities. */
+  ner?: (text: string) => Entity[] | Error
 }
 
 const reply = (ok: boolean, status: number, body: unknown) => ({
@@ -71,6 +74,12 @@ function fakeBackend(options: Options = {}) {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, url, body })
+    if (url === '/ner') {
+      const answer = options.ner ? options.ner(body.text) : []
+      return answer instanceof Error
+        ? failure(503, answer)
+        : reply(true, 200, { entities: answer })
+    }
     if (url === '/tei/text') {
       const answer = options.tei
         ? options.tei(body.xml)
@@ -101,7 +110,7 @@ async function openPage(options?: Options, search = '') {
   return fetchMock
 }
 
-const pageText = () => screen.getByRole('textbox', { name: 'Page text' })
+const pageText = () => screen.getByRole('region', { name: 'Page text' })
 const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
 
 afterEach(() => {
@@ -129,14 +138,14 @@ describe('first screen', () => {
   it('requests page 0 of the edition on submit', async () => {
     const fetchMock = await openPage()
 
-    await screen.findByRole('textbox', { name: 'Page text' })
+    await screen.findByRole('region', { name: 'Page text' })
     expect(fetchMock).toHaveBeenCalledWith(`/editions/${UUID}/pages/0`)
   })
 
   it('uses the ?page= URL parameter as the page number', async () => {
     await openPage({}, '?page=2')
 
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 2'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 2'))
     expect(calledUrls()[0]).toBe(`GET /editions/${UUID}/pages/2`)
   })
 
@@ -165,7 +174,7 @@ describe('text from the TEI XML', () => {
   it('sends the page content (XML) to the backend and shows the text it returns', async () => {
     await openPage()
 
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
     expect(calledUrls()).toEqual([
       `GET /editions/${UUID}/pages/0`,
       'POST /tei/text',
@@ -175,7 +184,7 @@ describe('text from the TEI XML', () => {
 
   it('never shows the XML', async () => {
     await openPage()
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
 
     expect(document.body.textContent).not.toContain('<TEI>')
     expect(document.body.textContent).not.toContain('HEADER')
@@ -185,7 +194,7 @@ describe('text from the TEI XML', () => {
   it('shows whatever text the backend says, not its own reading of the XML', async () => {
     await openPage({ tei: () => ({ text: 'extracted by the backend' }) })
 
-    await waitFor(() => expect(pageText()).toHaveValue('extracted by the backend'))
+    await waitFor(() => expect(pageText().textContent).toBe('extracted by the backend'))
   })
 
   it('shows the backend reason, and no text, when the XML is rejected', async () => {
@@ -196,7 +205,7 @@ describe('text from the TEI XML', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The text of this page cannot be shown: The text is not well-formed XML (line 1, column 4)',
     )
-    expect(pageText()).toHaveValue('')
+    expect(pageText().textContent).toBe('')
     // the rest of the page is still usable
     expect(screen.getByRole('img')).toHaveAttribute('src', SCAN)
     expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
@@ -213,17 +222,17 @@ describe('text from the TEI XML', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
-    expect(pageText()).toHaveValue('')
+    expect(pageText().textContent).toBe('')
   })
 
   it('shows the text read-only: there is nothing to edit or save', async () => {
     await openPage()
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
 
-    expect(pageText()).toHaveAttribute('readonly')
+    expect(screen.queryByRole('textbox', { name: 'Page text' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
     await userEvent.type(pageText(), 'x')
-    expect(pageText()).toHaveValue('text of page 0')
+    expect(pageText().textContent).toBe('text of page 0')
   })
 })
 
@@ -234,7 +243,7 @@ describe('switch between text and XML', () => {
 
   async function openText() {
     await openPage()
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
   }
 
   it('starts on the text, with the switch showing it', async () => {
@@ -252,8 +261,8 @@ describe('switch between text and XML', () => {
     expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
     expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
     expect(textButton()).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.queryByRole('textbox', { name: 'Page text' })).toBeNull()
-    expect(screen.queryByRole('textbox', { name: 'Page XML' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Page XML' })).not.toBeNull()
   })
 
   it('switches back to the text', async () => {
@@ -262,7 +271,7 @@ describe('switch between text and XML', () => {
 
     await userEvent.click(textButton())
 
-    expect(pageText()).toHaveValue('text of page 0')
+    expect(pageText().textContent).toBe('text of page 0')
     expect(screen.queryByRole('region', { name: 'Page XML' })).toBeNull()
   })
 
@@ -360,6 +369,253 @@ describe('switch between text and XML', () => {
   })
 })
 
+describe('named entity recognition', () => {
+  const entity = (text: string, start: number, label = 'persName'): Entity => ({
+    text,
+    label,
+    start,
+    end: start + [...text].length,
+  })
+  const nerButton = () =>
+    screen.getByRole('button', { name: 'Named entity recognition' })
+  const marks = () =>
+    Array.from(pageText().querySelectorAll('mark')).map((m) => m.textContent)
+
+  /** Open a page whose text is `text`, with the entities the backend will find. */
+  async function openWithText(
+    text: string,
+    entities: Entity[] | Error = [],
+    extra: Options = {},
+  ) {
+    await openPage({
+      page: (n) => ({ content: xmlOf(text), number: n }),
+      ner: () => entities,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(text))
+  }
+  const nerCalls = () => calls.filter((c) => c.url === '/ner')
+
+  it('sends the text of the page, not the XML, when the button is clicked', async () => {
+    await openWithText('Adam Mickiewicz mieszkał w Paryżu')
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(nerCalls()).toHaveLength(1))
+    expect(nerCalls()[0].method).toBe('POST')
+    expect(nerCalls()[0].body).toEqual({ text: 'Adam Mickiewicz mieszkał w Paryżu' })
+  })
+
+  it('does nothing until the button is clicked', async () => {
+    await openWithText('Adam Mickiewicz mieszkał w Paryżu', [entity('Adam Mickiewicz', 0)])
+
+    expect(nerCalls()).toHaveLength(0)
+    expect(marks()).toEqual([])
+  })
+
+  it('highlights the recognized entities', async () => {
+    const text = 'Adam Mickiewicz mieszkał w Paryżu.'
+    await openWithText(text, [
+      entity('Adam Mickiewicz', 0),
+      entity('Paryżu', 27, 'placeName'),
+    ])
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Adam Mickiewicz', 'Paryżu']))
+    expect(pageText().textContent).toBe(text) // the text itself is unchanged
+    const mark = pageText().querySelector('mark')!
+    expect(mark).toHaveAttribute('title', 'persName')
+  })
+
+  it('highlights in red', async () => {
+    await openWithText('Adam Mickiewicz', [entity('Adam Mickiewicz', 0)])
+
+    await userEvent.click(nerButton())
+
+    const mark = await waitFor(() => {
+      const found = pageText().querySelector('mark')
+      expect(found).not.toBeNull()
+      return found as HTMLElement
+    })
+    const [r, g, b] = getComputedStyle(mark).color.match(/\d+/g)!.map(Number)
+    expect(r).toBeGreaterThan(150)
+    expect(g).toBeLessThan(50)
+    expect(b).toBeLessThan(50)
+    const [br, bg, bb] = getComputedStyle(mark).backgroundColor.match(/\d+/g)!.map(Number)
+    expect(br).toBeGreaterThan(bg) // a red-tinted background
+    expect(br).toBeGreaterThan(bb)
+    // ...and the text around it is not red
+    expect(getComputedStyle(pageText()).color).not.toBe(getComputedStyle(mark).color)
+  })
+
+  it('marks only the stretch the backend pointed at, not every equal word', async () => {
+    // "Ala" is an entity only the second time
+    const text = 'Ala ma kota, a Ala nie'
+    await openWithText(text, [entity('Ala', text.lastIndexOf('Ala'))])
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Ala']))
+    const mark = pageText().querySelector('mark')!
+    expect(mark.previousSibling?.textContent).toBe('Ala ma kota, a ')
+    expect(mark.nextSibling?.textContent).toBe(' nie')
+  })
+
+  it('counts offsets in code points, as the backend does, after emoji', async () => {
+    const text = '😀😀 Jan Kowalski'
+    // the backend counts 😀 as one character each: "Jan Kowalski" starts at 3
+    await openWithText(text, [entity('Jan Kowalski', 3)])
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+    expect(pageText().textContent).toBe(text)
+  })
+
+  it('skips an entity that does not match the text instead of guessing', async () => {
+    await openWithText('Ala ma kota', [
+      entity('Jan', 0), // the text there is "Ala"
+      entity('kota', 7),
+      entity('x', 500), // outside the text
+    ])
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['kota']))
+  })
+
+  it('says how many entities were found', async () => {
+    await openWithText('Jan i Ewa', [entity('Jan', 0), entity('Ewa', 6)])
+
+    await userEvent.click(nerButton())
+
+    expect(await screen.findByText('2 entities')).toBeInTheDocument()
+  })
+
+  it('says when there are none', async () => {
+    await openWithText('Ala ma kota', [])
+
+    await userEvent.click(nerButton())
+
+    expect(await screen.findByText('No entities')).toBeInTheDocument()
+    expect(marks()).toEqual([])
+  })
+
+  it('sends a new request on every click', async () => {
+    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
+
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(nerCalls()).toHaveLength(1))
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(nerCalls()).toHaveLength(2))
+    expect(marks()).toEqual(['Jan Kowalski'])
+  })
+
+  it('is busy, and cannot be clicked again, while the request is running', async () => {
+    let finish: (entities: Entity[]) => void = () => {}
+    await openPage({
+      page: () => ({ content: xmlOf('Jan Kowalski') }),
+      ner: () => {
+        throw new Error('replaced below')
+      },
+    })
+    await waitFor(() => expect(pageText().textContent).toBe('Jan Kowalski'))
+    const original = (
+      fetch as unknown as { getMockImplementation: () => (
+        url: string,
+        init?: RequestInit,
+      ) => Promise<unknown> }
+    ).getMockImplementation()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url !== '/ner') return original(url, init)
+        const entities = await new Promise<Entity[]>((resolve) => (finish = resolve))
+        return reply(true, 200, { entities })
+      }),
+    )
+
+    await userEvent.click(nerButton())
+
+    expect(nerButton()).toBeDisabled()
+    expect(nerButton()).toHaveAttribute('aria-busy', 'true')
+    finish([entity('Jan Kowalski', 0)])
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+    expect(nerButton()).toBeEnabled()
+  })
+
+  it('shows the backend error and keeps the text as it was', async () => {
+    await openWithText('Jan Kowalski', new Error('The spaCy model is not installed'))
+
+    await userEvent.click(nerButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('not installed')
+    expect(pageText().textContent).toBe('Jan Kowalski')
+    expect(marks()).toEqual([])
+    expect(nerButton()).toBeEnabled()
+  })
+
+  it('switches to the text view, where the entities are shown', async () => {
+    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
+    await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+    expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('clears the highlights when another page is shown', async () => {
+    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)], {
+      // the next page has another text
+      page: (n) => ({ content: xmlOf(n === 0 ? 'Jan Kowalski' : 'Inny tekst') }),
+    })
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await waitFor(() => expect(screen.getByText('Page 1')).toBeInTheDocument())
+    expect(marks()).toEqual([])
+    expect(screen.queryByText(/entit/)).toBeNull()
+  })
+
+  it('keeps the highlights when the page is marked ready: same text', async () => {
+    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
+
+    await screen.findByRole('button', { name: 'Ready' })
+    expect(marks()).toEqual(['Jan Kowalski'])
+  })
+
+  it('cannot be used when there is no text', async () => {
+    await openPage({ tei: () => new Error('The XML is empty') })
+    await screen.findByRole('alert')
+
+    expect(nerButton()).toBeDisabled()
+    expect(nerCalls()).toHaveLength(0)
+  })
+
+  it('leaves the other tool buttons as stubs', async () => {
+    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
+
+    expect(nerCalls()).toHaveLength(0)
+    expect(pageText().textContent).toBe('Jan Kowalski')
+  })
+})
+
 describe('page view', () => {
   it('shows the scan on the left and the text on the right', async () => {
     await openPage()
@@ -421,7 +677,7 @@ describe('page view', () => {
   it('shows only the text when a page has no scan', async () => {
     await openPage({ page: () => ({ scan_uri: null }) })
 
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 })
@@ -431,7 +687,7 @@ describe('page navigation', () => {
 
   it('disables previous page on page 0', async () => {
     await open(0)
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
 
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
@@ -439,12 +695,12 @@ describe('page navigation', () => {
 
   it('goes to the next page: fetches it, gets its text, updates the URL', async () => {
     await open(0)
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
     calls.length = 0
 
     await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 1'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
     expect(calledUrls()).toEqual([
       `GET /editions/${UUID}/pages/1`,
       'POST /tei/text',
@@ -456,22 +712,22 @@ describe('page navigation', () => {
 
   it('goes to the previous page', async () => {
     await open(2)
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 2'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 2'))
 
     await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
 
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 1'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
     expect(window.location.search).toBe('?page=1')
   })
 
   it('stays on the page and shows an error when there is no next page', async () => {
     await open(3)
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 3'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 3'))
 
     await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
-    expect(pageText()).toHaveValue('text of page 3')
+    expect(pageText().textContent).toBe('text of page 3')
     expect(window.location.search).toBe('?page=3')
   })
 })
@@ -479,7 +735,7 @@ describe('page navigation', () => {
 describe('mark as ready', () => {
   it('sends only the flag, then shows the page as Ready', async () => {
     await openPage()
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
 
     await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
 
@@ -489,7 +745,7 @@ describe('mark as ready', () => {
     expect(patches).toHaveLength(1)
     expect(patches[0].url).toBe(`/editions/${UUID}/pages/0`)
     expect(patches[0].body).toEqual({ ready: true })
-    expect(pageText()).toHaveValue('text of page 0') // the text is still shown
+    expect(pageText().textContent).toBe('text of page 0') // the text is still shown
   })
 
   it('shows an already ready page as Ready', async () => {
@@ -500,7 +756,7 @@ describe('mark as ready', () => {
 
   it('shows an error when marking as ready fails', async () => {
     await openPage({ patch: new Error('Page not found') })
-    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
 
     await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
 

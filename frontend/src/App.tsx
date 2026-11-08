@@ -2,10 +2,12 @@ import { useState, type FormEvent } from 'react'
 import {
   getPage,
   pageNumberFromUrl,
+  recognizeEntities,
   teiToText,
   updatePage,
   type Page,
 } from './api'
+import type { Entity } from './entities'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
@@ -47,6 +49,13 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // The entities found in a text, with the text they belong to, so that they
+  // are only shown while that same text is on the screen.
+  const [recognized, setRecognized] = useState<{
+    text: string
+    entities: Entity[]
+  } | null>(null)
+  const [recognizing, setRecognizing] = useState(false)
 
   const trimmed = uuid.trim()
   const valid = UUID_PATTERN.test(trimmed)
@@ -90,6 +99,19 @@ export default function App() {
     })
   }
 
+  /** Send the text of the page to the backend and keep the entities it finds. */
+  async function recognize(text: string) {
+    setRecognizing(true)
+    setActionError(null)
+    try {
+      setRecognized({ text, entities: await recognizeEntities(text) })
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setRecognizing(false)
+    }
+  }
+
   /** Set the ready flag of the open page. */
   function markReady(page: Page) {
     return run(updatePage(page.edition_id, page.number, { ready: true }))
@@ -107,6 +129,9 @@ export default function App() {
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
         onMarkReady={() => markReady(page)}
+        entities={recognized?.text === text ? recognized.entities : null}
+        recognizing={recognizing}
+        onRecognizeEntities={() => recognize(text)}
       />
     )
   }

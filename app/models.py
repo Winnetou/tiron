@@ -54,3 +54,20 @@ class TeiXml(BaseModel):
 
 class TeiText(BaseModel):
     text: str
+
+
+class NerRequest(BaseModel):
+    text: str = Field(max_length=100_000)
+
+
+class Entity(BaseModel):
+    """A named entity found in a text: `text[start:end] == entity.text`."""
+
+    text: str
+    label: str
+    start: int
+    end: int
+
+
+class NerResult(BaseModel):
+    entities: list[Entity]
