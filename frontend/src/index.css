@@ -229,3 +229,52 @@ button {
     opacity: 0.35;
   }
 }
+
+/* An entity that was confirmed, so it is marked in the XML: green. */
+.entity.confirmed {
+  background: #ddf2df;
+  color: #1b6b2a;
+}
+
+.entity-wrap {
+  position: relative;
+}
+
+.entity {
+  cursor: pointer;
+}
+
+/* The small dialog that appears when the mouse is over an entity. It touches
+   the entity, so moving the mouse onto it does not close it. */
+.entity-dialog {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 11rem;
+  padding: 0.5rem 0.75rem;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 0.25rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  color: #222;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: left;
+}
+
+.entity-dialog label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+  cursor: pointer;
+}
+
+.entity-dialog button {
+  width: 100%;
+  margin-top: 0.4rem;
+}

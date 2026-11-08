@@ -3,11 +3,12 @@ import {
   getPage,
   pageNumberFromUrl,
   recognizeEntities,
+  tagEntity,
   teiToText,
   updatePage,
   type Page,
 } from './api'
-import type { Entity } from './entities'
+import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
@@ -56,6 +57,12 @@ export default function App() {
     entities: Entity[]
   } | null>(null)
   const [recognizing, setRecognizing] = useState(false)
+  // What the user decided about the entities of a text. Like `recognized`, it
+  // belongs to one text and is not used for any other.
+  const [decided, setDecided] = useState<{
+    text: string
+    byKey: Record<string, Decision>
+  }>({ text: '', byKey: {} })
 
   const trimmed = uuid.trim()
   const valid = UUID_PATTERN.test(trimmed)
@@ -112,6 +119,27 @@ export default function App() {
     }
   }
 
+  /** Remember what was decided about an entity of the text on the screen. */
+  function decide(text: string, entity: Entity, decision: Decision) {
+    setDecided((previous) => ({
+      text,
+      byKey: {
+        ...(previous.text === text ? previous.byKey : {}),
+        [entityKey(entity)]: decision,
+      },
+    }))
+  }
+
+  /**
+   * Have the backend mark the entity in the XML of the page. The text does not
+   * change, so the entities stay as they are; the XML view shows the new tag.
+   */
+  function confirmEntity(page: Page, text: string, entity: Entity, label: string) {
+    return run(tagEntity(page.edition_id, page.number, entity, label), () =>
+      decide(text, entity, { kind: 'confirmed', label }),
+    )
+  }
+
   /** Set the ready flag of the open page. */
   function markReady(page: Page) {
     return run(updatePage(page.edition_id, page.number, { ready: true }))
@@ -132,6 +160,11 @@ export default function App() {
         entities={recognized?.text === text ? recognized.entities : null}
         recognizing={recognizing}
         onRecognizeEntities={() => recognize(text)}
+        decisions={decided.text === text ? decided.byKey : {}}
+        onConfirmEntity={(entity, label) =>
+          confirmEntity(page, text, entity, label)
+        }
+        onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
       />
     )
   }

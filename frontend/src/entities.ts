@@ -55,3 +55,38 @@ export function highlightParts(text: string, entities: Entity[]): TextPart[] {
   if (cursor < text.length) parts.push({ text: text.slice(cursor) })
   return parts
 }
+
+/**
+ * Every label the NER model can give an entity, which are also the TEI elements
+ * the backend can mark it with (its `EntityLabel`: it rejects any other).
+ */
+export const ENTITY_LABELS = [
+  'persName',
+  'placeName',
+  'orgName',
+  'geogName',
+  'date',
+  'time',
+] as const
+
+/**
+ * The labels to choose from for an entity: all of them, and the one it was
+ * recognized with too, should the model ever give one that is not in the list.
+ */
+export function labelOptions(entity: Entity): string[] {
+  const all: string[] = [...ENTITY_LABELS]
+  return all.includes(entity.label) ? all : [entity.label, ...all]
+}
+
+/**
+ * What the user decided about a recognized entity: that it is not one, or
+ * that it is, with the label it was marked with in the XML (which is not
+ * always the one the model gave it).
+ */
+export type Decision =
+  | { kind: 'confirmed'; label: string }
+  | { kind: 'rejected' }
+
+/** Identifies an entity within a text, to remember what was decided about it. */
+export const entityKey = (entity: Entity): string =>
+  `${entity.start}:${entity.end}:${entity.text}`

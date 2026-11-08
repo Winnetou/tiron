@@ -136,6 +136,42 @@ stored.
   the model is tried again on the next request.
 - The text can have up to 100,000 characters; longer text gets a 422.
 
+### Marking an entity in the XML
+
+`POST /editions/{edition_id}/pages/{number}/entities` puts a named entity in
+the TEI XML of a stored page inside an element named after its label, and saves
+the changed XML as the page's `corrected_content`. The body is what `POST /ner`
+found:
+
+```json
+{"start": 0, "end": 15, "text": "Adam Mickiewicz", "label": "persName"}
+```
+
+so that `<p>Adam Mickiewicz mieszkał ...</p>` becomes
+`<p><persName>Adam Mickiewicz</persName> mieszkał ...</p>`. The response is the
+updated page, like `GET`. `label` is one of the six that the model produces,
+which are also TEI elements: `persName`, `placeName`, `orgName`, `geogName`,
+`date`, `time`.
+
+- **The backend finds the place in the XML.** `start`/`end` are offsets into the
+  text that `POST /tei/text` gives for this page, and the backend maps them to
+  the XML, so the frontend never has to read it. `text` is the entity as the
+  client saw it; if it is not what is at those offsets, the page has changed
+  since the entities were recognized, and the answer is 409.
+- **The text does not change**, so the offsets of the other entities of the
+  page stay valid, and several can be marked one after the other without
+  recognizing again. Marking an entity that is already marked does nothing.
+- **How the XML is changed.** A text node is cut where the entity starts and
+  ends, and the nodes in between move inside the new element. So an entity can
+  span a line break (`<persName>Piotr<lb/>Tomicki</persName>`), and spaces or
+  line breaks at its ends stay outside it. It cannot start or end in the middle
+  of other markup (e.g. begin inside a `<hi>` and end outside it), span
+  paragraphs, lines of verse or list items, or sit in an element that contains a
+  comment or processing instruction (they cannot be moved with it); all of those
+  answer 422 with the reason.
+- 404 if the page is not stored, 422 if it has no valid TEI XML. Like `PATCH`,
+  it does not check the collection or fetch from Polona.
+
 ### What the frontend shows
 
 A page's `content` is TEI XML, but the frontend never shows it, and it never
@@ -164,16 +200,38 @@ XML, which is when it is most useful for seeing what is wrong.
 The "Named entity recognition" button in the sidebar sends the text on the
 screen (the plain text, not the XML) to `POST /ner`, and the entities the
 backend finds are highlighted in red in the text view, with how many were found
-next to the switch. Hovering over one shows its label (`persName`,
-`placeName`, ...). The highlighting follows the `start`/`end` offsets from the
+next to the switch. The highlighting follows the `start`/`end` offsets from the
 backend rather than searching for the words, so a word is only marked where the
 model found an entity, not everywhere it appears. The offsets count characters
 the way Python does, which the frontend converts for strings with emoji and the
 like. An entity that doesn't fit the text is skipped, not guessed at. Each click
-sends a new request. The highlights are cleared when another page is shown, and
-clicking the button while the XML is displayed switches to the text. The first
-click is as fast as any other, because the backend loads its model when it
-starts; the button pulses while a request is running.
+sends a new request, and clicking the button while the XML is displayed switches
+to the text. The first click is as fast as any other, because the backend loads
+its model when it starts; the button pulses while a request is running.
+
+**Confirming or rejecting an entity.** When the mouse is over a red entity (or
+it has the keyboard focus), a small dialog appears next to it. It lists every
+label the model can give (`persName`, `placeName`, `orgName`, `geogName`,
+`date`, `time`) and "Not NER". The label the model recognized is already
+selected; if the recognition is wrong, choose the right label instead, or
+"Not NER". Click **Confirm** to apply the choice; Escape closes the dialog.
+
+- With a label, the frontend asks the backend to mark the entity in the XML
+  with that label (`POST .../entities`, above), whether or not it is the one
+  the model gave. It does not touch the XML itself: it sends the entity's
+  offsets and the chosen label, and shows what the backend returns. The entity
+  turns green, because it is now in the XML as `<persName>...</persName>` (see
+  it in the XML view; hovering the green entity shows the label it was marked
+  with), and has no dialog any more. The text stays the same.
+- With "Not NER", the highlight is removed and the count goes down. The XML is
+  not changed and no request is made. This is not saved: recognizing again for
+  the same page in the same session remembers it, but after reloading the
+  entity is found again.
+- While a request is running nothing else can be confirmed, and a failure
+  (for example the 409 when the page has changed) is shown above the text, with
+  the entity still there to be confirmed again.
+- What was found and decided belongs to a text: it is not shown for another
+  page, and is back if you return to the page, until you reload.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.

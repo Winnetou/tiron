@@ -1,5 +1,6 @@
 """Request and response models of the API."""
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -71,3 +72,26 @@ class Entity(BaseModel):
 
 class NerResult(BaseModel):
     entities: list[Entity]
+
+
+# The labels of the NER model, which are also the TEI elements they become.
+EntityLabel = Literal["date", "geogName", "orgName", "persName", "placeName", "time"]
+
+
+class EntityTag(BaseModel):
+    """An entity to mark in the XML of a page: `label` becomes the TEI element
+    around the characters `start` to `end` of the page's text, which must be
+    `text` (the entity as the client saw it)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str = Field(min_length=1)
+    label: EntityLabel
+
+    @model_validator(mode="after")
+    def check_range(self) -> EntityTag:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self

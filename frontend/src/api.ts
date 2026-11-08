@@ -106,3 +106,28 @@ export async function recognizeEntities(text: string): Promise<Entity[]> {
   })
   return entities
 }
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/entities: the backend puts
+ * the entity inside a `label` element (<persName>, <placeName>, <date>, ...) in
+ * the XML of the page, saves it, and returns the updated page. The frontend
+ * only says which stretch of the text it is (the offsets it got from /ner);
+ * finding the place in the XML is the backend's job.
+ */
+export function tagEntity(
+  editionId: string,
+  number: number,
+  entity: Entity,
+  label: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/entities`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: entity.start,
+      end: entity.end,
+      text: entity.text,
+      label,
+    }),
+  })
+}

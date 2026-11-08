@@ -1,7 +1,18 @@
+import random
+import re
+
 import delb
 import pytest
 
-from app.tei_xml import TEI_NAMESPACE, InvalidTei, tei_xml_to_text, text_to_tei_xml
+from app.tei_xml import (
+    TEI_NAMESPACE,
+    CannotTag,
+    InvalidTei,
+    TextChanged,
+    tag_text_range,
+    tei_xml_to_text,
+    text_to_tei_xml,
+)
 
 TEXT = (
     "84 KATEDRA\n"
@@ -259,3 +270,424 @@ def test_paths_and_urls_are_never_loaded(not_xml):
     # delb's Document() would treat such strings as a file or a URL
     with pytest.raises(InvalidTei, match="not well-formed"):
         tei_xml_to_text(not_xml)
+
+
+# --- the extraction keeps tei_xml_to_text's result -------------------------
+
+
+def reference_text(xml: str) -> str:
+    """The extraction as it was written before characters were tracked."""
+    import re
+
+    from delb import TagNode
+    from delb.nodes import TextNode
+
+    from app import tei_xml
+
+    root = tei_xml._parse_tei(xml)
+    parts: list[str] = []
+
+    def collect(node):
+        for child in node.iterate_children():
+            if isinstance(child, TextNode):
+                parts.append(child.content)
+            elif isinstance(child, TagNode):
+                name = child.local_name
+                if name in tei_xml._BLOCK_ELEMENTS:
+                    parts.append("\x00")
+                collect(child)
+                if name in tei_xml._BLOCK_ELEMENTS:
+                    parts.append("\x00")
+                elif name in tei_xml._LINE_ELEMENTS:
+                    parts.append("\x01")
+
+    collect(tei_xml._text_element(root))
+    paragraphs = []
+    for block in "".join(parts).split("\x00"):
+        block = re.sub(r"\s+", " ", block)
+        block = block.replace("\x01", "\n")
+        block = re.sub(r" *\n *", "\n", block).strip()
+        if block:
+            paragraphs.append(block)
+    return "\n\n".join(paragraphs)
+
+
+CORPUS = [
+    "",
+    "one",
+    "  padded  ",
+    "a\n\nb\n\n\nc",
+    "line one\nline two\nline three",
+    "zna-\nczy to\nwięc\n\nnext paragraph",
+    "tabs\tand  spaces \n and\r\nwindows",
+    "a b  c",  # non-breaking space is whitespace too
+    "\n\nleading and trailing\n\n",
+    "😀 emoji 😀\nsecond",
+    "a < b & c > d",
+    TEXT,
+]
+XML_CORPUS = [
+    tei("<p>a<lb/>b<lb/><lb/>c</p>"),
+    tei("<p>  a  <lb/>  b  </p>"),
+    tei("<p>a <hi>b</hi> <persName>c <surname>d</surname></persName> e</p>"),
+    tei("<head>T</head>\n  <p>one\n   two</p>\n  <p>three<lb/>four</p>"),
+    tei("<lg><l>v1</l><l>v2</l></lg><list><item>a</item><item>b</item></list>"),
+    tei("<p>a <hi> b </hi> c</p>"),
+    tei("<p><lb/>starts with a break<lb/></p>"),
+    tei("<p>   </p><p>x</p><p/>"),
+    tei("<p>x<!-- c -->y <?pi z?> w</p>"),
+    tei("<p>fish &amp; chips &lt;3 <![CDATA[<raw>  & text]]></p>"),
+]
+
+
+@pytest.mark.parametrize("text", CORPUS)
+def test_extraction_is_unchanged_for_generated_xml(text):
+    xml = str(text_to_tei_xml(text))
+
+    assert tei_xml_to_text(xml) == reference_text(xml)
+
+
+@pytest.mark.parametrize("xml", XML_CORPUS)
+def test_extraction_is_unchanged_for_other_xml(xml):
+    assert tei_xml_to_text(xml) == reference_text(xml)
+
+
+# --- marking an entity in the XML ------------------------------------------
+
+
+def inner(xml: str) -> str:
+    """What is inside <body> of the XML."""
+    return xml[xml.index("<body>") + 6 : xml.index("</body>")]
+
+
+def where(text: str, entity: str, occurrence: int = 0) -> tuple[int, int]:
+    """Offsets of the n-th occurrence of `entity` in `text`, in code points."""
+    index = -1
+    for _ in range(occurrence + 1):
+        index = text.index(entity, index + 1)
+    return index, index + len(entity)
+
+
+def tag(xml: str, entity: str, label: str = "persName", occurrence: int = 0) -> str:
+    start, end = where(tei_xml_to_text(xml), entity, occurrence)
+    return tag_text_range(xml, start, end, label, entity)
+
+
+def generated(text: str) -> str:
+    return str(text_to_tei_xml(text))
+
+
+class TestTagTextRange:
+    def test_wraps_an_entity_in_the_middle_of_a_text(self):
+        xml = tag(generated("Ala ma kota. Jan Kowalski mieszka tu."), "Jan Kowalski")
+
+        assert inner(xml) == (
+            "<p>Ala ma kota. <persName>Jan Kowalski</persName> mieszka tu.</p>"
+        )
+
+    @pytest.mark.parametrize(
+        ("text", "entity", "expected"),
+        [
+            ("Jan mieszka", "Jan", "<p><persName>Jan</persName> mieszka</p>"),
+            ("mieszka Jan", "Jan", "<p>mieszka <persName>Jan</persName></p>"),
+            ("Jan", "Jan", "<p><persName>Jan</persName></p>"),
+            ("a\n\nJan\n\nb", "Jan", "<p>a</p><p><persName>Jan</persName></p><p>b</p>"),
+        ],
+    )
+    def test_at_the_start_and_end_of_a_paragraph_and_alone(
+        self, text, entity, expected
+    ):
+        assert inner(tag(generated(text), entity)) == expected
+
+    @pytest.mark.parametrize(
+        "label",
+        ["persName", "placeName", "orgName", "geogName", "date", "time"],
+    )
+    def test_every_label_of_the_model_becomes_an_element(self, label):
+        xml = tag(generated("w Paryżu"), "Paryżu", label)
+
+        assert f"<{label}>Paryżu</{label}>" in xml
+
+    def test_the_element_is_in_the_tei_namespace(self):
+        xml = tag(generated("w Paryżu"), "Paryżu", "placeName")
+
+        root = delb.parse_tree(xml)
+        names = {n.universal_name for n in _all_tags(root)}
+        assert f"{{{TEI_NAMESPACE}}}placeName" in names
+        assert "xmlns=" not in inner(xml)  # not repeated on the new element
+
+    def test_the_text_does_not_change(self):
+        text = "Ala ma kota\nnia psa. Jan Kowalski\nz Paryża."
+
+        xml = tag(generated(text), "Jan Kowalski")
+
+        assert tei_xml_to_text(xml) == text
+
+    def test_an_entity_can_span_a_line_break(self):
+        xml = tag(generated("a Piotr\nTomicki b"), "Piotr\nTomicki")
+
+        assert inner(xml) == "<p>a <persName>Piotr<lb/>Tomicki</persName> b</p>"
+
+    def test_a_line_break_at_the_end_is_left_outside(self):
+        # spaCy sometimes includes the newline: "Piotr\n"
+        text = "a Piotr\nTomicki b"
+        xml = generated(text)
+        start, end = where(text, "Piotr\n")
+
+        result = tag_text_range(xml, start, end, "persName", "Piotr\n")
+
+        assert inner(result) == "<p>a <persName>Piotr</persName><lb/>Tomicki b</p>"
+
+    def test_spaces_at_the_ends_are_left_outside(self):
+        text = "a  Jan  b"
+        xml = generated(text)  # the text is "a  Jan  b" (spaces are kept)
+
+        start, end = where(tei_xml_to_text(xml), " Jan ")
+        result = tag_text_range(xml, start, end, "persName", " Jan ")
+
+        assert inner(result) == "<p>a  <persName>Jan</persName>  b</p>"
+
+    def test_only_the_occurrence_at_the_offsets_is_marked(self):
+        xml = tag(generated("Ala ma kota, a Ala nie"), "Ala", occurrence=1)
+
+        assert inner(xml) == "<p>Ala ma kota, a <persName>Ala</persName> nie</p>"
+
+    def test_offsets_count_code_points(self):
+        xml = tag(generated("😀😀 Jan Kowalski 😀"), "Jan Kowalski")
+
+        assert inner(xml) == "<p>😀😀 <persName>Jan Kowalski</persName> 😀</p>"
+
+    def test_several_entities_can_be_marked_with_the_offsets_of_the_first_look(self):
+        text = "Jan Kowalski mieszka w Paryżu od 1840 roku."
+        xml = generated(text)
+        entities = [
+            ("Jan Kowalski", "persName"),
+            ("Paryżu", "placeName"),
+            ("1840 roku", "date"),
+        ]
+        offsets = [(*where(text, e), e, label) for e, label in entities]
+
+        for start, end, entity, label in offsets:  # the offsets are not recomputed
+            xml = tag_text_range(xml, start, end, label, entity)
+
+        assert inner(xml) == (
+            "<p><persName>Jan Kowalski</persName> mieszka w "
+            "<placeName>Paryżu</placeName> od <date>1840 roku</date>.</p>"
+        )
+        assert tei_xml_to_text(xml) == text
+
+    def test_next_to_each_other(self):
+        xml = tag(generated("JanKowalski"), "Jan")
+        xml = tag(xml, "Kowalski", "placeName")
+
+        assert inner(xml) == (
+            "<p><persName>Jan</persName><placeName>Kowalski</placeName></p>"
+        )
+
+    def test_inside_inline_markup(self):
+        xml = tei("<p>a <hi>Jan Kowalski</hi> b</p>")
+
+        assert inner(tag(xml, "Kowalski")) == (
+            "<p>a <hi>Jan <persName>Kowalski</persName></hi> b</p>"
+        )
+
+    def test_around_inline_markup_that_is_fully_inside(self):
+        xml = tei("<p>mieszka <hi>w Paryżu</hi> od</p>")
+
+        assert inner(tag(xml, "mieszka w Paryżu", "placeName")) == (
+            "<p><placeName>mieszka <hi>w Paryżu</hi></placeName> od</p>"
+        )
+
+    def test_whitespace_in_hand_edited_xml(self):
+        xml = tei("<p>\n    Jan\n    Kowalski\n    mieszka\n  </p>")
+        assert tei_xml_to_text(xml) == "Jan Kowalski mieszka"
+
+        result = tag(xml, "Jan Kowalski")
+
+        assert tei_xml_to_text(result) == "Jan Kowalski mieszka"
+        assert "<persName>Jan\n    Kowalski</persName>" in result
+
+    def test_marks_a_different_element_inside_an_existing_one(self):
+        xml = tei("<p>w <placeName>Paryżu</placeName></p>")
+
+        assert inner(tag(xml, "Paryżu", "persName")) == (
+            "<p>w <placeName><persName>Paryżu</persName></placeName></p>"
+        )
+
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            tei("<p>w <placeName>Paryżu</placeName> mieszka</p>"),
+            tei("<p>w <placeName> Paryżu </placeName></p>"),
+            tei("<p><placeName>Pa<lb/>ryżu</placeName></p>"),
+        ],
+    )
+    def test_nothing_changes_if_the_entity_is_already_marked(self, xml):
+        text = tei_xml_to_text(xml)
+        entity = re.search(r"Pa[\s]*ryżu", text).group(0)
+
+        assert tag(xml, entity, "placeName") == xml
+
+    def test_the_xml_declaration_is_kept_or_absent_like_the_input(self):
+        with_declaration = generated("w Paryżu")
+        without = with_declaration.split("?>", 1)[1]
+
+        assert tag(with_declaration, "Paryżu").startswith("<?xml")
+        assert not tag(without, "Paryżu").startswith("<?xml")
+        assert tag(without, "Paryżu").startswith("<TEI")
+
+    def test_the_header_and_everything_else_is_kept(self):
+        xml = tag(generated("a Jan b"), "Jan")
+
+        assert "<title>OCR text of a page</title>" in xml
+        assert "<publicationStmt><p>Unpublished</p></publicationStmt>" in xml
+
+    def test_the_result_is_well_formed_tei(self):
+        xml = tag(generated(TEXT), "Lwowie", "placeName")
+
+        assert tei_xml_to_text(xml) == TEXT.strip()
+        delb.Document(xml)  # parses
+
+    def test_tagging_twice_is_the_same_as_once(self):
+        once = tag(generated("a Jan b"), "Jan")
+
+        assert tag(once, "Jan") == once
+
+
+class TestTagTextRangeErrors:
+    def test_starting_inside_other_markup(self):
+        xml = tei("<p>a <hi>kota</hi> i psa</p>")
+
+        with pytest.raises(CannotTag, match=r"starts inside <hi>"):
+            tag(xml, "ota i")
+
+    def test_ending_inside_other_markup(self):
+        xml = tei("<p>a <hi>kota</hi> i psa</p>")
+
+        with pytest.raises(CannotTag, match=r"ends inside <hi>"):
+            tag(xml, "a kot")
+
+    def test_spanning_paragraphs(self):
+        xml = generated("first one\n\nsecond one")
+
+        with pytest.raises(CannotTag, match="more than one paragraph"):
+            tag(xml, "one\n\nsecond")
+
+    def test_spanning_lines_of_verse(self):
+        xml = tei("<lg><l>Litwo, Ojczyzno</l><l>moja</l></lg>")
+
+        with pytest.raises(CannotTag, match="more than one paragraph or line"):
+            tag(xml, "Ojczyzno\nmoja")
+
+    def test_spanning_list_items(self):
+        xml = tei("<list><item>a b</item><item>c d</item></list>")
+
+        with pytest.raises(CannotTag, match="more than one paragraph or line"):
+            tag(xml, "b\nc")
+
+    def test_whitespace_only(self):
+        xml = generated("a b")
+
+        with pytest.raises(CannotTag, match="no text"):
+            tag_text_range(xml, 1, 2, "persName", " ")
+
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            tei("<p>Jan<!-- c -->Kowalski</p>"),  # inside the entity
+            tei("<p>Jan Kowalski<!-- c --></p>"),  # next to it
+            tei("<p><?pi data?>Jan Kowalski</p>"),
+        ],
+    )
+    def test_a_comment_or_processing_instruction_in_the_same_element(self, xml):
+        entity = "JanKowalski" if "<!-- c -->Kowalski" in xml else "Jan Kowalski"
+
+        with pytest.raises(CannotTag, match="comment or processing instruction"):
+            tag(xml, entity)
+
+    def test_a_comment_in_another_paragraph_does_not_matter(self):
+        xml = tei("<p>a Jan b</p><p>c<!-- note -->d</p>")
+
+        assert "<p>a <persName>Jan</persName> b</p><p>c<!-- note -->d</p>" in tag(
+            xml, "Jan"
+        )
+
+    @pytest.mark.parametrize("label", ["", "p", "hi", "PersName", "script", "x y"])
+    def test_a_label_that_is_not_an_entity_label(self, label):
+        with pytest.raises(CannotTag, match="not an entity label"):
+            tag_text_range(generated("Jan"), 0, 3, label, "Jan")
+
+    def test_the_text_at_the_offsets_is_not_the_entity(self):
+        with pytest.raises(TextChanged, match="page has changed"):
+            tag_text_range(generated("Ala ma kota"), 0, 3, "persName", "Jan")
+
+    @pytest.mark.parametrize(
+        ("start", "end"), [(0, 99), (5, 5), (6, 2), (-1, 2), (99, 100)]
+    )
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            tag_text_range(generated("Ala ma kota"), start, end, "persName", "Ala")
+
+    @pytest.mark.parametrize(
+        "xml", ["", "not xml", "<a/>", f"<TEI xmlns='{TEI_NAMESPACE}'/>"]
+    )
+    def test_xml_that_is_not_tei(self, xml):
+        with pytest.raises(InvalidTei):
+            tag_text_range(xml, 0, 1, "persName", "a")
+
+    def test_the_xml_is_unchanged_after_an_error(self):
+        # the function works on a copy: a failed attempt leaves nothing behind
+        xml = tei("<p>a <hi>kota</hi> i psa</p>")
+
+        with pytest.raises(CannotTag):
+            tag(xml, "ota i")
+
+        assert tag(xml, "psa") == xml.replace("psa", "<persName>psa</persName>")
+
+
+def _all_tags(node):
+    yield node
+    for child in node.iterate_children():
+        if isinstance(child, delb.TagNode):
+            yield from _all_tags(child)
+
+
+# --- random texts: tagging only adds the tags --------------------------------
+
+
+def random_text(rng: random.Random) -> str:
+    words = ["Jan", "Ala", "ma", "kota", "w", "Paryżu", "1840", "o-", "😀", "<", "&"]
+    paragraphs = []
+    for _ in range(rng.randint(1, 3)):
+        lines = []
+        for _ in range(rng.randint(1, 4)):
+            lines.append(" ".join(rng.choice(words) for _ in range(rng.randint(1, 6))))
+        paragraphs.append("\n".join(lines))
+    return "\n\n".join(paragraphs)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_entities_only_add_the_tags(seed):
+    rng = random.Random(seed)
+    text = random_text(rng)
+    xml = generated(text)
+    extracted = tei_xml_to_text(xml)
+    paragraph_starts = [m.start() for m in re.finditer(r"[^\n]", extracted)]
+    for _ in range(5):
+        # a range inside one paragraph that starts and ends on a non-space
+        start = rng.choice(paragraph_starts)
+        end = start + rng.randint(1, 25)
+        end = min(end, len(extracted))
+        chunk = extracted[start:end]
+        if "\n\n" in chunk or not chunk.strip():
+            continue
+        label = rng.choice(["persName", "placeName", "date"])
+
+        result = tag_text_range(xml, start, end, label, chunk)
+
+        assert tei_xml_to_text(result) == extracted  # same text, so same offsets
+        stripped = re.sub(rf"</?{label}>", "", result)
+        assert stripped == xml  # nothing but the two tags was added
+        assert result.count(f"<{label}>") == 1
+        assert result.count(f"</{label}>") == 1
+        delb.Document(result)  # still well-formed

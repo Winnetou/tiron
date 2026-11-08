@@ -13,7 +13,7 @@ from app.models import Entity, PageView
 from app.ner import NerModelUnavailable
 from app.ontology import Edition, Page
 from app.polona_connector import PolonaError
-from app.tei_xml import text_to_tei_xml
+from app.tei_xml import tei_xml_to_text, text_to_tei_xml
 
 client = TestClient(app)
 
@@ -656,3 +656,248 @@ class TestModelLoadedAtStartup:
             monkeypatch.setattr(ner.spacy, "load", lambda name: spacy.blank("pl"))
 
             assert started.post("/ner", json={"text": "Ala"}).status_code == 200
+
+
+class TestTagEntity:
+    TEXT = "Adam Mickiewicz mieszkał w Paryżu.\nPotem w Warszawie."
+    XML = str(text_to_tei_xml(TEXT))
+
+    def body(self, entity, label="persName", **extra):
+        start = self.TEXT.index(entity)
+        return {
+            "start": start,
+            "end": start + len(entity),
+            "text": entity,
+            "label": label,
+            **extra,
+        }
+
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/entities"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        """A stored page with this TEI XML, and an update_page that stores it."""
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_content=self.TEXT,
+                corrected_content=self.XML,
+                scan_uri="https://polona.pl/s.jpg",
+            )
+        }
+
+        def update(edition_id, number, **changes):
+            state["page"] = state["page"].model_copy(update=changes)
+            return state["page"]
+
+        monkeypatch.setattr(
+            db, "get_page_by_number", mock.Mock(side_effect=lambda *a: state["page"])
+        )
+        monkeypatch.setattr(db, "update_page", mock.Mock(side_effect=update))
+        return state
+
+    def test_marks_the_entity_and_saves_the_new_xml(self, stored):
+        page = stored["page"]
+
+        response = client.post(
+            self.url(page.edition_id), json=self.body("Adam Mickiewicz")
+        )
+
+        assert response.status_code == 200
+        assert (
+            "<persName>Adam Mickiewicz</persName> mieszkał"
+            in response.json()["content"]
+        )
+        db.update_page.assert_called_once()
+        args, kwargs = db.update_page.call_args
+        assert args == (page.edition_id, 4)
+        assert list(kwargs) == ["corrected_content"]  # nothing else is touched
+        assert "<persName>Adam Mickiewicz</persName>" in kwargs["corrected_content"]
+
+    def test_the_response_is_the_updated_page_view(self, stored):
+        page = stored["page"]
+
+        body = client.post(
+            self.url(page.edition_id), json=self.body("Paryżu", "placeName")
+        ).json()
+
+        assert set(body) == {
+            "id",
+            "edition_id",
+            "number",
+            "scan_uri",
+            "ready",
+            "content",
+        }
+        assert body["id"] == str(page.id)
+        assert "<placeName>Paryżu</placeName>" in body["content"]
+
+    def test_the_text_does_not_change_so_the_offsets_stay_valid(self, stored):
+        page = stored["page"]
+        entities = [
+            ("Adam Mickiewicz", "persName"),
+            ("Paryżu", "placeName"),
+            ("Warszawie", "placeName"),
+        ]
+        bodies = [
+            self.body(entity, label) for entity, label in entities
+        ]  # all up front
+
+        for body in bodies:
+            assert client.post(self.url(page.edition_id), json=body).status_code == 200
+
+        xml = stored["page"].corrected_content
+        assert tei_xml_to_text(xml) == self.TEXT
+        for entity, label in entities:
+            assert f"<{label}>{entity}</{label}>" in xml
+
+    def test_marking_it_again_changes_nothing(self, stored):
+        page = stored["page"]
+        client.post(self.url(page.edition_id), json=self.body("Paryżu", "placeName"))
+        db.update_page.reset_mock()
+
+        response = client.post(
+            self.url(page.edition_id), json=self.body("Paryżu", "placeName")
+        )
+
+        assert response.status_code == 200
+        db.update_page.assert_not_called()
+
+    def test_page_not_stored(self, stored):
+        db.get_page_by_number.side_effect = None
+        db.get_page_by_number.return_value = None
+
+        response = client.post(self.url(), json=self.body("Paryżu"))
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Page not found"
+        db.update_page.assert_not_called()
+
+    def test_the_text_at_the_offsets_is_not_the_entity(self, stored):
+        body = self.body("Paryżu") | {"text": "Londynie"}
+
+        response = client.post(self.url(stored["page"].edition_id), json=body)
+
+        assert response.status_code == 409
+        assert "page has changed" in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    def test_offsets_outside_the_text(self, stored):
+        body = {"start": 900, "end": 910, "text": "Paryżu", "label": "placeName"}
+
+        response = client.post(self.url(stored["page"].edition_id), json=body)
+
+        assert response.status_code == 409
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("corrected_content", "message"),
+        [
+            (None, "no TEI XML"),
+            ("", "no TEI XML"),
+            ("Adam Mickiewicz mieszkał w Paryżu.", "not well-formed"),
+            ("<a/>", "root element must be <TEI>"),
+        ],
+    )
+    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+        stored["page"] = stored["page"].model_copy(
+            update={"corrected_content": corrected_content}
+        )
+
+        response = client.post(
+            self.url(stored["page"].edition_id), json=self.body("Paryżu")
+        )
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    def test_an_entity_that_cannot_be_marked(self, stored):
+        # "Paryżu.\nPotem" spans a line break: fine; paragraphs are what fails
+        text = "one two\n\nthree four"
+        stored["page"] = stored["page"].model_copy(
+            update={"corrected_content": str(text_to_tei_xml(text))}
+        )
+        body = {"start": 4, "end": 14, "text": "two\n\nthree", "label": "persName"}
+
+        response = client.post(self.url(stored["page"].edition_id), json=body)
+
+        assert response.status_code == 422
+        assert "more than one paragraph" in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "label", ["persName", "placeName", "orgName", "geogName", "date", "time"]
+    )
+    def test_every_label_of_the_model(self, stored, label):
+        response = client.post(
+            self.url(stored["page"].edition_id), json=self.body("Paryżu", label)
+        )
+
+        assert response.status_code == 200
+        assert f"<{label}>Paryżu</{label}>" in response.json()["content"]
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"label": "p"},
+            {"label": "script"},
+            {"label": "PersName"},
+            {"label": ""},
+            {"label": None},
+            {"end": 0},  # not after start
+            {"start": 5, "end": 5},
+            {"start": -1},
+            {"text": ""},
+            {"text": None},
+            {"start": "a"},
+            {"raw_content": "x"},  # not a field of this request
+            {"corrected_content": "<TEI/>"},
+        ],
+    )
+    def test_bad_requests_are_rejected_before_anything_happens(self, stored, change):
+        body = self.body("Paryżu", "placeName") | change
+
+        response = client.post(self.url(stored["page"].edition_id), json=body)
+
+        assert response.status_code == 422
+        db.get_page_by_number.assert_not_called()
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize("missing", ["start", "end", "text", "label"])
+    def test_every_field_is_needed(self, stored, missing):
+        body = self.body("Paryżu", "placeName")
+        del body[missing]
+
+        assert client.post(self.url(), json=body).status_code == 422
+
+    def test_invalid_path_arguments(self, stored):
+        body = self.body("Paryżu")
+
+        assert (
+            client.post("/editions/nope/pages/4/entities", json=body).status_code == 422
+        )
+        assert client.post(self.url(number=-1), json=body).status_code == 422
+
+    def test_does_not_check_the_collection_or_call_polona(
+        self, polona, stored, monkeypatch
+    ):  # `stored` last: it replaces the database mock that `polona` sets
+        check = mock.Mock(return_value=False)
+        monkeypatch.setattr(db, "check_edition_in_collection", check)
+
+        response = client.post(
+            self.url(stored["page"].edition_id), json=self.body("Paryżu", "placeName")
+        )
+
+        assert response.status_code == 200
+        check.assert_not_called()
+        polona.assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        path = "/editions/{edition_id}/pages/{number}/entities"
+        assert "post" in schema["paths"][path]
+        assert "EntityTag" in schema["components"]["schemas"]

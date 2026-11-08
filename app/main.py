@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Path, status
 
 from app.db import Database
 from app.models import (
+    EntityTag,
     NerRequest,
     NerResult,
     PageUpdate,
@@ -18,7 +19,14 @@ from app.models import (
 from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.ontology import Correction, Edition, Page, Work
 from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
-from app.tei_xml import InvalidTei, tei_xml_to_text, text_to_tei_xml
+from app.tei_xml import (
+    CannotTag,
+    InvalidTei,
+    TextChanged,
+    tag_text_range,
+    tei_xml_to_text,
+    text_to_tei_xml,
+)
 
 db = Database()
 
@@ -123,6 +131,53 @@ def update_page(
     page = db.update_page(edition_id, number, **update.model_dump(exclude_unset=True))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/pages/{number}/entities", response_model=PageView)
+def tag_entity(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], entity: EntityTag
+) -> PageView:
+    """Mark a named entity in the TEI XML of a stored page: the characters
+    `start` to `end` of the page's text are put inside an element named `label`
+    (`persName`, `placeName`, `orgName`, `geogName`, `date` or `time`), and the
+    changed XML is saved as the page's corrected content.
+
+    The body is `{"start": 0, "end": 15, "text": "Adam Mickiewicz", "label":
+    "persName"}`: what `POST /ner` returned, so the offsets are those of the
+    text that `POST /tei/text` gives for this page. `text` is the entity as the
+    client saw it, and the backend checks that it is what is at those offsets.
+    The text of the page does not change, so the offsets of its other entities
+    stay valid. Marking an entity that is already marked changes nothing.
+
+    404 if the page is not stored. 409 if the text at the offsets is not
+    `text`, because the page has changed since the entities were recognized.
+    422 if the page has no valid TEI XML, or the entity cannot be marked in it
+    (for example it spans paragraphs, or starts inside other markup). Returns
+    the updated page as a PageView.
+    """
+    page = db.get_page_by_number(edition_id, number)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    if not page.corrected_content:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The page has no TEI XML to mark entities in",
+        )
+    try:
+        xml = tag_text_range(
+            page.corrected_content,
+            entity.start,
+            entity.end,
+            entity.label,
+            entity.text,
+        )
+    except TextChanged as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotTag) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if xml != page.corrected_content:
+        page = db.update_page(edition_id, number, corrected_content=xml) or page
     return PageView.from_page(page)
 
 

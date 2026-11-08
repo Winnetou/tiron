@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Page } from './api'
-import type { Entity } from './entities'
+import { entityKey, type Decision, type Entity } from './entities'
 import HighlightedText from './HighlightedText'
 import Sidebar from './Sidebar'
 import XmlView from './XmlView'
@@ -28,6 +28,12 @@ interface Props {
   recognizing: boolean
   /** Recognize the named entities in `text`. */
   onRecognizeEntities: () => void
+  /** What was decided about the entities so far (confirmed or rejected). */
+  decisions: Record<string, Decision>
+  /** Mark the entity in the XML of the page, as `label`. */
+  onConfirmEntity: (entity: Entity, label: string) => void
+  /** The user says it is not a named entity: it is no longer highlighted. */
+  onRejectEntity: (entity: Entity) => void
 }
 
 /**
@@ -50,8 +56,15 @@ export default function PageViewer({
   entities,
   recognizing,
   onRecognizeEntities,
+  decisions,
+  onConfirmEntity,
+  onRejectEntity,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
+  // The entities that are still shown: not the ones rejected as "Not NER".
+  const entityCount = (entities ?? []).filter(
+    (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
+  ).length
   // Kept while moving from page to page.
   const [view, setView] = useState<View>('text')
 
@@ -109,9 +122,9 @@ export default function PageViewer({
           </button>
           {entities && (
             <span className="entity-count" aria-live="polite">
-              {entities.length === 0
+              {entityCount === 0
                 ? 'No entities'
-                : `${entities.length} ${entities.length === 1 ? 'entity' : 'entities'}`}
+                : `${entityCount} ${entityCount === 1 ? 'entity' : 'entities'}`}
             </span>
           )}
           <div className="view-switch" role="group" aria-label="Show">
@@ -132,7 +145,14 @@ export default function PageViewer({
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
         {view === 'text' ? (
-          <HighlightedText text={text} entities={entities} />
+          <HighlightedText
+            text={text}
+            entities={entities}
+            decisions={decisions}
+            busy={busy}
+            onConfirm={onConfirmEntity}
+            onReject={onRejectEntity}
+          />
         ) : (
           <XmlView xml={page.content} />
         )}
