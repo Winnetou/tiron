@@ -137,10 +137,6 @@ button {
   margin-bottom: 0.75rem;
 }
 
-.unsaved {
-  font-size: 0.85rem;
-  color: #8a5a00;
-}
 
 .text-half textarea {
   flex: 1;
@@ -156,4 +152,56 @@ button {
   line-height: 1.7;
   color: #1a1a1a;
   font-variant-ligatures: none; /* show characters as OCR'd */
+}
+
+.view-switch {
+  display: flex;
+  margin-left: auto;
+}
+
+.view-switch button {
+  border-radius: 0;
+}
+
+.view-switch button:first-child {
+  border-radius: 0.25rem 0 0 0.25rem;
+}
+
+.view-switch button:last-child {
+  border-radius: 0 0.25rem 0.25rem 0;
+  margin-left: -1px;
+}
+
+.view-switch button[aria-pressed='true'] {
+  background: #333;
+  color: #fff;
+}
+
+/* XML view: the content in the same type as the text view, and the markup
+   (tags, comments, the declaration) smaller, on grey. */
+.xml-view {
+  flex: 1;
+  overflow: auto;
+  width: 100%;
+  max-width: 38rem;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border: 1px solid #767676;
+  border-radius: 0.25rem;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.25rem;
+  line-height: 1.9;
+  color: #1a1a1a;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.xml-markup {
+  padding: 0.05em 0.25em;
+  border-radius: 0.2rem;
+  background: #e3e3e3;
+  color: #555;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
 }

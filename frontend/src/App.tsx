@@ -1,18 +1,45 @@
 import { useState, type FormEvent } from 'react'
-import { getPage, pageNumberFromUrl, updatePage, type Page, type PageChanges } from './api'
+import {
+  getPage,
+  pageNumberFromUrl,
+  teiToText,
+  updatePage,
+  type Page,
+} from './api'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** A page together with its text, which is what the viewer shows. */
+interface PageWithText {
+  page: Page
+  text: string
+  textError: string | null
+}
+
 type Status =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'done'; page: Page }
+  | ({ kind: 'done' } & PageWithText)
   | { kind: 'error'; message: string }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed'
+}
+
+/**
+ * The content of a page is TEI XML. As soon as we have it, it goes back to the
+ * backend, which validates it and returns just the text; only that text is
+ * shown. The backend is the only judge of whether the XML is correct: if it
+ * says no, we show its reason and no text.
+ */
+async function withText(page: Page): Promise<PageWithText> {
+  try {
+    return { page, text: await teiToText(page.content), textError: null }
+  } catch (error) {
+    return { page, text: '', textError: errorMessage(error) }
+  }
 }
 
 export default function App() {
@@ -33,7 +60,7 @@ export default function App() {
         trimmed,
         pageNumberFromUrl(window.location.search),
       )
-      setStatus({ kind: 'done', page })
+      setStatus({ kind: 'done', ...(await withText(page)) })
     } catch (error) {
       setStatus({ kind: 'error', message: errorMessage(error) })
     }
@@ -44,9 +71,9 @@ export default function App() {
     setBusy(true)
     setActionError(null)
     try {
-      const page = await request
-      onSuccess?.(page)
-      setStatus({ kind: 'done', page })
+      const shown = await withText(await request)
+      onSuccess?.(shown.page)
+      setStatus({ kind: 'done', ...shown })
     } catch (error) {
       setActionError(errorMessage(error))
     } finally {
@@ -63,22 +90,23 @@ export default function App() {
     })
   }
 
-  /** Change the corrected content and/or the ready flag of the open page. */
-  function savePage(page: Page, changes: PageChanges) {
-    return run(updatePage(page.edition_id, page.number, changes))
+  /** Set the ready flag of the open page. */
+  function markReady(page: Page) {
+    return run(updatePage(page.edition_id, page.number, { ready: true }))
   }
 
   if (status.kind === 'done') {
-    const { page } = status
+    const { page, text, textError } = status
     return (
       <PageViewer
         page={page}
+        text={text}
+        textError={textError}
         busy={busy}
         error={actionError}
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
-        onSave={(content) => savePage(page, { corrected_content: content })}
-        onMarkReady={() => savePage(page, { ready: true })}
+        onMarkReady={() => markReady(page)}
       />
     )
   }

@@ -297,3 +297,20 @@ def test_update_page_needs_something_to_update(db, stored_page):
 def test_update_page_cannot_change_other_columns(db, stored_page, field):
     with pytest.raises(TypeError):
         db.update_page(stored_page.edition_id, 7, **{field: "x"})
+
+
+def test_fetched_page_keeps_raw_text_and_tei_separately(db, edition):
+    tei = "<?xml version='1.0'?><TEI/>"
+    page = Page(
+        edition_id=edition.id,
+        number=5,
+        raw_content="raw ocr text",
+        corrected_content=tei,
+        scan_uri="u",
+    )
+
+    stored = db.save_fetched_page(page)
+
+    assert stored.raw_content == "raw ocr text"
+    assert stored.corrected_content == tei
+    assert db.get_page_by_number(edition.id, 5) == stored

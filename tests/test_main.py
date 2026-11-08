@@ -6,8 +6,10 @@ from fastapi.testclient import TestClient
 
 import app.main as app_main
 from app.main import app, db
+from app.models import PageView
 from app.ontology import Edition, Page
 from app.polona_connector import PolonaError
+from app.tei_xml import text_to_tei_xml
 
 client = TestClient(app)
 
@@ -71,7 +73,7 @@ def test_get_page_returns_polona_content(in_collection, polona):
     body = response.json()
     assert body["edition_id"] == str(edition_id)
     assert body["number"] == 0
-    assert body["content"] == "Ala ma kota"
+    assert body["content"] == str(text_to_tei_xml("Ala ma kota"))  # TEI, not raw
     assert "raw_content" not in body
     assert "corrected_content" not in body
     assert body["ready"] is False
@@ -265,7 +267,7 @@ def test_page_view_content(raw, corrected, expected):
         ready=True,
     )
 
-    view = app_main.PageView.from_page(page)
+    view = PageView.from_page(page)
 
     assert view.content == expected
     assert (view.id, view.edition_id, view.number) == (
@@ -386,3 +388,116 @@ class TestUpdatePage:
             ).status_code
             == 422
         )
+
+
+def test_get_page_saves_raw_text_and_its_tei_xml(in_collection, polona):
+    edition_id = uuid4()
+    polona.return_value = {
+        "scan_uri": "https://polona.pl/s.jpg",
+        "raw_content": "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys.",
+    }
+
+    client.get(f"/editions/{edition_id}/pages/5")
+
+    (saved,) = db.save_fetched_page.call_args.args
+    assert saved.raw_content == "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys."
+    assert saved.corrected_content == str(text_to_tei_xml(saved.raw_content))
+    assert saved.corrected_content.startswith("<?xml")
+    assert '<TEI xmlns="http://www.tei-c.org/ns/1.0">' in saved.corrected_content
+    assert "<p>84 KATEDRA</p>" in saved.corrected_content
+    assert "kamie<lb/>niami &lt;10&gt; &amp; tys." in saved.corrected_content
+    assert saved.scan_uri == "https://polona.pl/s.jpg"
+    assert not saved.ready
+
+
+def test_get_page_passes_the_raw_text_to_the_converter(
+    in_collection, polona, monkeypatch
+):
+    seen = []
+
+    def converter(text):
+        seen.append(text)
+        return "<converted/>"
+
+    monkeypatch.setattr("app.main.text_to_tei_xml", converter)
+
+    response = client.get(f"/editions/{uuid4()}/pages/5")
+
+    assert seen == ["Ala ma kota"]
+    assert response.json()["content"] == "<converted/>"
+    (saved,) = db.save_fetched_page.call_args.args
+    assert (saved.raw_content, saved.corrected_content) == (
+        "Ala ma kota",
+        "<converted/>",
+    )
+
+
+def test_get_page_does_not_convert_a_stored_page(in_collection, polona, monkeypatch):
+    db.get_page_by_number.return_value = Page(
+        edition_id=uuid4(), number=5, raw_content="stored raw"
+    )
+    converter = mock.Mock()
+    monkeypatch.setattr("app.main.text_to_tei_xml", converter)
+
+    client.get(f"/editions/{uuid4()}/pages/5")
+
+    converter.assert_not_called()
+
+
+class TestTeiToText:
+    VALID = str(text_to_tei_xml("84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys."))
+
+    def test_returns_just_the_text(self):
+        response = client.post("/tei/text", json={"xml": self.VALID})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "text": "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys."
+        }
+
+    def test_the_header_is_not_in_the_text(self):
+        text = client.post("/tei/text", json={"xml": self.VALID}).json()["text"]
+
+        assert "OCR text of a page" not in text
+        assert "<" not in text.replace("<10>", "")
+
+    @pytest.mark.parametrize(
+        ("xml", "message"),
+        [
+            ("not xml at all", "not well-formed"),
+            ("<a/>", "root element must be <TEI>"),
+            ('<TEI xmlns="http://www.tei-c.org/ns/1.0"/>', "no <teiHeader>"),
+            ("<!DOCTYPE x><TEI/>", "DOCTYPE and ENTITY"),
+            ("", "empty"),
+        ],
+    )
+    def test_invalid_xml_is_rejected_with_the_reason(self, xml, message):
+        response = client.post("/tei/text", json={"xml": xml})
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+
+    @pytest.mark.parametrize("body", [{}, {"xml": None}, {"xml": 5}, {"text": "x"}, []])
+    def test_bad_request_bodies(self, body):
+        assert client.post("/tei/text", json=body).status_code == 422
+
+    def test_too_large_input_is_rejected(self):
+        response = client.post("/tei/text", json={"xml": "x" * 1_000_001})
+
+        assert response.status_code == 422
+
+    def test_touches_neither_the_database_nor_polona(self, polona, monkeypatch):
+        for name in ("get_page_by_number", "save_fetched_page", "update_page"):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        client.post("/tei/text", json={"xml": self.VALID})
+
+        db.get_page_by_number.assert_not_called()
+        db.save_fetched_page.assert_not_called()
+        db.update_page.assert_not_called()
+        polona.assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        paths = client.get("/openapi.json").json()["paths"]
+
+        assert "post" in paths["/tei/text"]
