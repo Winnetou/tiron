@@ -2,10 +2,13 @@ import { useState, type FormEvent } from 'react'
 import {
   getPage,
   pageNumberFromUrl,
+  recognizeEntities,
+  tagEntity,
   teiToText,
   updatePage,
   type Page,
 } from './api'
+import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
 
 const UUID_PATTERN =
@@ -47,6 +50,19 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // The entities found in a text, with the text they belong to, so that they
+  // are only shown while that same text is on the screen.
+  const [recognized, setRecognized] = useState<{
+    text: string
+    entities: Entity[]
+  } | null>(null)
+  const [recognizing, setRecognizing] = useState(false)
+  // What the user decided about the entities of a text. Like `recognized`, it
+  // belongs to one text and is not used for any other.
+  const [decided, setDecided] = useState<{
+    text: string
+    byKey: Record<string, Decision>
+  }>({ text: '', byKey: {} })
 
   const trimmed = uuid.trim()
   const valid = UUID_PATTERN.test(trimmed)
@@ -90,6 +106,40 @@ export default function App() {
     })
   }
 
+  /** Send the text of the page to the backend and keep the entities it finds. */
+  async function recognize(text: string) {
+    setRecognizing(true)
+    setActionError(null)
+    try {
+      setRecognized({ text, entities: await recognizeEntities(text) })
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setRecognizing(false)
+    }
+  }
+
+  /** Remember what was decided about an entity of the text on the screen. */
+  function decide(text: string, entity: Entity, decision: Decision) {
+    setDecided((previous) => ({
+      text,
+      byKey: {
+        ...(previous.text === text ? previous.byKey : {}),
+        [entityKey(entity)]: decision,
+      },
+    }))
+  }
+
+  /**
+   * Have the backend mark the entity in the XML of the page. The text does not
+   * change, so the entities stay as they are; the XML view shows the new tag.
+   */
+  function confirmEntity(page: Page, text: string, entity: Entity, label: string) {
+    return run(tagEntity(page.edition_id, page.number, entity, label), () =>
+      decide(text, entity, { kind: 'confirmed', label }),
+    )
+  }
+
   /** Set the ready flag of the open page. */
   function markReady(page: Page) {
     return run(updatePage(page.edition_id, page.number, { ready: true }))
@@ -107,6 +157,14 @@ export default function App() {
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
         onMarkReady={() => markReady(page)}
+        entities={recognized?.text === text ? recognized.entities : null}
+        recognizing={recognizing}
+        onRecognizeEntities={() => recognize(text)}
+        decisions={decided.text === text ? decided.byKey : {}}
+        onConfirmEntity={(entity, label) =>
+          confirmEntity(page, text, entity, label)
+        }
+        onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
       />
     )
   }

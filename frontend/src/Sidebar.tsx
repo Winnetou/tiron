@@ -5,6 +5,8 @@ interface Tool {
   icon: ReactNode
 }
 
+const NER_LABEL = 'Named entity recognition'
+
 // Simple 24x24 stroke icons (no icon dependency).
 function Icon({ children }: { children: ReactNode }) {
   return (
@@ -46,7 +48,7 @@ const TOOLS: Tool[] = [
     ),
   },
   {
-    label: 'Named entity recognition',
+    label: NER_LABEL,
     // tag
     icon: (
       <Icon>
@@ -57,21 +59,42 @@ const TOOLS: Tool[] = [
   },
 ]
 
-/** Vertical tool bar on the right. The buttons are stubs for now. */
-export default function Sidebar() {
+interface Props {
+  /** Send the text of the page to be recognized for named entities. */
+  onRecognizeEntities: () => void
+  /** False when there is no text to recognize entities in. */
+  canRecognize: boolean
+  recognizing: boolean
+}
+
+/**
+ * Vertical tool bar on the right. Only named entity recognition does anything
+ * so far; the other buttons are stubs.
+ */
+export default function Sidebar({
+  onRecognizeEntities,
+  canRecognize,
+  recognizing,
+}: Props) {
   return (
     <aside className="sidebar" aria-label="Tools">
-      {TOOLS.map(({ label, icon }) => (
-        <button
-          key={label}
-          type="button"
-          className="sidebar-button"
-          aria-label={label}
-          data-tooltip={label}
-        >
-          {icon}
-        </button>
-      ))}
+      {TOOLS.map(({ label, icon }) => {
+        const isNer = label === NER_LABEL
+        return (
+          <button
+            key={label}
+            type="button"
+            className="sidebar-button"
+            aria-label={label}
+            data-tooltip={label}
+            onClick={isNer ? onRecognizeEntities : undefined}
+            disabled={isNer && (!canRecognize || recognizing)}
+            aria-busy={isNer && recognizing ? true : undefined}
+          >
+            {icon}
+          </button>
+        )
+      })}
     </aside>
   )
 }

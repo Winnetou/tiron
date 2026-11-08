@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { Page } from './api'
+import { entityKey, type Decision, type Entity } from './entities'
+import HighlightedText from './HighlightedText'
 import Sidebar from './Sidebar'
 import XmlView from './XmlView'
 
@@ -21,14 +23,26 @@ interface Props {
   onNext: () => void
   /** Mark the page as ready. */
   onMarkReady: () => void
+  /** The named entities found in `text`; null if not recognized yet. */
+  entities: Entity[] | null
+  recognizing: boolean
+  /** Recognize the named entities in `text`. */
+  onRecognizeEntities: () => void
+  /** What was decided about the entities so far (confirmed or rejected). */
+  decisions: Record<string, Decision>
+  /** Mark the entity in the XML of the page, as `label`. */
+  onConfirmEntity: (entity: Entity, label: string) => void
+  /** The user says it is not a named entity: it is no longer highlighted. */
+  onRejectEntity: (entity: Entity) => void
 }
 
 /**
  * Left half: the scan, with zoom buttons.
  * Right half: previous/next page and "Mark as ready" buttons, a switch between
  * the two views of the page, and the page itself, read-only: its text (the
- * default, as extracted by the backend) or the TEI XML it comes from, with the
- * markup on a grey background.
+ * default, as extracted by the backend, with the named entities in red once
+ * they are recognized) or the TEI XML it comes from, with the markup on a grey
+ * background.
  */
 export default function PageViewer({
   page,
@@ -39,8 +53,18 @@ export default function PageViewer({
   onPrevious,
   onNext,
   onMarkReady,
+  entities,
+  recognizing,
+  onRecognizeEntities,
+  decisions,
+  onConfirmEntity,
+  onRejectEntity,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
+  // The entities that are still shown: not the ones rejected as "Not NER".
+  const entityCount = (entities ?? []).filter(
+    (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
+  ).length
   // Kept while moving from page to page.
   const [view, setView] = useState<View>('text')
 
@@ -96,6 +120,13 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
+          {entities && (
+            <span className="entity-count" aria-live="polite">
+              {entityCount === 0
+                ? 'No entities'
+                : `${entityCount} ${entityCount === 1 ? 'entity' : 'entities'}`}
+            </span>
+          )}
           <div className="view-switch" role="group" aria-label="Show">
             {(['text', 'xml'] as const).map((choice) => (
               <button
@@ -114,12 +145,26 @@ export default function PageViewer({
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
         {view === 'text' ? (
-          <textarea aria-label="Page text" value={text} readOnly />
+          <HighlightedText
+            text={text}
+            entities={entities}
+            decisions={decisions}
+            busy={busy}
+            onConfirm={onConfirmEntity}
+            onReject={onRejectEntity}
+          />
         ) : (
           <XmlView xml={page.content} />
         )}
       </section>
-      <Sidebar />
+      <Sidebar
+        canRecognize={text.trim() !== ''}
+        recognizing={recognizing}
+        onRecognizeEntities={() => {
+          setView('text') // the entities are shown in the text
+          onRecognizeEntities()
+        }}
+      />
     </div>
   )
 }

@@ -1,3 +1,5 @@
+import type { Entity } from './entities'
+
 export const DEFAULT_PAGE_NUMBER = 0
 
 /** Response of GET /editions/{edition_id}/pages/{number} (PageView). */
@@ -89,4 +91,43 @@ export async function teiToText(xml: string): Promise<string> {
     body: JSON.stringify({ xml }),
   })
   return text
+}
+
+/**
+ * Calls POST /ner: the backend finds the named entities (people, places,
+ * organisations, dates, ...) in a plain text. Each has the character offsets
+ * `start` and `end` in the text that was sent.
+ */
+export async function recognizeEntities(text: string): Promise<Entity[]> {
+  const { entities } = await request<{ entities: Entity[] }>('/ner', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+  return entities
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/entities: the backend puts
+ * the entity inside a `label` element (<persName>, <placeName>, <date>, ...) in
+ * the XML of the page, saves it, and returns the updated page. The frontend
+ * only says which stretch of the text it is (the offsets it got from /ner);
+ * finding the place in the XML is the backend's job.
+ */
+export function tagEntity(
+  editionId: string,
+  number: number,
+  entity: Entity,
+  label: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/entities`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: entity.start,
+      end: entity.end,
+      text: entity.text,
+      label,
+    }),
+  })
 }

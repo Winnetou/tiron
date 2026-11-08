@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       '/editions': backendUrl,
       '/tei': backendUrl,
+      '/ner': backendUrl,
     },
   },
   test: {

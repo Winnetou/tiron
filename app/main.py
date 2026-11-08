@@ -1,17 +1,59 @@
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Path, status
 
 from app.db import Database
-from app.models import PageUpdate, PageView, TeiText, TeiXml
+from app.models import (
+    EntityTag,
+    NerRequest,
+    NerResult,
+    PageUpdate,
+    PageView,
+    TeiText,
+    TeiXml,
+)
+from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.ontology import Correction, Edition, Page, Work
 from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
-from app.tei_xml import InvalidTei, tei_xml_to_text, text_to_tei_xml
+from app.tei_xml import (
+    CannotTag,
+    InvalidTei,
+    TextChanged,
+    tag_text_range,
+    tei_xml_to_text,
+    text_to_tei_xml,
+)
 
 db = Database()
 
-app = FastAPI(title="tiron")
+logger = logging.getLogger("uvicorn.error")  # shown with uvicorn's own output
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Load the spaCy model when the backend starts, so that the first request
+    for named entities doesn't have to wait for it. The backend only starts
+    serving requests once the model is loaded, which takes several seconds.
+
+    If the model is not installed (running without Docker), the backend still
+    starts, because everything else works without it: it logs a warning and
+    /ner answers 503.
+    """
+    logger.info("Loading the spaCy model %s ...", MODEL_NAME)
+    try:
+        get_nlp()
+    except NerModelUnavailable as error:
+        logger.warning("%s: /ner will answer 503", error)
+    else:
+        logger.info("The spaCy model %s is loaded", MODEL_NAME)
+    yield
+
+
+app = FastAPI(title="tiron", lifespan=lifespan)
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
@@ -92,6 +134,53 @@ def update_page(
     return PageView.from_page(page)
 
 
+@app.post("/editions/{edition_id}/pages/{number}/entities", response_model=PageView)
+def tag_entity(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], entity: EntityTag
+) -> PageView:
+    """Mark a named entity in the TEI XML of a stored page: the characters
+    `start` to `end` of the page's text are put inside an element named `label`
+    (`persName`, `placeName`, `orgName`, `geogName`, `date` or `time`), and the
+    changed XML is saved as the page's corrected content.
+
+    The body is `{"start": 0, "end": 15, "text": "Adam Mickiewicz", "label":
+    "persName"}`: what `POST /ner` returned, so the offsets are those of the
+    text that `POST /tei/text` gives for this page. `text` is the entity as the
+    client saw it, and the backend checks that it is what is at those offsets.
+    The text of the page does not change, so the offsets of its other entities
+    stay valid. Marking an entity that is already marked changes nothing.
+
+    404 if the page is not stored. 409 if the text at the offsets is not
+    `text`, because the page has changed since the entities were recognized.
+    422 if the page has no valid TEI XML, or the entity cannot be marked in it
+    (for example it spans paragraphs, or starts inside other markup). Returns
+    the updated page as a PageView.
+    """
+    page = db.get_page_by_number(edition_id, number)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    if not page.corrected_content:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The page has no TEI XML to mark entities in",
+        )
+    try:
+        xml = tag_text_range(
+            page.corrected_content,
+            entity.start,
+            entity.end,
+            entity.label,
+            entity.text,
+        )
+    except TextChanged as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotTag) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if xml != page.corrected_content:
+        page = db.update_page(edition_id, number, corrected_content=xml) or page
+    return PageView.from_page(page)
+
+
 @app.post("/tei/text", response_model=TeiText)
 def tei_to_text(tei: TeiXml) -> TeiText:
     """Validate a TEI XML document and return just the text extracted from it.
@@ -111,6 +200,28 @@ def tei_to_text(tei: TeiXml) -> TeiText:
         return TeiText(text=tei_xml_to_text(tei.xml))
     except InvalidTei as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@app.post("/ner", response_model=NerResult)
+def recognize_entities(request: NerRequest) -> NerResult:
+    """Find the named entities (people, places, organisations, dates, ...) in
+    a text, using spaCy and its large Polish model, `pl_core_news_lg`.
+
+    The body is `{"text": "..."}`: the plain text of a page, not XML (get it
+    from TEI with `POST /tei/text`). The response lists the entities in the
+    order they appear, each with its `text`, its `label` and its `start` and
+    `end` character offsets in the submitted text, so `text[start:end]` is the
+    entity's text. A text without entities, or an empty one, gives an empty
+    list. Nothing is stored.
+
+    The model is loaded when the backend starts (see `lifespan`), so a request
+    doesn't wait for it. If it is not installed the response is 503. The text
+    may have up to 100,000 characters, otherwise the response is 422.
+    """
+    try:
+        return NerResult(entities=find_entities(request.text))
+    except NerModelUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
 @app.post(
