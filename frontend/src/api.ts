@@ -7,7 +7,11 @@ export interface Page {
   number: number
   scan_uri: string | null
   ready: boolean
-  /** The corrected text if there is one, else the raw OCR text. */
+  /**
+   * The corrected content if there is one, else the raw OCR text. For a page
+   * fetched from Polona this is TEI XML: don't show it, turn it into text with
+   * teiToText.
+   */
   content: string
 }
 
@@ -28,7 +32,7 @@ export function pageNumberFromUrl(search: string): number {
     : DEFAULT_PAGE_NUMBER
 }
 
-async function request(url: string, init?: RequestInit): Promise<Page> {
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await (init ? fetch(url, init) : fetch(url))
   if (!response.ok) {
     let detail = response.statusText
@@ -51,7 +55,7 @@ export function getPage(
   editionId: string,
   number: number = DEFAULT_PAGE_NUMBER,
 ): Promise<Page> {
-  return request(pageUrl(editionId, number))
+  return request<Page>(pageUrl(editionId, number))
 }
 
 /** The only things of a page that can be edited. */
@@ -66,9 +70,23 @@ export function updatePage(
   number: number,
   changes: PageChanges,
 ): Promise<Page> {
-  return request(pageUrl(editionId, number), {
+  return request<Page>(pageUrl(editionId, number), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(changes),
   })
+}
+
+/**
+ * Calls POST /tei/text: the backend validates the TEI XML and returns just its
+ * text. The backend is the only judge of whether the XML is correct, so a bad
+ * document rejects with an ApiError whose message is the backend's reason.
+ */
+export async function teiToText(xml: string): Promise<string> {
+  const { text } = await request<{ text: string }>('/tei/text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ xml }),
+  })
+  return text
 }

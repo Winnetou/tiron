@@ -1,36 +1,115 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Page } from './api'
 import App from './App'
+import './index.css'
 
 const UUID = '4a2cfdf3-006a-4613-9aee-42b300be604b'
+const SCAN = 'https://polona.pl/iiif/3/x/full/max/0/default.jpg'
 
-const PAGE = {
+/** The page content is TEI XML, as the backend returns it. */
+const xmlOf = (text: string) =>
+  `<?xml version="1.0"?><TEI><teiHeader>HEADER</teiHeader><text><p>${text}</p></text></TEI>`
+/** What the backend's POST /tei/text answers for such XML. */
+const textOf = (xml: string) => xml.match(/<p>(.*)<\/p>/)![1]
+
+const PAGE: Page = {
   id: 'a8ae3c6d-c4cf-4d11-82d0-112582bb355f',
   edition_id: UUID,
   number: 0,
-  content: 'Ala ma kota\nkota ma Ala',
-  scan_uri: 'https://polona.pl/iiif/3/x/full/max/0/default.jpg',
+  scan_uri: SCAN,
   ready: false,
+  content: xmlOf('Ala ma kota'),
 }
 
-function mockFetch(response: Partial<Response> & { json?: () => Promise<unknown> }) {
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => PAGE,
-    ...response,
+interface Call {
+  method: string
+  url: string
+  body?: unknown
+}
+
+interface Options {
+  /** Pages by number; defaults to a page 0..3 whose text is "text of page N". */
+  page?: (number: number) => Partial<Page> | Error
+  /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
+  tei?: (xml: string) => { text: string } | Error
+  /** Answer of PATCH; defaults to applying the changes. */
+  patch?: Error
+}
+
+const reply = (ok: boolean, status: number, body: unknown) => ({
+  ok,
+  status,
+  statusText: ok ? 'OK' : 'Error',
+  json: async () => body,
+})
+
+const failure = (status: number, error: Error) =>
+  reply(false, status, { detail: error.message })
+
+let calls: Call[]
+
+/** A fake backend behind fetch: pages, PATCH and POST /tei/text. */
+function fakeBackend(options: Options = {}) {
+  calls = []
+  const pages = new Map<number, Page>()
+  const pageFor = (number: number): Page | Error => {
+    if (number < 0 || number > 3) return new Error('Page not found')
+    const given = options.page?.(number)
+    if (given instanceof Error) return given
+    return (
+      pages.get(number) ?? {
+        ...PAGE,
+        number,
+        content: xmlOf(`text of page ${number}`),
+        ...given,
+      }
+    )
+  }
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    calls.push({ method, url, body })
+    if (url === '/tei/text') {
+      const answer = options.tei
+        ? options.tei(body.xml)
+        : { text: textOf(body.xml) }
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    const number = Number(url.split('/').pop())
+    const page = pageFor(number)
+    if (page instanceof Error) return failure(404, page)
+    if (method === 'PATCH') {
+      if (options.patch) return failure(404, options.patch)
+      const updated = { ...page, ...body }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    return reply(true, 200, page)
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
 }
 
+async function openPage(options?: Options, search = '') {
+  window.history.pushState({}, '', `/${search}`)
+  const fetchMock = fakeBackend(options)
+  render(<App />)
+  await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
+  await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+  return fetchMock
+}
+
+const pageText = () => screen.getByRole('textbox', { name: 'Page text' })
+const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
+
 afterEach(() => {
   vi.unstubAllGlobals()
+  window.history.pushState({}, '', '/')
 })
 
-describe('App', () => {
+describe('first screen', () => {
   it('asks for a uuid and nothing else', () => {
     render(<App />)
 
@@ -48,55 +127,253 @@ describe('App', () => {
   })
 
   it('requests page 0 of the edition on submit', async () => {
-    const fetchMock = mockFetch({})
-    render(<App />)
+    const fetchMock = await openPage()
 
-    await userEvent.type(screen.getByLabelText('Edition UUID'), ` ${UUID} `)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    await screen.findByRole('textbox', { name: 'Page text' })
     expect(fetchMock).toHaveBeenCalledWith(`/editions/${UUID}/pages/0`)
   })
 
   it('uses the ?page= URL parameter as the page number', async () => {
-    window.history.pushState({}, '', '/?page=99')
-    const fetchMock = mockFetch({})
-    render(<App />)
+    await openPage({}, '?page=2')
 
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(`/editions/${UUID}/pages/99`),
-    )
-    window.history.pushState({}, '', '/')
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 2'))
+    expect(calledUrls()[0]).toBe(`GET /editions/${UUID}/pages/2`)
   })
 
-  it('shows the scan on the left and the raw text on the right', async () => {
-    mockFetch({})
+  it('shows the backend error detail when the page cannot be loaded', async () => {
+    await openPage({ page: () => new Error('Edition not found') })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Edition not found',
+    )
+    expect(calledUrls()).toEqual([`GET /editions/${UUID}/pages/0`]) // no TEI call
+  })
+
+  it('shows an error when the request fails', async () => {
+    window.history.pushState({}, '', '/')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
     render(<App />)
 
     await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
-    const image = await screen.findByRole('img')
-    expect(image).toHaveAttribute('src', PAGE.scan_uri)
-    const text = screen.getByRole('textbox', { name: 'Page text' })
-    expect(text).toHaveValue('Ala ma kota\nkota ma Ala')
-    // two halves: image first (left), text second (right)
-    const [left, right] = Array.from(
-      document.querySelectorAll('.viewer-half'),
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+  })
+})
+
+describe('text from the TEI XML', () => {
+  it('sends the page content (XML) to the backend and shows the text it returns', async () => {
+    await openPage()
+
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    expect(calledUrls()).toEqual([
+      `GET /editions/${UUID}/pages/0`,
+      'POST /tei/text',
+    ])
+    expect(calls[1].body).toEqual({ xml: xmlOf('text of page 0') })
+  })
+
+  it('never shows the XML', async () => {
+    await openPage()
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+
+    expect(document.body.textContent).not.toContain('<TEI>')
+    expect(document.body.textContent).not.toContain('HEADER')
+    expect(screen.queryByDisplayValue(/<TEI>/)).not.toBeInTheDocument()
+  })
+
+  it('shows whatever text the backend says, not its own reading of the XML', async () => {
+    await openPage({ tei: () => ({ text: 'extracted by the backend' }) })
+
+    await waitFor(() => expect(pageText()).toHaveValue('extracted by the backend'))
+  })
+
+  it('shows the backend reason, and no text, when the XML is rejected', async () => {
+    await openPage({
+      tei: () => new Error('The text is not well-formed XML (line 1, column 4)'),
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The text of this page cannot be shown: The text is not well-formed XML (line 1, column 4)',
     )
+    expect(pageText()).toHaveValue('')
+    // the rest of the page is still usable
+    expect(screen.getByRole('img')).toHaveAttribute('src', SCAN)
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
+  })
+
+  it('shows an error when the text request itself fails', async () => {
+    const fetchMock = fakeBackend()
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/tei/text') throw new Error('Network down')
+      return reply(true, 200, PAGE)
+    })
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+    expect(pageText()).toHaveValue('')
+  })
+
+  it('shows the text read-only: there is nothing to edit or save', async () => {
+    await openPage()
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+
+    expect(pageText()).toHaveAttribute('readonly')
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    await userEvent.type(pageText(), 'x')
+    expect(pageText()).toHaveValue('text of page 0')
+  })
+})
+
+describe('switch between text and XML', () => {
+  const textButton = () => screen.getByRole('button', { name: 'Text' })
+  const xmlButton = () => screen.getByRole('button', { name: 'XML' })
+  const xmlBox = () => screen.getByRole('region', { name: 'Page XML' })
+
+  async function openText() {
+    await openPage()
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+  }
+
+  it('starts on the text, with the switch showing it', async () => {
+    await openText()
+
+    expect(textButton()).toHaveAttribute('aria-pressed', 'true')
+    expect(xmlButton()).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows the TEI XML content as it is when switched to XML', async () => {
+    await openText()
+
+    await userEvent.click(xmlButton())
+
+    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
+    expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
+    expect(textButton()).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('textbox', { name: 'Page text' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Page XML' })).toBeNull()
+  })
+
+  it('switches back to the text', async () => {
+    await openText()
+    await userEvent.click(xmlButton())
+
+    await userEvent.click(textButton())
+
+    expect(pageText()).toHaveValue('text of page 0')
+    expect(screen.queryByRole('region', { name: 'Page XML' })).toBeNull()
+  })
+
+  it('makes no request: both views come from the same load', async () => {
+    await openText()
+    const before = calls.length
+
+    await userEvent.click(xmlButton())
+    await userEvent.click(textButton())
+
+    expect(calls).toHaveLength(before)
+  })
+
+  it('shows the XML read-only: it is not an input', async () => {
+    await openText()
+
+    await userEvent.click(xmlButton())
+    await userEvent.type(xmlBox(), 'x')
+
+    expect(screen.queryByRole('textbox', { name: 'Page XML' })).toBeNull()
+    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
+  })
+
+  it('puts the markup in grey, smaller type, and leaves the content alone', async () => {
+    await openText()
+
+    await userEvent.click(xmlButton())
+
+    const markup = Array.from(xmlBox().querySelectorAll('.xml-markup')).map(
+      (el) => el.textContent,
+    )
+    expect(markup).toEqual([
+      '<?xml version="1.0"?>',
+      '<TEI>',
+      '<teiHeader>',
+      '</teiHeader>',
+      '<text>',
+      '<p>',
+      '</p>',
+      '</text>',
+      '</TEI>',
+    ])
+    // the content is what is not markup
+    expect(xmlBox().textContent).toContain('HEADER')
+    expect(xmlBox().textContent).toContain('text of page 0')
+    for (const text of markup) expect(text).toMatch(/^</)
+    const spanTexts = Array.from(xmlBox().querySelectorAll('span')).map(
+      (el) => el.textContent,
+    )
+    expect(spanTexts.join('')).not.toContain('HEADER')
+    expect(spanTexts.join('')).not.toContain('text of page 0')
+
+    // markup: grey background and a smaller font than the content around it
+    const tag = xmlBox().querySelector('.xml-markup') as HTMLElement
+    const tagStyle = getComputedStyle(tag)
+    const [r, g, b] = tagStyle.backgroundColor.match(/\d+/g)!.map(Number)
+    expect(r).toBe(g)
+    expect(g).toBe(b)
+    expect(r).toBeLessThan(255) // not white
+    expect(r).toBeGreaterThan(150) // light grey, so the text stays readable
+    const contentSize = parseFloat(getComputedStyle(xmlBox()).fontSize)
+    expect(parseFloat(tagStyle.fontSize)).toBeLessThan(contentSize)
+  })
+
+  it('keeps the chosen view when moving to another page', async () => {
+    await openText()
+    await userEvent.click(xmlButton())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await waitFor(() =>
+      expect(xmlBox().textContent).toBe(xmlOf('text of page 1')),
+    )
+    expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('still shows the XML when the backend rejects it as TEI', async () => {
+    await openPage({ tei: () => new Error('The <TEI> element has no <text>') })
+    await screen.findByRole('alert')
+
+    await userEvent.click(xmlButton())
+
+    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
+    expect(screen.getByRole('alert')).toHaveTextContent('has no <text>')
+  })
+
+  it('stays on the XML when the page is marked ready', async () => {
+    await openText()
+    await userEvent.click(xmlButton())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
+
+    await screen.findByRole('button', { name: 'Ready' })
+    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
+  })
+})
+
+describe('page view', () => {
+  it('shows the scan on the left and the text on the right', async () => {
+    await openPage()
+
+    const image = await screen.findByRole('img')
+    expect(image).toHaveAttribute('src', SCAN)
+    const [left, right] = Array.from(document.querySelectorAll('.viewer-half'))
     expect(left).toContainElement(image)
-    expect(right).toContainElement(text)
+    expect(right).toContainElement(pageText())
     expect(screen.queryByLabelText('Edition UUID')).not.toBeInTheDocument()
   })
 
   it('has a right sidebar with three tool buttons', async () => {
-    mockFetch({})
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    await openPage()
     await screen.findByRole('img')
 
     const sidebar = screen.getByRole('complementary', { name: 'Tools' })
@@ -107,7 +384,6 @@ describe('App', () => {
       'Correction',
       'Named entity recognition',
     ])
-    // hover text and an icon on each button
     for (const button of buttons) {
       expect(button).toHaveAttribute(
         'data-tooltip',
@@ -115,20 +391,13 @@ describe('App', () => {
       )
       expect(button.querySelector('svg')).not.toBeNull()
     }
-    // it is the last column, to the right of the two halves
     expect(sidebar.previousElementSibling).toBe(
       document.querySelectorAll('.viewer-half')[1],
     )
-    // stubs: clicking does nothing
-    await userEvent.click(buttons[0])
-    expect(screen.getByLabelText('Page text')).toHaveValue(PAGE.content)
   })
 
   it('zooms the scan in and out within limits', async () => {
-    mockFetch({})
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    await openPage()
     const image = await screen.findByRole('img')
     const zoomIn = screen.getByRole('button', { name: 'Zoom in' })
     const zoomOut = screen.getByRole('button', { name: 'Zoom out' })
@@ -149,283 +418,93 @@ describe('App', () => {
     expect(image).toHaveStyle({ width: '450%' })
   })
 
-  describe('page navigation', () => {
-    async function openPage(number: number) {
-      window.history.pushState({}, '', `/?page=${number}`)
-      const fetchMock = vi.fn(async (url: string) => {
-        const n = Number(url.split('/').pop())
-        if (n < 0 || n > 3) {
-          return {
-            ok: false,
-            status: 404,
-            statusText: 'Not Found',
-            json: async () => ({ detail: 'Page not found' }),
-          }
-        }
-        return {
-          ok: true,
-          status: 200,
-          statusText: 'OK',
-          json: async () => ({
-            ...PAGE,
-            number: n,
-            content: `text of page ${n}`,
-            scan_uri: `https://polona.pl/scan/${n}.jpg`,
-          }),
-        }
-      })
-      vi.stubGlobal('fetch', fetchMock)
-      render(<App />)
-      await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-      await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-      await screen.findByDisplayValue(`text of page ${number}`)
-      return fetchMock
-    }
+  it('shows only the text when a page has no scan', async () => {
+    await openPage({ page: () => ({ scan_uri: null }) })
 
-    afterEach(() => window.history.pushState({}, '', '/'))
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+})
 
-    it('disables previous page on page 0', async () => {
-      await openPage(0)
+describe('page navigation', () => {
+  const open = (number: number) => openPage({}, `?page=${number}`)
 
-      expect(
-        screen.getByRole('button', { name: 'Previous page' }),
-      ).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
-    })
+  it('disables previous page on page 0', async () => {
+    await open(0)
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
 
-    it('goes to the next page and updates the URL', async () => {
-      const fetchMock = await openPage(0)
-
-      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
-
-      expect(await screen.findByDisplayValue('text of page 1')).toBeInTheDocument()
-      expect(fetchMock).toHaveBeenLastCalledWith(`/editions/${UUID}/pages/1`)
-      expect(screen.getByRole('img')).toHaveAttribute(
-        'src',
-        'https://polona.pl/scan/1.jpg',
-      )
-      expect(window.location.search).toBe('?page=1')
-      expect(
-        screen.getByRole('button', { name: 'Previous page' }),
-      ).toBeEnabled()
-    })
-
-    it('goes to the previous page', async () => {
-      const fetchMock = await openPage(2)
-
-      await userEvent.click(
-        screen.getByRole('button', { name: 'Previous page' }),
-      )
-
-      expect(await screen.findByDisplayValue('text of page 1')).toBeInTheDocument()
-      expect(fetchMock).toHaveBeenLastCalledWith(`/editions/${UUID}/pages/1`)
-      expect(window.location.search).toBe('?page=1')
-    })
-
-    it('stays on the page and shows an error when there is no next page', async () => {
-      await openPage(3)
-
-      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
-
-      expect(await screen.findByRole('alert')).toHaveTextContent(
-        'Page not found',
-      )
-      expect(screen.getByDisplayValue('text of page 3')).toBeInTheDocument()
-      expect(window.location.search).toBe('?page=3')
-    })
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled()
   })
 
-  it('shows the backend error detail', async () => {
-    mockFetch({
-      ok: false,
-      status: 404,
-      statusText: 'Not Found',
-      json: async () => ({ detail: 'Edition not found' }),
-    })
-    render(<App />)
+  it('goes to the next page: fetches it, gets its text, updates the URL', async () => {
+    await open(0)
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
+    calls.length = 0
 
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Edition not found',
-    )
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 1'))
+    expect(calledUrls()).toEqual([
+      `GET /editions/${UUID}/pages/1`,
+      'POST /tei/text',
+    ])
+    expect(calls[1].body).toEqual({ xml: xmlOf('text of page 1') })
+    expect(window.location.search).toBe('?page=1')
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled()
   })
 
-  it('shows an error when the request fails', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
-    render(<App />)
+  it('goes to the previous page', async () => {
+    await open(2)
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 2'))
 
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 1'))
+    expect(window.location.search).toBe('?page=1')
   })
 
-  describe('editing', () => {
-    type Handler = (url: string, init?: RequestInit) => unknown
-    let calls: { url: string; init?: RequestInit }[]
+  it('stays on the page and shows an error when there is no next page', async () => {
+    await open(3)
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 3'))
 
-    async function openEditable(page: Partial<typeof PAGE> = {}, patch?: Handler) {
-      calls = []
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string, init?: RequestInit) => {
-          calls.push({ url, init })
-          if (init?.method === 'PATCH') {
-            const result = patch
-              ? patch(url, init)
-              : serverAfterPatch(page, JSON.parse(String(init.body)))
-            if (result instanceof Error) {
-              return {
-                ok: false,
-                status: 500,
-                statusText: 'Server Error',
-                json: async () => ({ detail: result.message }),
-              }
-            }
-            return { ok: true, status: 200, statusText: 'OK', json: async () => result }
-          }
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            json: async () => ({ ...PAGE, ...page }),
-          }
-        }),
-      )
-      render(<App />)
-      await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-      await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-      return screen.findByRole('textbox', { name: 'Page text' })
-    }
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
-    /** What the backend would answer: content is the correction, or the raw text. */
-    function serverAfterPatch(
-      page: Partial<typeof PAGE>,
-      changes: { corrected_content?: string | null; ready?: boolean },
-    ) {
-      const result = { ...PAGE, ...page }
-      if ('ready' in changes) result.ready = changes.ready as boolean
-      if ('corrected_content' in changes) {
-        result.content = changes.corrected_content || 'raw text'
-      }
-      return result
-    }
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(pageText()).toHaveValue('text of page 3')
+    expect(window.location.search).toBe('?page=3')
+  })
+})
 
-    const patchCalls = () => calls.filter((c) => c.init?.method === 'PATCH')
+describe('mark as ready', () => {
+  it('sends only the flag, then shows the page as Ready', async () => {
+    await openPage()
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
 
-    it('has Save and Mark as ready buttons; Save waits for an edit', async () => {
-      await openEditable()
+    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
 
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-      expect(
-        screen.getByRole('button', { name: 'Mark as ready' }),
-      ).toBeEnabled()
-    })
+    const ready = await screen.findByRole('button', { name: 'Ready' })
+    expect(ready).toBeDisabled()
+    const patches = calls.filter((c) => c.method === 'PATCH')
+    expect(patches).toHaveLength(1)
+    expect(patches[0].url).toBe(`/editions/${UUID}/pages/0`)
+    expect(patches[0].body).toEqual({ ready: true })
+    expect(pageText()).toHaveValue('text of page 0') // the text is still shown
+  })
 
-    it('saves the edited text as the corrected content', async () => {
-      const textbox = await openEditable()
+  it('shows an already ready page as Ready', async () => {
+    await openPage({ page: () => ({ ready: true }) })
 
-      await userEvent.clear(textbox)
-      await userEvent.type(textbox, 'Ala ma kota.')
-      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('button', { name: 'Ready' })).toBeDisabled()
+  })
 
-      await waitFor(() => expect(patchCalls()).toHaveLength(1))
-      const [{ url, init }] = patchCalls()
-      expect(url).toBe(`/editions/${UUID}/pages/0`)
-      expect(JSON.parse(String(init?.body))).toEqual({
-        corrected_content: 'Ala ma kota.',
-      })
-      await waitFor(() =>
-        expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument(),
-      )
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-      expect(textbox).toHaveValue('Ala ma kota.')
-    })
+  it('shows an error when marking as ready fails', async () => {
+    await openPage({ patch: new Error('Page not found') })
+    await waitFor(() => expect(pageText()).toHaveValue('text of page 0'))
 
-    it('marks the page as ready, sending only the flag', async () => {
-      await openEditable()
+    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
 
-      await userEvent.click(
-        screen.getByRole('button', { name: 'Mark as ready' }),
-      )
-
-      const readyButton = await screen.findByRole('button', { name: 'Ready' })
-      expect(readyButton).toBeDisabled()
-      expect(patchCalls()).toHaveLength(1)
-      expect(JSON.parse(String(patchCalls()[0].init?.body))).toEqual({
-        ready: true,
-      })
-    })
-
-    it('shows an already ready page as Ready', async () => {
-      await openEditable({ ready: true })
-
-      expect(screen.getByRole('button', { name: 'Ready' })).toBeDisabled()
-    })
-
-    it('keeps the text on the page after marking it ready', async () => {
-      const textbox = await openEditable()
-      await userEvent.type(textbox, '!')
-
-      await userEvent.click(
-        screen.getByRole('button', { name: 'Mark as ready' }),
-      )
-      await screen.findByRole('button', { name: 'Ready' })
-
-      // the unsaved edit was not sent, and is not thrown away either
-      expect(textbox).toHaveValue(`${PAGE.content}!`)
-      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
-    })
-
-    it('blocks page navigation while there are unsaved changes', async () => {
-      const textbox = await openEditable()
-      await userEvent.type(textbox, '!')
-
-      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
-      expect(
-        screen.getByRole('button', { name: 'Previous page' }),
-      ).toBeDisabled()
-    })
-
-    it('shows an error and keeps the edit when saving fails', async () => {
-      const textbox = await openEditable({}, () => new Error('Page not found'))
-      await userEvent.type(textbox, '!')
-
-      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-      expect(await screen.findByRole('alert')).toHaveTextContent(
-        'Page not found',
-      )
-      expect(textbox).toHaveValue(`${PAGE.content}!`)
-      expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
-    })
-
-    it('shows an error when marking as ready fails', async () => {
-      await openEditable({}, () => new Error('Edition not found'))
-
-      await userEvent.click(
-        screen.getByRole('button', { name: 'Mark as ready' }),
-      )
-
-      expect(await screen.findByRole('alert')).toHaveTextContent(
-        'Edition not found',
-      )
-      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
-    })
-
-    it('shows the server version after saving (e.g. an emptied text falls back to raw)', async () => {
-      const textbox = await openEditable({}, () => ({
-        ...PAGE,
-        content: 'raw text again',
-      }))
-      await userEvent.clear(textbox)
-
-      await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-      await waitFor(() => expect(textbox).toHaveValue('raw text again'))
-    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
   })
 })

@@ -2,56 +2,16 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Path, status
-from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.db import Database
+from app.models import PageUpdate, PageView, TeiText, TeiXml
 from app.ontology import Correction, Edition, Page, Work
 from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
+from app.tei_xml import InvalidTei, tei_xml_to_text, text_to_tei_xml
 
 db = Database()
 
 app = FastAPI(title="tiron")
-
-
-class PageView(BaseModel):
-    """What the client shows of a page: its scan and a single text, `content`."""
-
-    id: UUID
-    edition_id: UUID
-    number: int
-    scan_uri: str | None
-    ready: bool
-    content: str
-
-    @classmethod
-    def from_page(cls, page: Page) -> PageView:
-        """`content` is the corrected content if there is any, else the raw one."""
-        return cls(
-            id=page.id,
-            edition_id=page.edition_id,
-            number=page.number,
-            scan_uri=page.scan_uri,
-            ready=page.ready,
-            content=page.corrected_content or page.raw_content,
-        )
-
-
-class PageUpdate(BaseModel):
-    """The only things of a page that can be edited. Any other field in the
-    request is rejected, so nothing else can be changed through the API."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    corrected_content: str | None = None
-    ready: bool | None = None
-
-    @model_validator(mode="after")
-    def check_fields(self) -> PageUpdate:
-        if not self.model_fields_set:
-            raise ValueError("Give corrected_content and/or ready")
-        if "ready" in self.model_fields_set and self.ready is None:
-            raise ValueError("ready cannot be null")
-        return self
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
@@ -65,7 +25,9 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
     3. Otherwise the page is fetched from Polona. If the edition is not stored
        yet, its metadata is fetched too and a Work and an Edition are created
        (the page needs its edition). The page is then saved and returned, so
-       the next request is served from the database.
+       the next request is served from the database. It is saved with the
+       Polona text as `raw_content`, and that text converted to TEI XML as
+       `corrected_content`, which the user then edits.
 
     Polona failures are turned into HTTP errors: 404 if Polona has no such
     page, 502 if it could not be reached or answered unexpectedly. Nothing is
@@ -97,11 +59,13 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
         if exc.not_found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found") from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    raw_content = polona_page["raw_content"]
     page = db.save_fetched_page(
         Page(
             edition_id=edition_id,
             number=number,
-            raw_content=polona_page["raw_content"],
+            raw_content=raw_content,
+            corrected_content=str(text_to_tei_xml(raw_content)),
             scan_uri=polona_page["scan_uri"],
         )
     )
@@ -126,6 +90,27 @@ def update_page(
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
     return PageView.from_page(page)
+
+
+@app.post("/tei/text", response_model=TeiText)
+def tei_to_text(tei: TeiXml) -> TeiText:
+    """Validate a TEI XML document and return just the text extracted from it.
+
+    The body is `{"xml": "<TEI ...>...</TEI>"}`. The XML must be well-formed,
+    have no DOCTYPE/ENTITY declarations, and be a TEI document: a `TEI` root in
+    the TEI namespace with a `teiHeader` and a `text`. Otherwise the response
+    is 422 and `detail` says what is wrong. This checks the TEI skeleton; it
+    is not a validation against the full TEI schema.
+
+    The response is `{"text": "..."}`: the content of the `text` element
+    without any markup. Blocks (`p`, `head`, ...) are separated by a blank
+    line and line breaks (`lb`, ...) become newlines, so a page converted with
+    `text_to_tei_xml` comes back as the same text. Nothing is stored.
+    """
+    try:
+        return TeiText(text=tei_xml_to_text(tei.xml))
+    except InvalidTei as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @app.post(

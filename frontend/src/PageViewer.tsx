@@ -1,53 +1,48 @@
 import { useState } from 'react'
 import type { Page } from './api'
 import Sidebar from './Sidebar'
+import XmlView from './XmlView'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
+type View = 'text' | 'xml'
+
 interface Props {
   page: Page
+  /** The page's text, as extracted from its TEI XML by the backend. */
+  text: string
+  /** Why `text` could not be extracted (the backend's reason), if so. */
+  textError: string | null
   busy: boolean
   error: string | null
   onPrevious: () => void
   onNext: () => void
-  /** Store `content` as the page's corrected content. */
-  onSave: (content: string) => void
   /** Mark the page as ready. */
   onMarkReady: () => void
 }
 
 /**
  * Left half: the scan, with zoom buttons.
- * Right half: previous/next page, Save and "Mark as ready" buttons, and the
- * page text, which can be edited.
+ * Right half: previous/next page and "Mark as ready" buttons, a switch between
+ * the two views of the page, and the page itself, read-only: its text (the
+ * default, as extracted by the backend) or the TEI XML it comes from, with the
+ * markup on a grey background.
  */
 export default function PageViewer({
   page,
+  text,
+  textError,
   busy,
   error,
   onPrevious,
   onNext,
-  onSave,
   onMarkReady,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
-
-  // The text being edited. It starts over from the page's content whenever a
-  // different page (or a saved version of it) arrives. Marking the page as
-  // ready changes only the flag, so an unsaved edit survives it.
-  const [draft, setDraft] = useState(page.content)
-  const [shownPage, setShownPage] = useState(page)
-  if (page !== shownPage) {
-    setShownPage(page)
-    const onlyReadyChanged =
-      page.id === shownPage.id &&
-      page.content === shownPage.content &&
-      page.ready !== shownPage.ready
-    if (!onlyReadyChanged) setDraft(page.content)
-  }
-  const dirty = draft !== page.content
+  // Kept while moving from page to page.
+  const [view, setView] = useState<View>('text')
 
   return (
     <div className="viewer">
@@ -84,23 +79,16 @@ export default function PageViewer({
           <button
             type="button"
             onClick={onPrevious}
-            disabled={page.number === 0 || busy || dirty}
+            disabled={page.number === 0 || busy}
           >
             Previous page
           </button>
           <span>Page {page.number}</span>
-          <button type="button" onClick={onNext} disabled={busy || dirty}>
+          <button type="button" onClick={onNext} disabled={busy}>
             Next page
           </button>
         </nav>
         <div className="page-actions">
-          <button
-            type="button"
-            onClick={() => onSave(draft)}
-            disabled={!dirty || busy}
-          >
-            Save
-          </button>
           <button
             type="button"
             onClick={onMarkReady}
@@ -108,15 +96,28 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
-          {dirty && <span className="unsaved">Unsaved changes</span>}
+          <div className="view-switch" role="group" aria-label="Show">
+            {(['text', 'xml'] as const).map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                aria-pressed={view === choice}
+                onClick={() => setView(choice)}
+              >
+                {choice === 'text' ? 'Text' : 'XML'}
+              </button>
+            ))}
+          </div>
         </div>
         {error && <p role="alert">{error}</p>}
-        <textarea
-          aria-label="Page text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          spellCheck={false}
-        />
+        {textError && (
+          <p role="alert">The text of this page cannot be shown: {textError}</p>
+        )}
+        {view === 'text' ? (
+          <textarea aria-label="Page text" value={text} readOnly />
+        ) : (
+          <XmlView xml={page.content} />
+        )}
       </section>
       <Sidebar />
     </div>
