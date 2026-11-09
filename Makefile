@@ -3,7 +3,7 @@ PORT ?= 8000
 ENV_FILE ?= .env
 BACKEND_URL ?= http://localhost:$(PORT)
 
-.PHONY: build run frontend
+.PHONY: build run frontend up down
 
 build:
 	docker build -t $(IMAGE) .
@@ -17,3 +17,11 @@ run: build
 # the backend started by `make run`.
 frontend:
 	cd frontend && npm install && BACKEND_URL=$(BACKEND_URL) npm run dev
+
+# The backend and a PostgreSQL database with a volume, together (see
+# docker-compose.yml). `down` stops them and keeps the data in the volume.
+up:
+	docker compose up --build
+
+down:
+	docker compose down

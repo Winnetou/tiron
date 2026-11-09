@@ -2,17 +2,20 @@ import logging
 from unittest import mock
 from uuid import uuid4
 
+import psycopg.errors
 import pytest
 import spacy
 from fastapi.testclient import TestClient
 
 import app.main as app_main
 import app.ner as ner
+import app.spelling as spelling
 from app.main import app, db
-from app.models import Entity, PageView
+from app.models import Entity, PageView, Word
 from app.ner import NerModelUnavailable
-from app.ontology import Edition, Page
+from app.ontology import Edition, LegalSpelling, Page
 from app.polona_connector import PolonaError
+from app.spelling import SpellcheckUnavailable
 from app.tei_xml import tei_xml_to_text, text_to_tei_xml
 
 client = TestClient(app)
@@ -119,23 +122,16 @@ def test_old_page_route_removed():
     assert client.get(f"/pages/{uuid4()}").status_code == 404
 
 
-def test_create_correction_stub():
+def test_the_old_corrections_stub_is_gone():
     body = {"page_id": str(uuid4()), "before": "Aia", "after": "Ala"}
 
-    assert client.post("/corrections", json=body).status_code == 501
-
-
-@pytest.mark.parametrize("field", ["before", "after"])
-def test_create_correction_rejects_empty(field):
-    body = {"page_id": str(uuid4()), "before": "Aia", "after": "Ala", field: ""}
-
-    assert client.post("/corrections", json=body).status_code == 422
+    assert client.post("/corrections", json=body).status_code == 404
 
 
 def test_openapi_uses_ontology_models():
     schemas = client.get("/openapi.json").json()["components"]["schemas"]
 
-    assert {"PageView", "Correction"} <= schemas.keys()
+    assert {"PageView", "WordCorrection"} <= schemas.keys()
 
 
 def test_get_page_creates_work_and_edition_when_missing(in_collection, polona):
@@ -584,6 +580,7 @@ class TestModelLoadedAtStartup:
     @pytest.fixture(autouse=True)
     def fresh_model_state(self, monkeypatch):
         monkeypatch.setattr(ner, "_nlp", None)
+        monkeypatch.setattr("app.main.get_checker", mock.Mock())  # tested below
 
     def test_the_model_is_loaded_when_the_backend_starts(self, monkeypatch):
         loaded = mock.Mock()
@@ -901,3 +898,611 @@ class TestTagEntity:
         path = "/editions/{edition_id}/pages/{number}/entities"
         assert "post" in schema["paths"][path]
         assert "EntityTag" in schema["components"]["schemas"]
+
+
+class TestDictionaryLoadedAtStartup:
+    @pytest.fixture(autouse=True)
+    def no_model(self, monkeypatch):
+        monkeypatch.setattr("app.main.get_nlp", mock.Mock())  # not what is tested
+
+    def test_the_dictionary_is_loaded_when_the_backend_starts(self, monkeypatch):
+        loaded = mock.Mock()
+        monkeypatch.setattr("app.main.get_checker", loaded)
+
+        with TestClient(app):
+            loaded.assert_called_once_with()
+
+    def test_it_is_not_loaded_without_starting_the_backend(self, monkeypatch):
+        loaded = mock.Mock()
+        monkeypatch.setattr("app.main.get_checker", loaded)
+
+        client.get("/openapi.json")
+
+        loaded.assert_not_called()
+
+    def test_requests_use_the_dictionary_loaded_at_startup(self, monkeypatch):
+        monkeypatch.setattr(spelling, "_checker", None)
+        loads = []
+
+        class Checker:
+            def lookup(self, word):
+                return True
+
+        def load(language):
+            loads.append(language)
+            return Checker()
+
+        monkeypatch.setattr(spelling.phunspell, "Phunspell", load)
+
+        with TestClient(app) as started:
+            assert loads == ["pl_PL"]  # loaded before any request
+            for _ in range(3):
+                assert (
+                    started.post("/spellcheck", json={"text": "Ala"}).status_code == 200
+                )
+
+        assert loads == ["pl_PL"]  # and never again
+
+    def test_a_missing_dictionary_does_not_stop_the_backend(self, monkeypatch, caplog):
+        monkeypatch.setattr(spelling, "_checker", None)
+
+        def missing(language):
+            raise spelling.phunspell.phunspell.PhunspellError("dictionary not found")
+
+        monkeypatch.setattr(spelling.phunspell, "Phunspell", missing)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="uvicorn.error"),
+            TestClient(app) as started,
+        ):
+            response = started.post("/spellcheck", json={"text": "Ala"})
+            other = started.post("/tei/text", json={"xml": "x"})
+
+        assert "dictionary is not available" in caplog.text
+        assert "/spellcheck will answer 503" in caplog.text
+        assert response.status_code == 503
+        assert other.status_code == 422  # the rest of the API works
+
+
+class TestSpellcheck:
+    @pytest.fixture
+    def check(self, monkeypatch):
+        words = [
+            Word(text="Ala", start=0, end=3, correct=True),
+            Word(text="jey", start=7, end=10, correct=False),
+        ]
+        mock_check = mock.Mock(return_value=words)
+        monkeypatch.setattr("app.main.check_words", mock_check)
+        return mock_check
+
+    def test_returns_every_word_with_its_verdict(self, check):
+        response = client.post("/spellcheck", json={"text": "Ala ma jey"})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "words": [
+                {"text": "Ala", "start": 0, "end": 3, "correct": True},
+                {"text": "jey", "start": 7, "end": 10, "correct": False},
+            ]
+        }
+        check.assert_called_once_with("Ala ma jey", ())  # no edition: no legal ones
+
+    def test_no_words_is_an_empty_list(self, check):
+        check.return_value = []
+
+        assert client.post("/spellcheck", json={"text": "..."}).json() == {"words": []}
+
+    def test_dictionary_not_available_is_a_503(self, check):
+        check.side_effect = SpellcheckUnavailable(
+            "The pl_PL dictionary is not available"
+        )
+
+        response = client.post("/spellcheck", json={"text": "Ala"})
+
+        assert response.status_code == 503
+        assert "not available" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "body", [{}, {"text": None}, {"text": 5}, {"xml": "x"}, []]
+    )
+    def test_bad_request_bodies(self, check, body):
+        assert client.post("/spellcheck", json=body).status_code == 422
+        check.assert_not_called()
+
+    def test_text_length_limit(self, check):
+        assert (
+            client.post("/spellcheck", json={"text": "x" * 100_000}).status_code == 200
+        )
+        assert (
+            client.post("/spellcheck", json={"text": "x" * 100_001}).status_code == 422
+        )
+
+    def test_touches_neither_the_database_nor_polona(self, check, polona, monkeypatch):
+        for name in ("get_page_by_number", "save_fetched_page", "update_page"):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        client.post("/spellcheck", json={"text": "Ala"})
+
+        db.get_page_by_number.assert_not_called()
+        db.update_page.assert_not_called()
+        polona.assert_not_called()
+
+    def test_with_the_real_dictionary(self):
+        text = "Ala ma kota, a jey nie ma."
+
+        response = client.post("/spellcheck", json={"text": text})
+
+        assert response.status_code == 200
+        words = response.json()["words"]
+        assert [w["text"] for w in words] == [
+            "Ala",
+            "ma",
+            "kota",
+            "a",
+            "jey",
+            "nie",
+            "ma",
+        ]
+        assert [w["text"] for w in words if not w["correct"]] == ["jey"]
+        assert all(text[w["start"] : w["end"]] == w["text"] for w in words)
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "post" in schema["paths"]["/spellcheck"]
+        assert {"SpellcheckRequest", "SpellcheckResult", "Word"} <= schema[
+            "components"
+        ]["schemas"].keys()
+
+
+class TestCorrectWord:
+    TEXT = "Wielu Biskupów krak., że dawnieyszych kościół.\nTo jey tey."
+    XML = str(text_to_tei_xml(TEXT))
+
+    def body(self, word, after, occurrence=0):
+        start = -1
+        for _ in range(occurrence + 1):
+            start = self.TEXT.index(word, start + 1)
+        return {
+            "start": start,
+            "end": start + len(word),
+            "before": word,
+            "after": after,
+        }
+
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/corrections"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        """A stored page, and an apply_correction that works like the real one."""
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_content=self.TEXT,
+                corrected_content=self.XML,
+            ),
+            "corrections": [],
+        }
+
+        def apply(edition_id, number, replace, before, after):
+            page = state["page"]
+            if (edition_id, number) != (page.edition_id, page.number):
+                return None
+            new_xml = replace(page.corrected_content or "")  # may raise: nothing saved
+            state["page"] = page.model_copy(update={"corrected_content": new_xml})
+            state["corrections"].append((before, after))
+            return state["page"]
+
+        monkeypatch.setattr(db, "apply_correction", mock.Mock(side_effect=apply))
+        return state
+
+    def post(self, stored, body):
+        return client.post(self.url(stored["page"].edition_id), json=body)
+
+    def test_replaces_the_word_in_the_xml_and_records_the_correction(self, stored):
+        response = self.post(stored, self.body("dawnieyszych", "dawniejszych"))
+
+        assert response.status_code == 200
+        assert "dawniejszych" in response.json()["content"]
+        assert "dawnieyszych" not in response.json()["content"]
+        assert stored["corrections"] == [("dawnieyszych", "dawniejszych")]
+        edition_id, number, replace, before, after = db.apply_correction.call_args.args
+        assert (edition_id, number) == (stored["page"].edition_id, 4)
+        assert (before, after) == ("dawnieyszych", "dawniejszych")
+        assert callable(replace)
+
+    def test_the_text_afterwards_is_the_old_text_with_the_word_replaced(self, stored):
+        self.post(stored, self.body("dawnieyszych", "dawniejszych"))
+
+        xml = stored["page"].corrected_content
+        assert tei_xml_to_text(xml) == self.TEXT.replace("dawnieyszych", "dawniejszych")
+
+    def test_the_response_is_the_updated_page_view(self, stored):
+        body = self.post(stored, self.body("jey", "jej")).json()
+
+        assert set(body) == {
+            "id",
+            "edition_id",
+            "number",
+            "scan_uri",
+            "ready",
+            "content",
+        }
+        assert body["id"] == str(stored["page"].id)
+
+    def test_only_the_word_at_the_offsets_is_replaced(self, stored):
+        self.post(stored, self.body("jey", "jej"))
+        xml = stored["page"].corrected_content
+
+        assert "To jej tey" in tei_xml_to_text(xml)
+
+    def test_keeps_the_entities_that_are_marked_in_the_xml(self, stored):
+        stored["page"] = stored["page"].model_copy(
+            update={
+                "corrected_content": self.XML.replace(
+                    "kościół", "<placeName>kościół</placeName>"
+                )
+            }
+        )
+
+        self.post(stored, self.body("kościół", "kościoł"))
+
+        assert "<placeName>kościoł</placeName>" in stored["page"].corrected_content
+
+    def test_page_not_stored(self, stored):
+        response = client.post(self.url(), json=self.body("jey", "jej"))
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Page not found"
+        assert stored["corrections"] == []
+
+    def test_the_text_at_the_offsets_is_not_the_old_word(self, stored):
+        body = self.body("jey", "jej") | {"before": "xyz"}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 409
+        assert "page has changed" in response.json()["detail"]
+        assert stored["corrections"] == []
+        assert stored["page"].corrected_content == self.XML
+
+    def test_offsets_outside_the_text(self, stored):
+        body = {"start": 900, "end": 903, "before": "jey", "after": "jej"}
+
+        assert self.post(stored, body).status_code == 409
+
+    @pytest.mark.parametrize(
+        ("corrected_content", "message"),
+        [
+            (None, "no TEI XML"),
+            ("", "no TEI XML"),
+            ("To jey tey.", "not well-formed"),
+            ("<a/>", "root element must be <TEI>"),
+        ],
+    )
+    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+        stored["page"] = stored["page"].model_copy(
+            update={"corrected_content": corrected_content}
+        )
+
+        response = self.post(stored, self.body("jey", "jej"))
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        assert stored["corrections"] == []
+
+    @pytest.mark.parametrize(
+        ("after", "message"),
+        [
+            (" jej", "start or end with a space"),
+            ("jej ", "start or end with a space"),
+            ("je\nj", "one line"),
+            ("jey", "same as the old"),
+        ],
+    )
+    def test_a_new_text_that_is_not_acceptable(self, stored, after, message):
+        response = self.post(stored, self.body("jey", after))
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        assert stored["corrections"] == []
+        assert stored["page"].corrected_content == self.XML
+
+    def test_the_old_text_cannot_have_spaces(self, stored):
+        response = self.post(stored, self.body("To jey", "Tojey"))
+
+        assert response.status_code == 422
+        assert "spaces or line breaks" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"after": ""},
+            {"before": ""},
+            {"after": None},
+            {"end": 0},
+            {"start": 5, "end": 5},
+            {"start": -1},
+            {"start": "a"},
+            {"raw_content": "x"},  # not a field of this request
+            {"corrected_content": "<TEI/>"},
+        ],
+    )
+    def test_bad_requests_are_rejected_before_anything_happens(self, stored, change):
+        response = self.post(stored, self.body("jey", "jej") | change)
+
+        assert response.status_code == 422
+        db.apply_correction.assert_not_called()
+
+    @pytest.mark.parametrize("missing", ["start", "end", "before", "after"])
+    def test_every_field_is_needed(self, stored, missing):
+        body = self.body("jey", "jej")
+        del body[missing]
+
+        assert client.post(self.url(), json=body).status_code == 422
+
+    def test_invalid_path_arguments(self, stored):
+        body = self.body("jey", "jej")
+
+        assert (
+            client.post("/editions/nope/pages/4/corrections", json=body).status_code
+            == 422
+        )
+        assert client.post(self.url(number=-1), json=body).status_code == 422
+
+    def test_does_not_check_the_collection_or_call_polona(
+        self, polona, stored, monkeypatch
+    ):
+        check = mock.Mock(return_value=False)
+        monkeypatch.setattr(db, "check_edition_in_collection", check)
+
+        response = self.post(stored, self.body("jey", "jej"))
+
+        assert response.status_code == 200
+        check.assert_not_called()
+        polona.assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        path = "/editions/{edition_id}/pages/{number}/corrections"
+        assert "post" in schema["paths"][path]
+        assert "WordCorrection" in schema["components"]["schemas"]
+
+
+class TestAddLegalSpelling:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/legal-spellings"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        """A stored edition, and an add_legal_spelling that remembers what it got."""
+        edition = Edition(work_id=uuid4(), place="Warszawa", year=1890)
+        state = {"edition": edition, "added": set()}
+
+        def add(legal):
+            key = (legal.edition_id, legal.spelling)
+            new = key not in state["added"]
+            state["added"].add(key)
+            return new
+
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(side_effect=lambda i: edition if i == edition.id else None),
+        )
+        monkeypatch.setattr(db, "add_legal_spelling", mock.Mock(side_effect=add))
+        return state
+
+    def post(self, stored, body):
+        return client.post(self.url(stored["edition"].id), json=body)
+
+    def test_adds_the_spelling_and_says_so(self, stored):
+        edition_id = stored["edition"].id
+
+        response = self.post(stored, {"spelling": "jey"})
+
+        assert response.status_code == 201
+        assert response.json() == {"edition_id": str(edition_id), "spelling": "jey"}
+        db.add_legal_spelling.assert_called_once_with(
+            LegalSpelling(edition_id=edition_id, spelling="jey")
+        )
+
+    def test_the_same_spelling_again_is_ok_and_says_it_was_there(self, stored):
+        self.post(stored, {"spelling": "jey"})
+
+        response = self.post(stored, {"spelling": "jey"})
+
+        assert response.status_code == 200
+        assert response.json()["spelling"] == "jey"
+        assert len(stored["added"]) == 1
+
+    def test_another_spelling_of_the_same_edition_is_added(self, stored):
+        assert self.post(stored, {"spelling": "jey"}).status_code == 201
+        assert self.post(stored, {"spelling": "tey"}).status_code == 201
+        assert self.post(stored, {"spelling": "Jey"}).status_code == 201  # case matters
+
+        assert len(stored["added"]) == 3
+
+    def test_edition_not_stored(self, stored):
+        response = client.post(self.url(), json={"spelling": "jey"})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+        db.add_legal_spelling.assert_not_called()
+
+    def test_the_edition_removed_in_the_meantime(self, stored):
+        db.add_legal_spelling.side_effect = psycopg.errors.ForeignKeyViolation()
+
+        response = self.post(stored, {"spelling": "jey"})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"spelling": ""},
+            {"spelling": " "},
+            {"spelling": " jey"},
+            {"spelling": "jey "},
+            {"spelling": "je y"},
+            {"spelling": "je\ny"},
+            {"spelling": "je\x00y"},
+            {"spelling": "x" * 101},
+            {"spelling": None},
+            {"spelling": 5},
+            {},
+            {"word": "jey"},
+            {
+                "spelling": "jey",
+                "edition_id": str(uuid4()),
+            },  # the edition is in the path
+            {"spelling": "jey", "extra": 1},
+            [],
+        ],
+    )
+    def test_bad_requests_are_rejected_before_anything_happens(self, stored, body):
+        response = self.post(stored, body)
+
+        assert response.status_code == 422
+        db.get_edition.assert_not_called()
+        db.add_legal_spelling.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "spelling", ["jey", "Jey", "biało-czerwony", "o’Hara", "1840", "x" * 100]
+    )
+    def test_spellings_that_are_accepted(self, stored, spelling):
+        assert self.post(stored, {"spelling": spelling}).status_code == 201
+
+    def test_invalid_edition_id(self, stored):
+        assert (
+            client.post(
+                "/editions/nope/legal-spellings", json={"spelling": "jey"}
+            ).status_code
+            == 422
+        )
+
+    def test_does_not_check_the_collection_or_call_polona(
+        self, polona, stored, monkeypatch
+    ):
+        check = mock.Mock(return_value=False)
+        monkeypatch.setattr(db, "check_edition_in_collection", check)
+
+        response = self.post(stored, {"spelling": "jey"})
+
+        assert response.status_code == 201
+        check.assert_not_called()
+        polona.assert_not_called()
+
+    def test_changes_nothing_but_the_spelling(self, stored, monkeypatch):
+        for name in (
+            "update_page",
+            "save_fetched_page",
+            "apply_correction",
+            "upsert_edition",
+        ):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        self.post(stored, {"spelling": "jey"})
+
+        for name in (
+            "update_page",
+            "save_fetched_page",
+            "apply_correction",
+            "upsert_edition",
+        ):
+            getattr(db, name).assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "post" in schema["paths"]["/editions/{edition_id}/legal-spellings"]
+        assert {"LegalSpelling", "NewLegalSpelling"} <= schema["components"][
+            "schemas"
+        ].keys()
+
+
+class TestSpellcheckWithLegalSpellings:
+    TEXT = "Ala ma jey tey nie ma. Jey!"
+
+    @pytest.fixture
+    def legal(self, monkeypatch):
+        """The legal spellings of one edition, and a dictionary that knows only
+        the ordinary words."""
+        edition_id = uuid4()
+        spellings = {"jey"}
+
+        class Dictionary:
+            def lookup(self, word):
+                return word.lower() in {"ala", "ma", "nie"}
+
+        monkeypatch.setattr(spelling, "_checker", Dictionary())
+        monkeypatch.setattr(
+            db,
+            "get_legal_spellings",
+            mock.Mock(side_effect=lambda i: spellings if i == edition_id else set()),
+        )
+        return edition_id
+
+    def wrong(self, response):
+        return [w["text"] for w in response.json()["words"] if not w["correct"]]
+
+    def test_a_legal_spelling_of_the_edition_is_correct(self, legal):
+        response = client.post(
+            "/spellcheck", json={"text": self.TEXT, "edition_id": str(legal)}
+        )
+
+        assert response.status_code == 200
+        assert self.wrong(response) == ["tey"]
+
+    def test_capital_letters_of_a_legal_spelling_are_correct_too(self, legal):
+        response = client.post(
+            "/spellcheck", json={"text": "Jey JEY jey", "edition_id": str(legal)}
+        )
+
+        assert self.wrong(response) == []
+
+    def test_without_an_edition_nothing_is_legal(self, legal):
+        response = client.post("/spellcheck", json={"text": self.TEXT})
+
+        assert self.wrong(response) == ["jey", "tey", "Jey"]
+        db.get_legal_spellings.assert_not_called()
+
+    def test_another_edition_has_other_spellings(self, legal):
+        response = client.post(
+            "/spellcheck", json={"text": self.TEXT, "edition_id": str(uuid4())}
+        )
+
+        assert self.wrong(response) == ["jey", "tey", "Jey"]
+
+    def test_the_words_themselves_are_the_same(self, legal):
+        with_edition = client.post(
+            "/spellcheck", json={"text": self.TEXT, "edition_id": str(legal)}
+        ).json()["words"]
+        without = client.post("/spellcheck", json={"text": self.TEXT}).json()["words"]
+
+        assert [(w["text"], w["start"], w["end"]) for w in with_edition] == [
+            (w["text"], w["start"], w["end"]) for w in without
+        ]
+
+    def test_looks_the_spellings_up_by_the_edition(self, legal):
+        client.post("/spellcheck", json={"text": "jey", "edition_id": str(legal)})
+
+        db.get_legal_spellings.assert_called_once_with(legal)
+
+    @pytest.mark.parametrize("edition_id", ["nope", 5, "", []])
+    def test_the_edition_must_be_a_uuid(self, legal, edition_id):
+        response = client.post(
+            "/spellcheck", json={"text": "jey", "edition_id": edition_id}
+        )
+
+        assert response.status_code == 422
+
+    def test_a_null_edition_is_the_same_as_none(self, legal):
+        response = client.post("/spellcheck", json={"text": "jey", "edition_id": None})
+
+        assert response.status_code == 200
+        assert self.wrong(response) == ["jey"]

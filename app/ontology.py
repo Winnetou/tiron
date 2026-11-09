@@ -1,8 +1,9 @@
 """Domain models (ontology) for the application."""
 
+from typing import Annotated
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, RootModel, field_validator
+from pydantic import AfterValidator, BaseModel, Field, RootModel, field_validator
 
 
 class Work(BaseModel):
@@ -44,3 +45,29 @@ class Collection(RootModel[list[UUID]]):
         if len(set(value)) != len(value):
             raise ValueError("collection UUIDs must be unique")
         return value
+
+
+def _no_spaces(value: str) -> str:
+    if any(
+        character.isspace() or character.isprintable() is False for character in value
+    ):
+        raise ValueError(
+            "a spelling must not contain spaces, line breaks or control characters"
+        )
+    return value
+
+
+# One spelling of a word: not empty, and in one piece. Case matters ("Jey" and
+# "jey" are two spellings).
+Spelling = Annotated[
+    str, Field(min_length=1, max_length=100), AfterValidator(_no_spaces)
+]
+
+
+class LegalSpelling(BaseModel):
+    """A spelling that is legal in an edition, although the dictionary does not
+    know it (old print uses spellings like "jey" and "tey"). A spelling is
+    legal for an edition, not everywhere, and each can be given once."""
+
+    edition_id: UUID
+    spelling: Spelling

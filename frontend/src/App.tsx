@@ -1,8 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import {
+  addLegalSpelling,
+  correctWord,
   getPage,
   pageNumberFromUrl,
   recognizeEntities,
+  spellcheck,
   tagEntity,
   teiToText,
   updatePage,
@@ -10,6 +13,7 @@ import {
 } from './api'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
+import type { Word } from './segments'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -19,6 +23,9 @@ interface PageWithText {
   page: Page
   text: string
   textError: string | null
+  /** Every word of the text and whether it is spelled correctly. */
+  words: Word[] | null
+  spellError: string | null
 }
 
 type Status =
@@ -38,10 +45,31 @@ function errorMessage(error: unknown): string {
  * says no, we show its reason and no text.
  */
 async function withText(page: Page): Promise<PageWithText> {
+  let text: string
   try {
-    return { page, text: await teiToText(page.content), textError: null }
+    text = await teiToText(page.content)
   } catch (error) {
-    return { page, text: '', textError: errorMessage(error) }
+    return {
+      page,
+      text: '',
+      textError: errorMessage(error),
+      words: null,
+      spellError: null,
+    }
+  }
+  // The spelling of the text is checked as soon as we have it, so the wrong
+  // words are shown right away. The backend finds the words and judges them.
+  try {
+    return {
+      page,
+      text,
+      textError: null,
+      // the edition's legal spellings count as correct
+      words: await spellcheck(text, page.edition_id),
+      spellError: null,
+    }
+  } catch (error) {
+    return { page, text, textError: null, words: null, spellError: errorMessage(error) }
   }
 }
 
@@ -140,18 +168,89 @@ export default function App() {
     )
   }
 
+  /**
+   * Have the backend replace a word of the page with `after`: in the XML, where
+   * it also records the correction. If the word was misspelled, the new
+   * spelling is then also sent as a legal spelling of the edition, so that it is
+   * not red afterwards, even if the dictionary does not know it. The text
+   * changes, so the page is shown again with its new text, and its spelling is
+   * checked again (once both requests are done).
+   */
+  async function correct(page: Page, word: Word, after: string) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      let corrected: Page
+      try {
+        corrected = await correctWord(page.edition_id, page.number, word, after)
+      } catch (error) {
+        setActionError(errorMessage(error))
+        return
+      }
+      let legalError: string | null = null
+      // (a spelling is one word, so an edit into several words has none)
+      if (!word.correct && !/\s/.test(after)) {
+        try {
+          await addLegalSpelling(page.edition_id, after)
+        } catch (error) {
+          legalError = errorMessage(error)
+        }
+      }
+      // The word is corrected either way, so that is what is shown.
+      setStatus({ kind: 'done', ...(await withText(corrected)) })
+      if (legalError) {
+        setActionError(
+          `The word was corrected, but not saved as a legal spelling: ${legalError}`,
+        )
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Say that the spelling of a misspelled word is legal in the edition. The text
+   * does not change, so only its words are asked for again: the backend counts
+   * the spelling as correct now, and the word is no longer red.
+   */
+  async function legalize(page: Page, text: string, word: Word) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      await addLegalSpelling(page.edition_id, word.text)
+      let update: Pick<PageWithText, 'words' | 'spellError'>
+      try {
+        update = {
+          words: await spellcheck(text, page.edition_id),
+          spellError: null,
+        }
+      } catch (error) {
+        update = { words: null, spellError: errorMessage(error) }
+      }
+      setStatus((previous) =>
+        previous.kind === 'done' ? { ...previous, ...update } : previous,
+      )
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   /** Set the ready flag of the open page. */
   function markReady(page: Page) {
     return run(updatePage(page.edition_id, page.number, { ready: true }))
   }
 
   if (status.kind === 'done') {
-    const { page, text, textError } = status
+    const { page, text, textError, words, spellError } = status
     return (
       <PageViewer
         page={page}
         text={text}
         textError={textError}
+        words={words}
+        spellError={spellError}
         busy={busy}
         error={actionError}
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
@@ -165,6 +264,8 @@ export default function App() {
           confirmEntity(page, text, entity, label)
         }
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
+        onCorrectWord={(word, after) => correct(page, word, after)}
+        onLegalSpelling={(word) => legalize(page, text, word)}
       />
     )
   }

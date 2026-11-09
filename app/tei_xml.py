@@ -287,6 +287,13 @@ def _common_parent(a: Any, b: Any) -> TagNode:
     )
 
 
+def _serialise(root: TagNode, original: str) -> str:
+    """The XML of `root`, with an XML declaration if `original` had one."""
+    if original.lstrip().startswith("<?xml"):
+        return str(delb.Document(root))
+    return str(root)
+
+
 def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str:
     """Put the characters `start` to `end` of the text of a TEI document inside
     an element called `label`, and return the changed XML.
@@ -382,4 +389,77 @@ def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str
         node.detach()
     wrapper.append_children(*covered)
 
-    return str(delb.Document(root)) if xml.lstrip().startswith("<?xml") else str(root)
+    return _serialise(root, xml)
+
+
+class CannotReplace(ValueError):
+    """The text cannot be replaced in the XML; the message says why."""
+
+
+# What the new text of a replacement must not contain: line breaks, tabs and
+# the other control characters (which XML does not allow anyway).
+_CONTROL_CHARACTERS = re.compile("[\x00-\x1f\x7f\ufffe\uffff]")
+
+
+def replace_text_range(xml: str, start: int, end: int, before: str, after: str) -> str:
+    """Replace the characters `start` to `end` of the text of a TEI document,
+    which must be `before`, with `after`, and return the changed XML.
+
+    `start` and `end` are character offsets into what tei_xml_to_text returns
+    for the same XML. The text is changed where it is, in the text nodes that
+    hold it, so the markup around it stays as it is (a word inside
+    <persName>...</persName> stays in it). If the text is spread over several
+    nodes (a word with inline markup in the middle), the new text goes into the
+    first of them and the characters are removed from the others.
+
+    The text to replace must not contain spaces or line breaks (it is a word,
+    or a part of one); the new text must not be empty, start or end with a
+    space, or contain line breaks or other control characters, and must differ
+    from the old one.
+
+    Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
+    offsets is not `before`, and CannotReplace for the other problems.
+    """
+    if not after:
+        raise CannotReplace("The new text is empty")
+    if after != after.strip():
+        raise CannotReplace("The new text must not start or end with a space")
+    if _CONTROL_CHARACTERS.search(after):
+        raise CannotReplace(
+            "The new text must be on one line, without control characters"
+        )
+    if after == before:
+        raise CannotReplace("The new text is the same as the old one")
+    root = _parse_tei(xml)
+    extracted, sources = _extract(_text_element(root))
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != before:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {before!r}: the page has changed"
+        )
+    if any(character.isspace() for character in before):
+        raise CannotReplace(
+            "The text to replace must not contain spaces or line breaks"
+        )
+
+    # Where the characters are: for each text node, from which index to which.
+    runs: list[tuple[TextNode, int, int]] = []
+    for source in sources[start:end]:
+        assert source is not None  # not whitespace: real text
+        node, index = source
+        if runs and runs[-1][0] is node and runs[-1][2] + 1 == index:
+            runs[-1] = (node, runs[-1][1], index)
+        elif any(run[0] is node for run in runs):
+            raise CannotReplace("The text is not in one piece in the XML")
+        else:
+            runs.append((node, index, index))
+
+    for position, (node, first, last) in enumerate(runs):
+        content = node.content
+        new_content = (
+            content[:first] + (after if position == 0 else "") + content[last + 1 :]
+        )
+        if new_content:
+            node.content = new_content
+        else:
+            node.detach()
+    return _serialise(root, xml)

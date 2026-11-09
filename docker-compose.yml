@@ -1,0 +1,57 @@
+# The backend and its PostgreSQL database.
+#
+#   docker compose up --build        (or: make up)
+#
+# The database name, user and password come from .env (see .env.example); the
+# password has no default and must be set. The frontend is not part of this: run
+# it with `make frontend` (its dev server proxies to the backend on port 8000).
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tiron}
+      POSTGRES_USER: ${POSTGRES_USER:-tiron}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+    volumes:
+      # The data lives in this named volume, so it survives `docker compose down`
+      # and rebuilding or removing the containers.
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Inside the compose network the database is reachable as "db".
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-tiron}
+      POSTGRES_USER: ${POSTGRES_USER:-tiron}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      # The backend only starts answering once it has loaded the spaCy model and
+      # the dictionary: about 40 s when the disk cache is warm, but a few minutes
+      # on a cold start.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/openapi.json')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 300s
+
+volumes:
+  db-data:

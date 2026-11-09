@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { Page } from './api'
 import { entityKey, type Decision, type Entity } from './entities'
-import HighlightedText from './HighlightedText'
+import PageText from './PageText'
+import type { Word } from './segments'
 import Sidebar from './Sidebar'
 import XmlView from './XmlView'
 
@@ -17,6 +18,10 @@ interface Props {
   text: string
   /** Why `text` could not be extracted (the backend's reason), if so. */
   textError: string | null
+  /** Every word of `text` with its spelling verdict; null if not checked. */
+  words: Word[] | null
+  /** Why the spelling could not be checked (the backend's reason), if so. */
+  spellError: string | null
   busy: boolean
   error: string | null
   onPrevious: () => void
@@ -34,6 +39,10 @@ interface Props {
   onConfirmEntity: (entity: Entity, label: string) => void
   /** The user says it is not a named entity: it is no longer highlighted. */
   onRejectEntity: (entity: Entity) => void
+  /** The user corrected a word of the text: it becomes `after`. */
+  onCorrectWord: (word: Word, after: string) => void
+  /** The user says the spelling of a misspelled word is legal in the edition. */
+  onLegalSpelling: (word: Word) => void
 }
 
 /**
@@ -48,6 +57,8 @@ export default function PageViewer({
   page,
   text,
   textError,
+  words,
+  spellError,
   busy,
   error,
   onPrevious,
@@ -59,9 +70,12 @@ export default function PageViewer({
   decisions,
   onConfirmEntity,
   onRejectEntity,
+  onCorrectWord,
+  onLegalSpelling,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
   // The entities that are still shown: not the ones rejected as "Not NER".
+  const misspelled = (words ?? []).filter((word) => !word.correct).length
   const entityCount = (entities ?? []).filter(
     (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
   ).length
@@ -120,6 +134,11 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
+          {words && (
+            <span className="spell-count" aria-live="polite">
+              {misspelled === 0 ? 'No misspelled words' : `${misspelled} misspelled`}
+            </span>
+          )}
           {entities && (
             <span className="entity-count" aria-live="polite">
               {entityCount === 0
@@ -141,17 +160,23 @@ export default function PageViewer({
           </div>
         </div>
         {error && <p role="alert">{error}</p>}
+        {spellError && (
+          <p role="alert">The spelling cannot be checked: {spellError}</p>
+        )}
         {textError && (
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
         {view === 'text' ? (
-          <HighlightedText
+          <PageText
             text={text}
+            words={words}
             entities={entities}
             decisions={decisions}
             busy={busy}
             onConfirm={onConfirmEntity}
             onReject={onRejectEntity}
+            onCorrectWord={onCorrectWord}
+            onLegalSpelling={onLegalSpelling}
           />
         ) : (
           <XmlView xml={page.content} />

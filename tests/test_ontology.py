@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.ontology import Collection, Correction, Edition, Page, Work
+from app.ontology import Collection, Correction, Edition, LegalSpelling, Page, Work
 
 WORK_ID = uuid4()
 
@@ -169,3 +169,68 @@ def test_page_scan_uri():
         Page(edition_id=uuid4(), number=1, raw_content="x", scan_uri=uri).scan_uri
         == uri
     )
+
+
+class TestLegalSpelling:
+    def test_an_edition_and_a_spelling(self):
+        edition_id = uuid4()
+
+        legal = LegalSpelling(edition_id=edition_id, spelling="jey")
+
+        assert legal.edition_id == edition_id
+        assert legal.spelling == "jey"
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "jey",
+            "Jey",
+            "JEY",
+            "biało-czerwony",
+            "o’Hara",
+            "zażółć",
+            "x",
+            "a" * 100,
+            "1840",
+        ],
+    )
+    def test_spellings_that_are_fine(self, spelling):
+        assert LegalSpelling(edition_id=uuid4(), spelling=spelling).spelling == spelling
+
+    def test_case_matters(self):
+        edition_id = uuid4()
+
+        assert LegalSpelling(edition_id=edition_id, spelling="jey") != LegalSpelling(
+            edition_id=edition_id, spelling="Jey"
+        )
+
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "",
+            " ",
+            " jey",
+            "jey ",
+            "je y",
+            "je\ny",
+            "je\tj",
+            "je\x00y",
+            "a" * 101,
+            "je\u200by",
+        ],
+    )
+    def test_spellings_that_are_not(self, spelling):
+        with pytest.raises(ValidationError):
+            LegalSpelling(edition_id=uuid4(), spelling=spelling)
+
+    @pytest.mark.parametrize("missing", ["edition_id", "spelling"])
+    def test_both_are_needed(self, missing):
+        data = {"edition_id": uuid4(), "spelling": "jey"}
+        del data[missing]
+
+        with pytest.raises(ValidationError):
+            LegalSpelling(**data)
+
+    def test_the_edition_must_be_a_uuid(self):
+        with pytest.raises(ValidationError):
+            LegalSpelling(edition_id="not-a-uuid", spelling="jey")
