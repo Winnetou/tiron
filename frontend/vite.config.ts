@@ -13,6 +13,7 @@ export default defineConfig({
       '/editions': backendUrl,
       '/tei': backendUrl,
       '/ner': backendUrl,
+      '/spellcheck': backendUrl,
     },
   },
   test: {

@@ -4,25 +4,33 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Path, status
+import psycopg.errors
+from fastapi import FastAPI, HTTPException, Path, Response, status
 
 from app.db import Database
 from app.models import (
     EntityTag,
     NerRequest,
     NerResult,
+    NewLegalSpelling,
     PageUpdate,
     PageView,
+    SpellcheckRequest,
+    SpellcheckResult,
     TeiText,
     TeiXml,
+    WordCorrection,
 )
 from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
-from app.ontology import Correction, Edition, Page, Work
+from app.ontology import Edition, LegalSpelling, Page, Work
 from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
+from app.spelling import SpellcheckUnavailable, check_words, get_checker
 from app.tei_xml import (
+    CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
+    replace_text_range,
     tag_text_range,
     tei_xml_to_text,
     text_to_tei_xml,
@@ -35,13 +43,13 @@ logger = logging.getLogger("uvicorn.error")  # shown with uvicorn's own output
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Load the spaCy model when the backend starts, so that the first request
-    for named entities doesn't have to wait for it. The backend only starts
-    serving requests once the model is loaded, which takes several seconds.
+    """Load the spaCy model and the Polish spelling dictionary when the backend
+    starts, so that no request has to wait for them. The backend only starts
+    serving requests once they are loaded, which takes several seconds.
 
-    If the model is not installed (running without Docker), the backend still
-    starts, because everything else works without it: it logs a warning and
-    /ner answers 503.
+    If one is not available (the model is not installed when running without
+    Docker), the backend still starts, because everything else works without
+    it: it logs a warning, and the endpoint that needs it answers 503.
     """
     logger.info("Loading the spaCy model %s ...", MODEL_NAME)
     try:
@@ -50,6 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("%s: /ner will answer 503", error)
     else:
         logger.info("The spaCy model %s is loaded", MODEL_NAME)
+    logger.info("Loading the spelling dictionary ...")
+    try:
+        get_checker()
+    except SpellcheckUnavailable as error:
+        logger.warning("%s: /spellcheck will answer 503", error)
+    else:
+        logger.info("The spelling dictionary is loaded")
     yield
 
 
@@ -224,8 +239,110 @@ def recognize_entities(request: NerRequest) -> NerResult:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
-@app.post(
-    "/corrections", response_model=Correction, status_code=status.HTTP_201_CREATED
-)
-def create_correction(correction: Correction) -> Correction:
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "Not implemented")
+@app.post("/spellcheck", response_model=SpellcheckResult)
+def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
+    """Check the spelling of a text, with phunspell and the Polish Hunspell
+    dictionary (`pl_PL`).
+
+    The body is `{"text": "..."}`: the plain text of a page. The response lists
+    every word of it, in order, as `{"text", "start", "end", "correct"}`:
+    `start` and `end` are character offsets in the submitted text, so
+    `text[start:end]` is the word, and `correct` says whether it is spelled
+    correctly. Everything between the words is not a word. A word is made of
+    letters and digits, with a hyphen or apostrophe inside it; words with digits
+    are not checked and count as correct. Listing all words rather than only the
+    wrong ones means the backend alone decides what a word is.
+
+    The body may also have an `edition_id`, the edition the text is from. The
+    spellings that were made legal in it (`POST .../legal-spellings`) then count
+    as correct: a legal "jey" is not reported as wrong, and nor are "Jey" and
+    "JEY" (a sentence can start with it); a legal "Jey" does not make "jey"
+    correct. An edition that is not stored just has none.
+
+    The dictionary is loaded when the backend starts (see `lifespan`). If it is
+    not available the response is 503. The text may have up to 100,000
+    characters, otherwise the response is 422. Nothing is stored.
+    """
+    try:
+        legal = db.get_legal_spellings(request.edition_id) if request.edition_id else ()
+        return SpellcheckResult(words=check_words(request.text, legal))
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@app.post("/editions/{edition_id}/pages/{number}/corrections", response_model=PageView)
+def correct_word(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], correction: WordCorrection
+) -> PageView:
+    """Correct a word of a stored page: the characters `start` to `end` of the
+    page's text, which are `before`, are replaced with `after` in the page's
+    TEI XML, and the Correction (`before` -> `after`) is recorded for the page.
+
+    The body is `{"start": 25, "end": 37, "before": "dawnieyszych", "after":
+    "dawniejszych"}`. The offsets are those of the text that `POST /tei/text`
+    gives for this page (and `POST /spellcheck` returned). The backend finds the
+    place in the XML and changes the text where it is, so the markup around it
+    stays; the frontend never has to read the XML. `before` is the word as the
+    client saw it, and the backend checks that it is what is at those offsets.
+
+    The new XML is saved as the page's corrected content and the Correction is
+    stored in the same database transaction, with the page locked: both happen
+    or neither does. The text of the page changes, so the offsets of its
+    entities and words from before are no longer valid.
+
+    404 if the page is not stored. 409 if the text at the offsets is not
+    `before`, because the page has changed since. 422 if the page has no valid
+    TEI XML, or the replacement is not acceptable: `before` must not contain
+    spaces or line breaks, and `after` must not be empty, start or end with a
+    space, contain a line break, or be the same as `before`. Returns the
+    updated page as a PageView.
+    """
+
+    def replace_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to correct")
+        return replace_text_range(
+            xml, correction.start, correction.end, correction.before, correction.after
+        )
+
+    try:
+        page = db.apply_correction(
+            edition_id, number, replace_in_xml, correction.before, correction.after
+        )
+    except TextChanged as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotReplace) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/legal-spellings", response_model=LegalSpelling)
+def add_legal_spelling(
+    edition_id: UUID, new: NewLegalSpelling, response: Response
+) -> LegalSpelling:
+    """Say that a spelling is legal in an edition, although the dictionary does
+    not know it: old print has spellings like "jey" and "tey", which are not
+    mistakes there.
+
+    The body is `{"spelling": "jey"}`: one word, as it is written in the
+    edition (case matters: "Jey" is another spelling). The response is
+    `{"edition_id": ..., "spelling": ...}`. A spelling is stored once per
+    edition: 201 if it was added, and 200 if the edition already had it, so
+    sending it again is harmless. Nothing else changes: this only records the
+    spelling.
+
+    404 if the edition is not stored, which it is once one of its pages has been
+    opened. 422 if the spelling is empty, longer than 100 characters, or has
+    spaces, line breaks or control characters in it.
+    """
+    if db.get_edition(edition_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    legal = LegalSpelling(edition_id=edition_id, spelling=new.spelling)
+    try:
+        added = db.add_legal_spelling(legal)
+    except psycopg.errors.ForeignKeyViolation as exc:  # removed in the meantime
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found") from exc
+    response.status_code = status.HTTP_201_CREATED if added else status.HTTP_200_OK
+    return legal

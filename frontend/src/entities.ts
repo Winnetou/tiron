@@ -29,25 +29,50 @@ function codePointStarts(text: string): number[] {
   return starts
 }
 
+/** Something the backend found at a stretch of a text, by code point offsets. */
+export interface Found {
+  text: string
+  start: number
+  end: number
+}
+
+export interface Range<T> {
+  item: T
+  /** Where it is in the JavaScript string: text.slice(from, to) === item.text. */
+  from: number
+  to: number
+}
+
 /**
- * Cut `text` into plain parts and entity parts, using the offsets the backend
- * gave. Nothing is searched for: an entity is exactly the stretch the backend
- * pointed at, so the same word elsewhere in the text is left alone.
+ * The things the backend pointed at, as ranges of the JavaScript string, in
+ * order. Nothing is searched for: each one is exactly the stretch the backend
+ * gave, so the same word elsewhere in the text is left alone.
  *
- * An entity that does not fit is skipped rather than guessed at: one that
- * overlaps the previous entity, lies outside the text, or whose text is not
- * what is at its offsets (the text has changed since the backend saw it).
+ * One that does not fit is skipped rather than guessed at: one that overlaps
+ * the one before it, lies outside the text, or whose text is not what is at its
+ * offsets (the text has changed since the backend saw it).
  */
-export function highlightParts(text: string, entities: Entity[]): TextPart[] {
+export function fitRanges<T extends Found>(text: string, items: T[]): Range<T>[] {
   const starts = codePointStarts(text)
-  const parts: TextPart[] = []
+  const ranges: Range<T>[] = []
   let cursor = 0
-  for (const entity of [...entities].sort((a, b) => a.start - b.start)) {
-    const from = starts[entity.start]
-    const to = starts[entity.end]
+  for (const item of [...items].sort((a, b) => a.start - b.start)) {
+    const from = starts[item.start]
+    const to = starts[item.end]
     if (from === undefined || to === undefined) continue
     if (from < cursor || to <= from) continue
-    if (text.slice(from, to) !== entity.text) continue
+    if (text.slice(from, to) !== item.text) continue
+    ranges.push({ item, from, to })
+    cursor = to
+  }
+  return ranges
+}
+
+/** Cut `text` into plain parts and entity parts (see fitRanges). */
+export function highlightParts(text: string, entities: Entity[]): TextPart[] {
+  const parts: TextPart[] = []
+  let cursor = 0
+  for (const { item: entity, from, to } of fitRanges(text, entities)) {
     if (from > cursor) parts.push({ text: text.slice(cursor, from) })
     parts.push({ text: text.slice(from, to), entity })
     cursor = to

@@ -3,6 +3,41 @@ Simple app to correct OCR outputs from polona.pl
 To run everything, edit .env with db creds
  Then run `make run` in one terminal and `make frontend` in another.
 
+## Running with Docker Compose
+
+`docker compose up --build` (or `make up`) starts the backend together with its
+own PostgreSQL 17 database (`docker-compose.yml`):
+
+- **`db`** keeps its data in the named volume `db-data`, so it survives
+  `docker compose down`, rebuilding the image, and removing the containers. Only
+  `docker compose down -v` (or `docker volume rm tiron_db-data`) deletes the data.
+  The database port is not published: only the backend, inside the compose
+  network, can reach it.
+- **`backend`** is built from the `Dockerfile` and waits until the database is
+  healthy before it starts. It reaches the database as `db`; `POSTGRES_HOST` and
+  `POSTGRES_PORT` from `.env` are not used here (they are for `make run`). It is
+  published on port 8000, or `BACKEND_PORT` if you set it in `.env`.
+- The database name, user and password come from `.env` (`POSTGRES_DB`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`; see `.env.example`). The password has no
+  default, and compose refuses to start without it. They are only used when the
+  volume is created: changing the password later does not change it in an
+  existing volume.
+- The backend loads the spaCy model and the spelling dictionary before it
+  answers, which takes about 40 s with a warm disk cache and a few minutes on a
+  cold start, so `docker compose ps` shows it as "starting" for that long, then
+  "healthy".
+- The frontend is not in the compose file: run `make frontend` (its dev server
+  proxies to the backend on port 8000).
+- A new database is empty. Pages can only be opened for editions in the
+  `collection` table, so add one first, for example:
+
+  ```
+  docker compose exec db psql -U <user> -d <db> -c \
+    "insert into collection (id) values ('c10409b4-4ae3-4393-91b2-c36d132cf741')"
+  ```
+
+`make down` stops everything and keeps the data.
+
 ## How it works
 
 The app shows a scan of a page next to its text, so the OCR can be corrected.
@@ -75,6 +110,10 @@ correction replaces it. If a page is ever fetched again, only the fetched data
 (`raw_content`, `scan_uri`) is refreshed, and its corrected content, `ready`
 flag and `id` are kept.
 
+When the user corrects a word (see "Correcting a word" below), the word is
+changed in `corrected_content`, and the correction (`before` -> `after`) is also
+recorded in the `corrections` table, for the page.
+
 ### Editing a page
 
 `PATCH /editions/{edition_id}/pages/{number}` with a JSON body.
@@ -129,7 +168,8 @@ stored.
   for a page). The price is the startup: the backend does not accept requests
   until the model is loaded, which takes about 20 s in the Docker image (the
   log says "Loading the spaCy model ..." and then "... is loaded"). Once loaded
-  it uses about 1 GB of memory.
+  it uses about 1 GB of memory. The spelling dictionary (below) is loaded at
+  startup as well, so the whole startup takes about 40 s.
 - The model is installed in the Docker image. When running the backend
   without Docker it has to be installed separately. Without it the backend
   still starts (everything else works), logs a warning, and `/ner` answers 503;
@@ -171,6 +211,112 @@ which are also TEI elements: `persName`, `placeName`, `orgName`, `geogName`,
   answer 422 with the reason.
 - 404 if the page is not stored, 422 if it has no valid TEI XML. Like `PATCH`,
   it does not check the collection or fetch from Polona.
+
+### Spell check
+
+`POST /spellcheck` with `{"text": "..."}` checks the spelling of a text, with
+[phunspell](https://pypi.org/project/phunspell/) and its Polish Hunspell
+dictionary (`pl_PL`), and returns **every word** of the text, in order:
+
+```json
+{"words": [
+  {"text": "Ala", "start": 0, "end": 3, "correct": true},
+  {"text": "jey", "start": 7, "end": 10, "correct": false}
+]}
+```
+
+`start` and `end` are character offsets (counted the way Python does), so
+`text[start:end]` is the word. The text is the plain text of a page, as
+`POST /tei/text` gives it. Nothing is stored.
+
+The body may also have an `edition_id`, the edition the text is from. The
+spellings that were made **legal** in that edition (see "Legal spellings") then
+count as correct. A legal `jey` makes `Jey` and `JEY` correct too (a sentence can
+start with it), as the dictionary does for its own words, but a legal `Jey` does
+not make `jey` correct. An edition that is not stored just has none. The
+frontend sends the edition with every check.
+
+- **The backend decides what a word is**, which is why all words are listed and
+  not only the wrong ones: the frontend does not tokenize anything. A word is
+  made of letters and digits, with a single hyphen or apostrophe inside it
+  (`biało-czerwony`). Spaces, punctuation and line breaks are not words, and a
+  hyphen at the end of a line is not part of one, so the two halves of a word
+  split over two lines (`o-` / `wych`) are two words.
+- A word with digits in it is not checked and counts as correct. A hyphenated
+  word is correct if it is in the dictionary, or if all its parts are. Capital
+  letters do not matter.
+- There are no suggestions: phunspell takes about 2.6 s to suggest for one
+  word, which is too slow to do for all the wrong words of a page. (A page of
+  about 200 words is checked in about 0.3 s.)
+- The dictionary is loaded when the backend starts, like the spaCy model. If it
+  is not available the backend still starts, logs a warning, and the endpoint
+  answers 503. The text can have up to 100,000 characters (422 if longer).
+
+### Correcting a word
+
+`POST /editions/{edition_id}/pages/{number}/corrections` replaces a word of the
+text of a stored page with another one, in the page's TEI XML, and records the
+correction:
+
+```json
+{"start": 25, "end": 37, "before": "dawnieyszych", "after": "dawniejszych"}
+```
+
+- **The backend finds the place in the XML.** The offsets are those of the text
+  that `POST /tei/text` gives for the page (and `POST /spellcheck` returned).
+  The text is changed where it is, in the text nodes that hold it, so the markup
+  around it stays: a word inside `<persName>...</persName>` is still inside it.
+  A word that inline markup cuts in two is replaced in its first part and
+  removed from the others. `before` is the word as the client saw it; if it is
+  not what is at those offsets, the page has changed since, and the answer is
+  409.
+- **The correction is recorded.** The new XML is saved as the page's
+  `corrected_content`, and the `Correction` (`before`, `after`) is stored for the
+  page, in **one transaction with the page's row locked**: both happen or
+  neither does, and two corrections of the same page cannot overwrite each
+  other. The response is the updated page, like `GET`.
+- `before` must not contain spaces or line breaks (it is a word), and `after`
+  must not be empty, start or end with a space, contain a line break or other
+  control characters, or be the same as `before`. It may contain spaces inside
+  (`wcałey` -> `w całej`). 422 otherwise, and for a page without valid TEI XML.
+  404 if the page is not stored. Like `PATCH`, it does not check the collection
+  or fetch from Polona.
+- The text of the page changes, so the offsets of its entities and words from
+  before are no longer valid: check the spelling again (the frontend does).
+- This replaces the earlier `POST /corrections` stub (which returned 501).
+
+### Legal spellings
+
+Old print has spellings that the dictionary does not know and that are not
+mistakes there (`jey`, `tey`, `raczey`). A **legal spelling** says so, for one
+edition. They are kept in the table `legal_spellings`, with two columns: the
+`edition_id` (an edition that is stored) and the `spelling`. The two are unique
+together (they are the table's primary key), so an edition has each spelling
+once, and the same spelling can be legal in many editions.
+
+`POST /editions/{edition_id}/legal-spellings` adds one:
+
+```json
+{"spelling": "jey"}
+```
+
+The response is `{"edition_id": "...", "spelling": "jey"}`, with status **201**
+if it was added and **200** if the edition already had that spelling, so sending
+it again is harmless (`Database.add_legal_spelling` returns whether it was
+added). Nothing else is changed: this only records the spelling.
+
+- A spelling is one word: not empty, at most 100 characters, and without spaces,
+  line breaks or control characters (422 otherwise). It is kept as it is, and
+  case matters: `Jey` and `jey` are two spellings.
+- 404 if the edition is not stored, which it is once one of its pages has been
+  opened. Like the other editing endpoints it does not check the collection or
+  call Polona.
+- The table is created when the backend starts, like the others, so an existing
+  database gets it on the next start.
+- `POST /spellcheck` uses them: given the `edition_id`, a legal spelling is
+  reported as correct (`Database.get_legal_spellings` reads them). That is what
+  keeps a word that was made legal from being red again on the next page of the
+  edition, or after a reload. Nothing lists them yet.
 
 ### What the frontend shows
 
@@ -232,6 +378,57 @@ selected; if the recognition is wrong, choose the right label instead, or
   the entity still there to be confirmed again.
 - What was found and decided belongs to a text: it is not shown for another
   page, and is back if you return to the page, until you reload.
+
+**Spelling.** As soon as the text of a page is shown, the frontend sends it to
+`POST /spellcheck`, with no click, and every word it gets back can be clicked.
+The misspelled ones are in red with a wavy underline, and how many there are is
+shown next to the switch ("41 misspelled"). The frontend does not decide what a
+word is or whether it is right: it shows what the backend says. If the spelling
+cannot be checked (for example the dictionary is missing) the text is shown as
+it is, with the reason above it.
+
+**Correcting a word.** Click any word, wrong or not, and it turns into a text
+field in place, with the word selected. Type the new word and press **Enter**
+to confirm; **Escape**, or clicking elsewhere, cancels. Nothing is sent if the
+word is unchanged or empty, and spaces around it are removed. The frontend asks
+the backend to correct the word (`POST .../corrections`, above), sending the
+word's offsets and the new text, and never changes the XML itself. When the
+backend answers, the page is shown with its new text, and the spelling is
+checked again. While the request runs the field is disabled; if it fails, the
+reason is shown and the field is kept so it can be tried again. The misspelled
+words can also be reached with the Tab key, and Enter on one starts editing.
+
+**Legal spellings.** A misspelled (red) word may be a spelling that is right in
+this edition, as old print has many. Click the word, and next to its field there
+is a **Legal spelling** button (only for misspelled words). The word has two ways
+out of red:
+
+1. **The button.** It says that the word, as it is in the text, is legal: the
+   frontend sends it to `POST /editions/{id}/legal-spellings` and checks the
+   text again, and the word is no longer red, in this page and in any other page
+   of the edition (the backend counts it as correct when it checks). The text
+   does not change, and no correction is sent.
+2. **Editing it and pressing Enter.** This is the correction as before (the word
+   is replaced in the XML and the correction recorded), and then the new spelling
+   is also sent to legal-spellings, so it is not red afterwards even if the
+   dictionary does not know it either. The text is checked once, after both
+   requests. Only a misspelled word gets this: editing a word that was spelled
+   correctly is just a correction. And an edit into several words (`w całej`)
+   sends no legal spelling, because a spelling is one word. If the correction
+   works but the legal spelling does not, the corrected word is shown, with a
+   message about what failed.
+
+Clicking the button does not leave the field first (that would cancel the
+editing). While a request is running both the field and the button are disabled.
+Either way, the frontend does not decide what is red: after the request it asks
+the backend again, and shows what the backend says.
+
+The words and the entities are shown together: a word inside an entity is
+still a word (it is red if misspelled and can be corrected in place, without
+the entity's dialog getting in the way), and an entity that starts or ends in
+the middle of a word cuts it in two, and either part edits the whole word. A
+correction changes the text, so the entities recognized in the old text are not
+shown for the new one; click the NER button again.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.

@@ -11,6 +11,7 @@ import type { Page } from './api'
 import App from './App'
 import type { Entity } from './entities'
 import './index.css'
+import type { Word } from './segments'
 
 const UUID = '4a2cfdf3-006a-4613-9aee-42b300be604b'
 const SCAN = 'https://polona.pl/iiif/3/x/full/max/0/default.jpg'
@@ -38,6 +39,13 @@ interface TagBody {
   label: string
 }
 
+interface CorrectionBody {
+  start: number
+  end: number
+  before: string
+  after: string
+}
+
 interface Call {
   method: string
   url: string
@@ -53,6 +61,15 @@ interface Options {
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
   ner?: (text: string) => Entity[] | Error
+  /** Answer of POST /spellcheck; defaults to no words (so no clickable words). */
+  spell?: (text: string) => Word[] | Error
+  /** Answer of POST .../legal-spellings; an Error to refuse it. */
+  legal?: (body: { spelling: string }) => Error | undefined
+  /**
+   * Answer of POST .../corrections: the changes to the page. Defaults to what
+   * the backend does: the word is replaced in the XML.
+   */
+  correct?: (body: CorrectionBody, page: Page) => Partial<Page> | Error
   /**
    * Answer of POST .../entities: the changes to the page. Defaults to what the
    * backend does: the entity's text gets a `label` element around it in the XML.
@@ -76,6 +93,7 @@ let calls: Call[]
 function fakeBackend(options: Options = {}) {
   calls = []
   const pages = new Map<number, Page>()
+  const legalSpellings = new Set<string>()
   const pageFor = (number: number): Page | Error => {
     if (number < 0 || number > 3) return new Error('Page not found')
     const given = options.page?.(number)
@@ -93,6 +111,30 @@ function fakeBackend(options: Options = {}) {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, url, body })
+    if (url === '/spellcheck') {
+      const answer = options.spell ? options.spell(body.text) : []
+      // like the backend: the legal spellings of the edition count as correct,
+      // and so do their capital forms
+      return answer instanceof Error
+        ? failure(503, answer)
+        : reply(true, 200, {
+            words: answer.map((word) =>
+              legalSpellings.has(word.text) ||
+              legalSpellings.has(word.text.toLowerCase())
+                ? { ...word, correct: true }
+                : word,
+            ),
+          })
+    }
+    if (url.endsWith('/legal-spellings')) {
+      const refused = options.legal?.(body)
+      if (refused) return failure(404, refused)
+      legalSpellings.add(body.spelling)
+      return reply(true, 201, {
+        edition_id: url.split('/')[2],
+        spelling: body.spelling,
+      })
+    }
     if (url === '/ner') {
       const answer = options.ner ? options.ner(body.text) : []
       return answer instanceof Error
@@ -106,9 +148,22 @@ function fakeBackend(options: Options = {}) {
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
-    const number = Number(tagging ? tagging[1] : url.split('/').pop())
+    const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
+    const number = Number(
+      tagging?.[1] ?? correcting?.[1] ?? url.split('/').pop(),
+    )
     const page = pageFor(number)
     if (page instanceof Error) return failure(404, page)
+    if (correcting) {
+      const current = pages.get(number) ?? page
+      const changes = options.correct
+        ? options.correct(body, current)
+        : { content: current.content.replace(body.before, body.after) }
+      if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
     if (tagging) {
       const current = pages.get(number) ?? page
       const changes = options.tag
@@ -213,6 +268,7 @@ describe('text from the TEI XML', () => {
     expect(calledUrls()).toEqual([
       `GET /editions/${UUID}/pages/0`,
       'POST /tei/text',
+      'POST /spellcheck',
     ])
     expect(calls[1].body).toEqual({ xml: xmlOf('text of page 0') })
   })
@@ -927,6 +983,7 @@ describe('confirming or rejecting an entity', () => {
       expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
         `POST /editions/${UUID}/pages/0/entities`,
         'POST /tei/text', // the backend extracts the text of the new XML
+        'POST /spellcheck', // ... and checks it
       ])
     })
 
@@ -1182,6 +1239,1095 @@ describe('confirming or rejecting an entity', () => {
   })
 })
 
+/** The words of a text as the backend reports them, with the given ones wrong. */
+function wordsOf(text: string, wrong: string[] = []): Word[] {
+  const words: Word[] = []
+  for (const match of text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)) {
+    const start = [...text.slice(0, match.index)].length
+    const length = [...match[0]].length
+    words.push({
+      text: match[0],
+      start,
+      end: start + length,
+      correct: !wrong.includes(match[0]),
+    })
+  }
+  return words
+}
+
+describe('spell check', () => {
+  const TEXT = 'Ala ma kota, a jey tey nie ma.'
+  const WRONG = ['jey', 'tey']
+  const spellOptions = (): Options => ({
+    page: () => ({ content: xmlOf(TEXT) }),
+    spell: (text) => wordsOf(text, WRONG),
+  })
+  const spellCalls = () => calls.filter((c) => c.url === '/spellcheck')
+  const wordSpans = () => Array.from(pageText().querySelectorAll('.word'))
+  const misspelled = () =>
+    Array.from(pageText().querySelectorAll('.word.misspelled')).map((w) => w.textContent)
+
+  async function open(options: Options = spellOptions()) {
+    await openPage(options)
+    await waitFor(() => expect(pageText().textContent).toBe(options.page ? TEXT : TEXT))
+    await waitFor(() => expect(wordSpans().length).toBeGreaterThan(0))
+  }
+
+  it('checks the text as soon as the page is shown, without a click', async () => {
+    await openPage(spellOptions())
+
+    await waitFor(() => expect(spellCalls()).toHaveLength(1))
+    expect(calledUrls()).toEqual([
+      `GET /editions/${UUID}/pages/0`,
+      'POST /tei/text',
+      'POST /spellcheck',
+    ])
+  })
+
+  it('sends the text, not the XML', async () => {
+    await open()
+
+    expect(spellCalls()[0].body).toEqual({ text: TEXT, edition_id: UUID })
+  })
+
+  it('shows the misspelled words in red and the others as they are', async () => {
+    await open()
+
+    expect(misspelled()).toEqual(['jey', 'tey'])
+    const [r, g, b] = getComputedStyle(
+      pageText().querySelector('.word.misspelled')!,
+    ).color.match(/\d+/g)!.map(Number)
+    expect(r).toBeGreaterThan(150)
+    expect(g).toBeLessThan(50)
+    expect(b).toBeLessThan(50)
+    const correct = pageText().querySelector('.word:not(.misspelled)')!
+    expect(getComputedStyle(correct).color).not.toBe(
+      getComputedStyle(pageText().querySelector('.word.misspelled')!).color,
+    )
+  })
+
+  it('underlines the misspelled words', async () => {
+    await open()
+
+    const style = getComputedStyle(pageText().querySelector('.word.misspelled')!)
+    expect(style.textDecoration).toContain('underline')
+  })
+
+  it('makes every word of the text a word: the correct ones too', async () => {
+    await open()
+
+    expect(wordSpans().map((w) => w.textContent)).toEqual([
+      'Ala', 'ma', 'kota', 'a', 'jey', 'tey', 'nie', 'ma',
+    ])
+  })
+
+  it('does not change the text', async () => {
+    await open()
+
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('counts the misspelled words', async () => {
+    await open()
+
+    expect(screen.getByText('2 misspelled')).toBeInTheDocument()
+  })
+
+  it('says when all words are correct', async () => {
+    await open({ ...spellOptions(), spell: (text) => wordsOf(text, []) })
+
+    expect(screen.getByText('No misspelled words')).toBeInTheDocument()
+    expect(misspelled()).toEqual([])
+  })
+
+  it('shows no count when the spelling was not checked', async () => {
+    await openPage({ ...spellOptions(), spell: () => new Error('The pl_PL dictionary is not available') })
+    await screen.findByRole('alert')
+
+    expect(screen.queryByText(/misspelled/)).toBeNull()
+  })
+
+  it('shows the backend reason when the spelling cannot be checked, and the text anyway', async () => {
+    await openPage({
+      ...spellOptions(),
+      spell: () => new Error('The pl_PL dictionary is not available'),
+    })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The spelling cannot be checked: The pl_PL dictionary is not available',
+    )
+    expect(pageText().textContent).toBe(TEXT)
+    expect(wordSpans()).toHaveLength(0) // no words known: nothing to click
+  })
+
+  it('does not check the spelling when the text could not be extracted', async () => {
+    await openPage({ ...spellOptions(), tei: () => new Error('The XML is empty') })
+    await screen.findByRole('alert')
+
+    expect(spellCalls()).toHaveLength(0)
+  })
+
+  it('checks the next page too, with its own text', async () => {
+    await open({
+      page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny teksz') }),
+      spell: (text) => wordsOf(text, ['teksz']),
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await waitFor(() => expect(misspelled()).toEqual(['teksz']))
+    expect(spellCalls().map((c) => c.body)).toEqual([
+      { text: TEXT, edition_id: UUID },
+      { text: 'Inny teksz', edition_id: UUID },
+    ])
+  })
+
+  it('uses code point offsets, as the backend does, after emoji', async () => {
+    const emoji = '😀😀 jey ma 😀 tey'
+    await openPage({
+      page: () => ({ content: xmlOf(emoji) }),
+      spell: (text) => wordsOf(text, ['jey', 'tey']),
+    })
+
+    await waitFor(() => expect(misspelled()).toEqual(['jey', 'tey']))
+    expect(pageText().textContent).toBe(emoji)
+  })
+
+  it('shows a word that does not fit the text as plain text instead of guessing', async () => {
+    await open({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: () => [
+        { text: 'jey', start: 15, end: 18, correct: false },
+        { text: 'zzz', start: 4, end: 7, correct: false }, // the text there is "ma "
+      ],
+    })
+
+    expect(misspelled()).toEqual(['jey'])
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('makes the misspelled words reachable with the keyboard, and only those', async () => {
+    await open()
+
+    const [first] = Array.from(pageText().querySelectorAll('.word.misspelled'))
+    expect(first).toHaveAttribute('tabindex', '0')
+    expect(pageText().querySelector('.word:not(.misspelled)')).not.toHaveAttribute(
+      'tabindex',
+    )
+  })
+})
+
+describe('correcting a word', () => {
+  const TEXT = 'Ala ma kota, a jey tey nie ma.'
+  const WRONG = ['jey', 'tey']
+  const options = (extra: Options = {}): Options => ({
+    page: () => ({ content: xmlOf(TEXT) }),
+    spell: (text) => wordsOf(text, WRONG),
+    ...extra,
+  })
+  const word = (text: string, which = 0) =>
+    screen.getAllByText(text, { selector: '.word' })[which]
+  const editor = () => screen.queryByRole('textbox', { name: /^Correct / })
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+
+  async function open(extra: Options = {}) {
+    await openPage(options(extra))
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+
+  describe('editing in place', () => {
+    it('turns the word into a text field when it is clicked', async () => {
+      await open()
+
+      await userEvent.click(word('jey'))
+
+      expect(editor()).toBeInTheDocument()
+      expect(editor()).toHaveValue('jey')
+      expect(editor()).toHaveAccessibleName('Correct "jey"')
+    })
+
+    it('has the field focused, with the word selected, ready to be typed over', async () => {
+      await open()
+
+      await userEvent.click(word('jey'))
+
+      expect(editor()).toHaveFocus()
+      const field = editor() as HTMLInputElement
+      expect(field.selectionStart).toBe(0)
+      expect(field.selectionEnd).toBe(3)
+    })
+
+    it('puts the field where the word was: the text around it stays', async () => {
+      await open()
+
+      await userEvent.click(word('jey'))
+
+      // the word is now the field (and, for a misspelled word, its button)
+      const field = editor()!.closest('.word-editor')!
+      expect(field.previousSibling?.textContent).toBe(' ')
+      expect(field.nextSibling?.textContent).toMatch(/^ /)
+      expect(pageText().textContent).toBe('Ala ma kota, a Legal spelling tey nie ma.')
+      expect(screen.queryByText('jey', { selector: '.word' })).toBeNull()
+    })
+
+    it('works for every word, the correct ones too', async () => {
+      await open()
+
+      await userEvent.click(word('kota'))
+
+      expect(editor()).toHaveValue('kota')
+    })
+
+    it('edits one word at a time', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(word('tey'))
+
+      expect(screen.getAllByRole('textbox', { name: /^Correct / })).toHaveLength(1)
+      expect(editor()).toHaveValue('tey')
+    })
+
+    it('Escape cancels: the word is back and nothing is sent', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      await userEvent.keyboard('X{Escape}')
+
+      expect(editor()).toBeNull()
+      expect(pageText().textContent).toBe(TEXT)
+      expect(correctionCalls()).toEqual([])
+    })
+
+    it('leaving the field cancels too', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      await userEvent.type(editor()!, 'X')
+
+      await userEvent.click(document.body)
+
+      expect(editor()).toBeNull()
+      expect(pageText().textContent).toBe(TEXT)
+      expect(correctionCalls()).toEqual([])
+    })
+
+    it('Enter on a word that was not changed sends nothing and closes the field', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.keyboard('{Enter}')
+
+      expect(editor()).toBeNull()
+      expect(correctionCalls()).toEqual([])
+    })
+
+    it('Enter on an empty field sends nothing', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      await userEvent.clear(editor()!)
+
+      await userEvent.keyboard('{Enter}')
+
+      expect(editor()).toBeNull()
+      expect(correctionCalls()).toEqual([])
+    })
+
+    it('the keyboard works: Enter on a focused misspelled word starts editing', async () => {
+      await open()
+      word('jey').focus()
+
+      await userEvent.keyboard('{Enter}')
+
+      expect(editor()).toHaveValue('jey')
+    })
+  })
+
+  describe('confirming', () => {
+    async function correct(wordText: string, to: string, which = 0) {
+      await userEvent.click(word(wordText, which))
+      await userEvent.keyboard(`${to}{Enter}`)
+    }
+
+    it('sends the offsets of the word, what it was and what it is to be', async () => {
+      await open()
+
+      await correct('jey', 'jej')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].method).toBe('POST')
+      expect(correctionCalls()[0].url).toBe(`/editions/${UUID}/pages/0/corrections`)
+      expect(correctionCalls()[0].body).toEqual({
+        start: TEXT.indexOf('jey'),
+        end: TEXT.indexOf('jey') + 3,
+        before: 'jey',
+        after: 'jej',
+      })
+    })
+
+    it('sends the offsets of the occurrence that was clicked, not the first', async () => {
+      await open({
+        page: () => ({ content: xmlOf('tey a tey a tey') }),
+        spell: (text) => wordsOf(text, ['tey']),
+      })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBe(5))
+
+      await userEvent.click(word('tey', 1))
+      await userEvent.keyboard('tej{Enter}')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].body).toEqual({
+        start: 6,
+        end: 9,
+        before: 'tey',
+        after: 'tej',
+      })
+    })
+
+    it('trims the new text, and allows spaces inside it', async () => {
+      await open()
+
+      await correct('jey', '  w całej  ')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].body).toMatchObject({ before: 'jey', after: 'w całej' })
+    })
+
+    it('shows the new text, and checks the spelling of it again', async () => {
+      await open({
+        spell: (text) => wordsOf(text, text.includes('jey') ? WRONG : ['tey']),
+      })
+      calls.length = 0
+
+      await correct('jey', 'jej')
+
+      await waitFor(() =>
+        expect(pageText().textContent).toBe('Ala ma kota, a jej tey nie ma.'),
+      )
+      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+        `POST /editions/${UUID}/pages/0/corrections`,
+        // "jey" was misspelled, so its new spelling is also made legal
+        `POST /editions/${UUID}/legal-spellings`,
+        'POST /tei/text', // the backend extracts the text of the new XML
+        'POST /spellcheck', // ... and it is checked again, once
+      ])
+      expect(calls.at(-1)!.body).toEqual({
+        text: 'Ala ma kota, a jej tey nie ma.',
+        edition_id: UUID,
+      })
+    })
+
+    it('the corrected word is no longer red, the others still are', async () => {
+      await open({
+        spell: (text) => wordsOf(text, WRONG.filter((w) => text.includes(w))),
+      })
+
+      await correct('jey', 'jej')
+
+      await waitFor(() =>
+        expect(
+          Array.from(pageText().querySelectorAll('.word.misspelled')).map(
+            (w) => w.textContent,
+          ),
+        ).toEqual(['tey']),
+      )
+      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
+    })
+
+    it('shows the new word in the XML, which the backend changed', async () => {
+      await open()
+
+      await correct('jey', 'jej')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+      const xml = screen.getByRole('region', { name: 'Page XML' }).textContent
+      expect(xml).toContain('jej')
+      expect(xml).not.toContain('jey')
+    })
+
+    it('does not touch the XML in the browser: it shows what the backend returns', async () => {
+      await open({ correct: () => ({ content: xmlOf('what the backend says') }) })
+
+      await correct('jey', 'jej')
+
+      await waitFor(() =>
+        expect(pageText().textContent).toBe('what the backend says'),
+      )
+    })
+
+    it('closes the field after the correction', async () => {
+      await open()
+
+      await correct('jey', 'jej')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+      expect(editor()).toBeNull()
+    })
+
+    it('leaves the ready flag alone', async () => {
+      await open()
+
+      await correct('jey', 'jej')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
+    })
+
+    it('can correct the same word again', async () => {
+      await open({ spell: (text) => wordsOf(text, []) })
+
+      await correct('jey', 'jej')
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+      await correct('jej', 'jej2')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jej2'))
+      expect(correctionCalls().map((c) => c.body)).toMatchObject([
+        { before: 'jey', after: 'jej' },
+        { before: 'jej', after: 'jej2' },
+      ])
+    })
+
+    it('uses the offsets of the new text for the next correction', async () => {
+      await open({ spell: (text) => wordsOf(text, []) })
+
+      await correct('jey', 'bardzo długie') // the text gets longer
+      await waitFor(() => expect(pageText().textContent).toContain('bardzo długie'))
+      await correct('nie', 'tak')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(2))
+      const text = 'Ala ma kota, a bardzo długie tey nie ma.'
+      expect(correctionCalls()[1].body).toEqual({
+        start: text.indexOf('nie'),
+        end: text.indexOf('nie') + 3,
+        before: 'nie',
+        after: 'tak',
+      })
+    })
+  })
+
+  describe('while the request runs', () => {
+    it('the field cannot be changed and the page cannot be left', async () => {
+      await open()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (
+            url: string,
+            init?: RequestInit,
+          ) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/corrections')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+      await userEvent.click(word('jey'))
+      await userEvent.keyboard('jej{Enter}')
+
+      await waitFor(() => expect(editor()).toBeDisabled())
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+      finish()
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+    })
+  })
+
+  describe('when it fails', () => {
+    it('losing the focus while the request runs does not cancel the correction', async () => {
+      await open()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (
+            url: string,
+            init?: RequestInit,
+          ) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/corrections')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+      await userEvent.click(word('jey'))
+      await userEvent.keyboard('jej{Enter}')
+      await waitFor(() => expect(editor()).toBeDisabled())
+
+      fireEvent.blur(editor()!) // what a browser may do to a disabled field
+
+      expect(editor()).toBeInTheDocument()
+      finish()
+      await waitFor(() => expect(pageText().textContent).toContain('jej'))
+    })
+
+    it('shows the backend reason, and keeps what was typed so it can be tried again', async () => {
+      await open({
+        correct: () =>
+          new Error('The text at 15-18 is not "jey": the page has changed'),
+      })
+
+      await userEvent.click(word('jey'))
+      await userEvent.keyboard('jej{Enter}')
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('the page has changed')
+      expect(editor()).toHaveValue('jej')
+      expect(editor()).toBeEnabled()
+    })
+  })
+
+  describe('with the entities', () => {
+    const ETEXT = 'Jan Kowalski mieszka w Paryżu.'
+    const entity = (text: string, label: string): Entity => ({
+      text,
+      label,
+      start: ETEXT.indexOf(text),
+      end: ETEXT.indexOf(text) + [...text].length,
+    })
+    const nerButton = () =>
+      screen.getByRole('button', { name: 'Named entity recognition' })
+
+    async function recognized(entities: Entity[]) {
+      await open({
+        page: () => ({ content: xmlOf(ETEXT) }),
+        spell: (text) => wordsOf(text, ['Kowalski']),
+        ner: () => entities,
+      })
+      await userEvent.click(nerButton())
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('mark.entity').length).toBeGreaterThan(0),
+      )
+    }
+
+    it('words inside an entity are words, and the entity is still marked', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+
+      const mark = pageText().querySelector('mark.entity')!
+      expect(mark.textContent).toBe('Jan Kowalski')
+      expect(Array.from(mark.querySelectorAll('.word')).map((w) => w.textContent)).toEqual([
+        'Jan',
+        'Kowalski',
+      ])
+      expect(mark.querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
+      expect(pageText().textContent).toBe(ETEXT)
+    })
+
+    it('a word inside an entity can be corrected', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+
+      await userEvent.click(word('Kowalski'))
+      await userEvent.keyboard('Kowalsky{Enter}')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].body).toMatchObject({
+        before: 'Kowalski',
+        after: 'Kowalsky',
+        start: ETEXT.indexOf('Kowalski'),
+      })
+    })
+
+    it('shows no entity dialog over a word that is being edited', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+      await userEvent.hover(pageText().querySelector('mark.entity')!)
+      expect(screen.queryByRole('dialog')).toBeInTheDocument()
+
+      await userEvent.click(word('Kowalski'))
+
+      expect(editor()).toBeInTheDocument()
+      expect(screen.queryByRole('dialog')).toBeNull()
+    })
+
+    it('the dialog is back for the entity once the editing is over', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+      await userEvent.click(word('Kowalski'))
+      await userEvent.keyboard('{Escape}')
+      await userEvent.unhover(pageText().querySelector('mark.entity')!)
+
+      await userEvent.hover(pageText().querySelector('mark.entity')!)
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('an entity that starts in the middle of a word cuts the word in two, and either part edits all of it', async () => {
+      // the entity is "Kowal", the word "Kowalski"
+      await recognized([entity('Kowal', 'persName')].map((e) => ({
+        ...e,
+        start: ETEXT.indexOf('Kowalski'),
+        end: ETEXT.indexOf('Kowalski') + 5,
+      })))
+      const pieces = [word('Kowal'), word('ski')]
+      expect(pieces[0].closest('mark')).not.toBeNull() // the part in the entity
+      expect(pieces[1].closest('mark')).toBeNull() // and the part after it
+
+      await userEvent.click(pieces[1])
+
+      expect(editor()).toHaveValue('Kowalski') // the whole word
+      // the word is the field, and (it is misspelled) its button
+      expect(pageText().textContent).toBe(
+        ETEXT.replace('Kowalski', 'Legal spelling'),
+      )
+    })
+
+    it('after a correction the entities of the old text are not shown for the new one', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+
+      await userEvent.click(word('Jan'))
+      await userEvent.keyboard('Janek{Enter}')
+
+      await waitFor(() => expect(pageText().textContent).toContain('Janek'))
+      expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+    })
+  })
+})
+
+describe('legal spellings', () => {
+  const TEXT = 'Ala ma kota, a jey tey nie ma. Jey!'
+  const WRONG = ['jey', 'Jey', 'tey']
+  const options = (extra: Options = {}): Options => ({
+    page: () => ({ content: xmlOf(TEXT) }),
+    spell: (text) => wordsOf(text, WRONG),
+    ...extra,
+  })
+  const word = (text: string, which = 0) =>
+    screen.getAllByText(text, { selector: '.word' })[which]
+  const editor = () => screen.queryByRole('textbox', { name: /^Correct / })
+  const legalButton = () => screen.queryByRole('button', { name: 'Legal spelling' })
+  const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+  const misspelled = () =>
+    Array.from(pageText().querySelectorAll('.word.misspelled')).map((w) => w.textContent)
+
+  async function open(extra: Options = {}) {
+    await openPage(options(extra))
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+
+  describe('the button', () => {
+    it('is offered next to the field of a misspelled word', async () => {
+      await open()
+
+      await userEvent.click(word('jey'))
+
+      expect(editor()).toBeInTheDocument()
+      expect(legalButton()).toBeInTheDocument()
+    })
+
+    it('is not offered for a word that is spelled correctly', async () => {
+      await open()
+
+      await userEvent.click(word('kota'))
+
+      expect(editor()).toBeInTheDocument()
+      expect(legalButton()).toBeNull()
+    })
+
+    it('is not there until the word is clicked', async () => {
+      await open()
+
+      expect(legalButton()).toBeNull()
+    })
+
+    it('sends the spelling to legal-spellings of the edition', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(legalCalls()[0].method).toBe('POST')
+      expect(legalCalls()[0].url).toBe(`/editions/${UUID}/legal-spellings`)
+      expect(legalCalls()[0].body).toEqual({ spelling: 'jey' })
+    })
+
+    it('sends the spelling as it is in the text, whatever is in the field', async () => {
+      await open()
+      await userEvent.click(word('tey'))
+      await userEvent.type(editor()!, 'xyz') // the field is being edited...
+
+      await userEvent.click(legalButton()!)
+
+      // ...but the button is about the spelling that was clicked
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(legalCalls()[0].body).toEqual({ spelling: 'tey' })
+    })
+
+    it('does not send a correction, and the text stays as it is', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(misspelled()).not.toContain('jey'))
+      expect(correctionCalls()).toEqual([])
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('the word is no longer red, the others still are', async () => {
+      await open()
+      expect(misspelled()).toEqual(['jey', 'tey', 'Jey'])
+      await userEvent.click(word('tey'))
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(misspelled()).toEqual(['jey', 'Jey']))
+    })
+
+    it('asks the backend again about the same text, for the edition', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      calls.length = 0
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(misspelled()).not.toContain('jey'))
+      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+        `POST /editions/${UUID}/legal-spellings`,
+        'POST /spellcheck', // the backend counts it as correct now
+      ])
+      expect(calls[1].body).toEqual({ text: TEXT, edition_id: UUID })
+    })
+
+    it('does not decide what is red: it shows what the backend says', async () => {
+      // the backend still says "jey" is wrong (e.g. it ignored the spelling)
+      await open({ spell: (text) => wordsOf(text, ['jey', 'tey', 'Jey']) })
+      await userEvent.click(word('jey'))
+      const fake = (fetch as unknown as {
+        getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+      }).getMockImplementation()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === '/spellcheck') {
+            const text = JSON.parse(String(init!.body)).text
+            return reply(true, 200, { words: wordsOf(text, ['jey', 'tey', 'Jey']) })
+          }
+          return fake(url, init)
+        }),
+      )
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      await waitFor(() => expect(editor()).toBeNull())
+      expect(misspelled()).toContain('jey') // as the backend says
+    })
+
+    it('closes the field and shows the new count', async () => {
+      await open()
+      expect(screen.getByText('3 misspelled')).toBeInTheDocument()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(editor()).toBeNull())
+      // "jey" and its capital form "Jey" are both legal now
+      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
+    })
+
+    it('makes the same spelling legal everywhere in the text, capital forms too', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(misspelled()).toEqual(['tey']))
+    })
+
+    it('can be reached with the keyboard: Tab from the field, Enter on the button', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.tab()
+      expect(legalButton()).toHaveFocus()
+      await userEvent.keyboard('{Enter}')
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    })
+
+    it('does not cancel the editing when it is clicked: the field is not left first', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      // the click reached the button: the request was sent
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    })
+
+    it('leaving both the field and the button still cancels', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(document.body)
+
+      expect(editor()).toBeNull()
+      expect(legalButton()).toBeNull()
+      expect(legalCalls()).toEqual([])
+    })
+
+    it('is disabled, with the field, while the request runs', async () => {
+      await open()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/legal-spellings')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+      await userEvent.click(word('jey'))
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(legalButton()).toBeDisabled())
+      expect(editor()).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+      finish()
+      await waitFor(() => expect(misspelled()).not.toContain('jey'))
+    })
+
+    it('shows the backend reason when it is refused, and the word stays red', async () => {
+      await open({ legal: () => new Error('Edition not found') })
+      await userEvent.click(word('jey'))
+
+      await userEvent.click(legalButton()!)
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
+      expect(editor()).toBeInTheDocument() // can be tried again
+      expect(legalButton()).toBeEnabled()
+      await userEvent.keyboard('{Escape}')
+      expect(misspelled()).toContain('jey') // still red
+    })
+
+    it('shows the reason when the spelling cannot be checked again, after it was saved', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === '/spellcheck') throw new Error('Network down')
+          return original(url, init)
+        }),
+      )
+
+      await userEvent.click(legalButton()!)
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The spelling cannot be checked: Network down',
+      )
+      expect(legalCalls()).toHaveLength(1) // it was saved
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('leaves the entities and the page as they are', async () => {
+      await open({ ner: () => [] })
+
+      await userEvent.click(word('jey'))
+      await userEvent.click(legalButton()!)
+
+      await waitFor(() => expect(misspelled()).not.toContain('jey'))
+      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
+      expect(
+        calls.filter((c) => c.method === 'PATCH' || c.url.includes('/entities')),
+      ).toEqual([])
+    })
+  })
+
+  describe('editing a misspelled word and pressing Enter', () => {
+    async function edit(wordText: string, to: string, which = 0) {
+      await userEvent.click(word(wordText, which))
+      await userEvent.keyboard(`${to}{Enter}`)
+    }
+
+    it('sends the correction, and then the new spelling to legal-spellings', async () => {
+      await open()
+      calls.length = 0
+
+      await edit('jey', 'jeyy')
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(calls.map((c) => `${c.method} ${c.url}`).slice(0, 2)).toEqual([
+        `POST /editions/${UUID}/pages/0/corrections`,
+        `POST /editions/${UUID}/legal-spellings`,
+      ])
+      expect(correctionCalls()[0].body).toMatchObject({ before: 'jey', after: 'jeyy' })
+      expect(legalCalls()[0].body).toEqual({ spelling: 'jeyy' })
+    })
+
+    it('the edited word is no longer red, even though the dictionary does not know it', async () => {
+      await open({ spell: (text) => wordsOf(text, ['jey', 'tey', 'Jey', 'jeyy']) })
+
+      await edit('jey', 'jeyy')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jeyy'))
+      // the edited word is a word, not red; the others that were wrong still are
+      expect(word('jeyy')).not.toHaveClass('misspelled')
+      expect(misspelled()).toEqual(['tey', 'Jey'])
+    })
+
+    it('checks the text once, after both requests', async () => {
+      await open()
+      calls.length = 0
+
+      await edit('jey', 'jeyy')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jeyy'))
+      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+        `POST /editions/${UUID}/pages/0/corrections`,
+        `POST /editions/${UUID}/legal-spellings`,
+        'POST /tei/text',
+        'POST /spellcheck',
+      ])
+    })
+
+    it('sends the spelling as it was confirmed: trimmed', async () => {
+      await open()
+
+      await edit('tey', '  tej  ')
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(legalCalls()[0].body).toEqual({ spelling: 'tej' })
+    })
+
+    it('sends no legal spelling for an edit into several words, which is not one', async () => {
+      await open()
+
+      await edit('tey', 'te j')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      await waitFor(() => expect(pageText().textContent).toContain('te j'))
+      expect(legalCalls()).toEqual([])
+    })
+
+    it('sends nothing when the word is not changed, or empty', async () => {
+      await open()
+      await userEvent.click(word('jey'))
+      await userEvent.keyboard('{Enter}')
+      await userEvent.click(word('jey'))
+      await userEvent.clear(editor()!)
+      await userEvent.keyboard('{Enter}')
+
+      expect(correctionCalls()).toEqual([])
+      expect(legalCalls()).toEqual([])
+    })
+
+    it('sends no legal spelling when the correction fails', async () => {
+      await open({ correct: () => new Error('The page has changed') })
+
+      await edit('jey', 'jeyy')
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      expect(legalCalls()).toEqual([])
+      expect(editor()).toHaveValue('jeyy') // kept, to try again
+    })
+
+    it('shows the corrected text, and says what failed, when only the legal spelling fails', async () => {
+      await open({ legal: () => new Error('Edition not found') })
+
+      await edit('jey', 'jeyy')
+
+      await waitFor(() => expect(pageText().textContent).toContain('jeyy'))
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The word was corrected, but not saved as a legal spelling: Edition not found',
+      )
+      expect(editor()).toBeNull()
+    })
+
+    it('is a plain correction for a word that was spelled correctly: nothing is made legal', async () => {
+      await open()
+      calls.length = 0
+
+      await edit('kota', 'kotu')
+
+      await waitFor(() => expect(pageText().textContent).toContain('kotu'))
+      expect(legalCalls()).toEqual([])
+      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+        `POST /editions/${UUID}/pages/0/corrections`,
+        'POST /tei/text',
+        'POST /spellcheck',
+      ])
+    })
+
+    it('shows no legal button for the correct word that is being edited', async () => {
+      await open()
+
+      await userEvent.click(word('kota'))
+
+      expect(legalButton()).toBeNull()
+    })
+
+    it('is disabled meanwhile, like any correction', async () => {
+      await open()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/legal-spellings')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+
+      await edit('jey', 'jeyy')
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      await waitFor(() => expect(editor()).toBeDisabled()) // still waiting for the legal one
+      finish()
+      await waitFor(() => expect(pageText().textContent).toContain('jeyy'))
+    })
+  })
+
+  describe('the legal spellings are asked for with every check', () => {
+    it('sends the edition with the spell check of every page', async () => {
+      await open({
+        page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }),
+      })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
+      expect(
+        calls
+          .filter((c) => c.url === '/spellcheck')
+          .map((c) => (c.body as { edition_id: string }).edition_id),
+      ).toEqual([UUID, UUID])
+    })
+
+    it('what was made legal stays so on the next page of the edition', async () => {
+      await open({
+        page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Znowu jey tutaj') }),
+      })
+      await userEvent.click(word('jey'))
+      await userEvent.click(legalButton()!)
+      await waitFor(() => expect(misspelled()).not.toContain('jey'))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pageText().textContent).toBe('Znowu jey tutaj'))
+      expect(misspelled()).toEqual([]) // "jey" is legal here too (the backend says so)
+    })
+  })
+})
+
 describe('page view', () => {
   it('shows the scan on the left and the text on the right', async () => {
     await openPage()
@@ -1270,6 +2416,7 @@ describe('page navigation', () => {
     expect(calledUrls()).toEqual([
       `GET /editions/${UUID}/pages/1`,
       'POST /tei/text',
+      'POST /spellcheck',
     ])
     expect(calls[1].body).toEqual({ xml: xmlOf('text of page 1') })
     expect(window.location.search).toBe('?page=1')

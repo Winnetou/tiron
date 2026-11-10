@@ -10,8 +10,8 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from app.db import Database
-from app.ontology import Correction, Edition, Page, Work
+from app.db import Database, get_conninfo
+from app.ontology import Correction, Edition, LegalSpelling, Page, Work
 from tests.conftest import real_connect
 
 pytestmark = pytest.mark.skipif(
@@ -24,7 +24,7 @@ def db(monkeypatch):
     monkeypatch.setattr("app.db.psycopg.connect", real_connect)
     database = Database()
     database.conn.execute(
-        "TRUNCATE collection, corrections, pages, editions, works"
+        "TRUNCATE collection, corrections, legal_spellings, pages, editions, works"
         " RESTART IDENTITY CASCADE"
     )
     yield database
@@ -314,3 +314,339 @@ def test_fetched_page_keeps_raw_text_and_tei_separately(db, edition):
     assert stored.raw_content == "raw ocr text"
     assert stored.corrected_content == tei
     assert db.get_page_by_number(edition.id, 5) == stored
+
+
+class TestApplyCorrection:
+    @pytest.fixture
+    def stored(self, db, edition):
+        return db.create_page(
+            Page(
+                edition_id=edition.id,
+                number=3,
+                raw_content="raw",
+                corrected_content="<TEI>old</TEI>",
+                scan_uri="u",
+            )
+        )
+
+    def corrections(self, db):
+        return db.conn.execute(
+            'SELECT page_id, "before", "after" FROM corrections ORDER BY id'
+        ).fetchall()
+
+    def test_saves_the_new_content_and_records_the_correction(self, db, stored):
+        updated = db.apply_correction(
+            stored.edition_id, 3, lambda xml: xml.replace("old", "new"), "old", "new"
+        )
+
+        assert updated.corrected_content == "<TEI>new</TEI>"
+        assert db.get_page(stored.id) == updated
+        assert self.corrections(db) == [
+            {"page_id": stored.id, "before": "old", "after": "new"}
+        ]
+
+    def test_changes_nothing_else_of_the_page(self, db, stored):
+        updated = db.apply_correction(stored.edition_id, 3, lambda xml: "x", "a", "b")
+
+        assert updated == stored.model_copy(update={"corrected_content": "x"})
+
+    def test_replace_gets_the_current_content(self, db, stored):
+        seen = []
+
+        def replace(xml):
+            seen.append(xml)
+            return xml + "!"
+
+        db.apply_correction(stored.edition_id, 3, replace, "a", "b")
+        db.apply_correction(stored.edition_id, 3, replace, "b", "c")
+
+        assert seen == ["<TEI>old</TEI>", "<TEI>old</TEI>!"]
+        assert db.get_page(stored.id).corrected_content == "<TEI>old</TEI>!!"
+        assert len(self.corrections(db)) == 2
+
+    def test_a_page_without_corrected_content_gets_an_empty_string(self, db, edition):
+        page = db.create_page(Page(edition_id=edition.id, number=8, raw_content="raw"))
+        seen = []
+
+        db.apply_correction(
+            edition.id, 8, lambda xml: seen.append(xml) or "new", "a", "b"
+        )
+
+        assert seen == [""]
+        assert db.get_page(page.id).corrected_content == "new"
+
+    def test_no_such_page(self, db, stored):
+        assert (
+            db.apply_correction(stored.edition_id, 99, lambda xml: "x", "a", "b")
+            is None
+        )
+        assert db.apply_correction(uuid4(), 3, lambda xml: "x", "a", "b") is None
+        assert self.corrections(db) == []
+        assert db.get_page(stored.id) == stored
+
+    def test_if_replace_raises_nothing_is_changed(self, db, stored):
+        def refuse(xml):
+            raise ValueError("no")
+
+        with pytest.raises(ValueError, match="no"):
+            db.apply_correction(stored.edition_id, 3, refuse, "a", "b")
+
+        assert db.get_page(stored.id) == stored
+        assert self.corrections(db) == []
+
+    @pytest.mark.parametrize(("before", "after"), [("", "b"), ("a", "")])
+    def test_if_the_correction_is_not_valid_the_page_is_not_changed_either(
+        self, db, stored, before, after
+    ):
+        with pytest.raises(ValueError):  # pydantic's ValidationError is one
+            db.apply_correction(
+                stored.edition_id, 3, lambda xml: "changed", before, after
+            )
+
+        assert db.get_page(stored.id) == stored  # rolled back with the correction
+        assert self.corrections(db) == []
+
+    def test_other_pages_are_left_alone(self, db, stored):
+        other = db.create_page(
+            Page(
+                edition_id=stored.edition_id,
+                number=4,
+                raw_content="r",
+                corrected_content="o",
+            )
+        )
+
+        db.apply_correction(stored.edition_id, 3, lambda xml: "x", "a", "b")
+
+        assert db.get_page(other.id) == other
+
+    def test_the_row_is_locked_while_it_is_corrected(self, db, stored):
+        """Another connection that wants the same page waits until the first is
+        done, and then sees its result (so two corrections cannot overwrite each
+        other)."""
+        import threading
+        import time
+
+        from tests.conftest import real_connect
+
+        order = []
+        second = real_connect(get_conninfo(), autocommit=True)
+
+        def slow(xml):
+            order.append("first reads")
+            time.sleep(0.4)
+            return xml + "1"
+
+        def other():
+            time.sleep(0.1)  # start while the first is holding the lock
+            with second.transaction():
+                row = second.execute(
+                    "SELECT corrected_content FROM pages WHERE id = %s FOR UPDATE",
+                    (stored.id,),
+                ).fetchone()
+                order.append(f"second sees {row[0]!r}")
+
+        thread = threading.Thread(target=other)
+        thread.start()
+        db.apply_correction(stored.edition_id, 3, slow, "a", "b")
+        thread.join()
+        second.close()
+
+        assert order == ["first reads", "second sees '<TEI>old</TEI>1'"]
+
+
+class TestLegalSpellings:
+    def rows(self, db):
+        return db.conn.execute(
+            "SELECT edition_id, spelling FROM legal_spellings ORDER BY spelling"
+        ).fetchall()
+
+    def test_adds_a_spelling_to_an_edition(self, db, edition):
+        added = db.add_legal_spelling(
+            LegalSpelling(edition_id=edition.id, spelling="jey")
+        )
+
+        assert added is True
+        assert self.rows(db) == [{"edition_id": edition.id, "spelling": "jey"}]
+
+    def test_the_same_spelling_again_is_not_added_twice(self, db, edition):
+        legal = LegalSpelling(edition_id=edition.id, spelling="jey")
+
+        first = db.add_legal_spelling(legal)
+        second = db.add_legal_spelling(legal)
+
+        assert (first, second) == (True, False)
+        assert len(self.rows(db)) == 1
+
+    def test_the_pair_is_unique_in_the_table_itself(self, db, edition):
+        db.conn.execute(
+            "INSERT INTO legal_spellings (edition_id, spelling) VALUES (%s, 'jey')",
+            (edition.id,),
+        )
+
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            db.conn.execute(
+                "INSERT INTO legal_spellings (edition_id, spelling) VALUES (%s, 'jey')",
+                (edition.id,),
+            )
+
+    def test_the_same_spelling_can_be_legal_in_many_editions(self, db, edition):
+        work = Work(author="Other")
+        other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
+
+        added = [
+            db.add_legal_spelling(LegalSpelling(edition_id=e.id, spelling="jey"))
+            for e in (edition, other)
+        ]
+
+        assert added == [True, True]
+        assert {row["edition_id"] for row in self.rows(db)} == {edition.id, other.id}
+
+    def test_an_edition_can_have_many_spellings(self, db, edition):
+        added = [
+            db.add_legal_spelling(LegalSpelling(edition_id=edition.id, spelling=s))
+            for s in ("jey", "tey", "raczey")
+        ]
+
+        assert added == [True, True, True]
+        assert [row["spelling"] for row in self.rows(db)] == ["jey", "raczey", "tey"]
+
+    def test_case_matters(self, db, edition):
+        added = [
+            db.add_legal_spelling(LegalSpelling(edition_id=edition.id, spelling=s))
+            for s in ("jey", "Jey", "JEY")
+        ]
+
+        assert added == [True, True, True]
+
+    def test_the_edition_must_be_stored(self, db):
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            db.add_legal_spelling(LegalSpelling(edition_id=uuid4(), spelling="jey"))
+
+        assert self.rows(db) == []
+
+    def test_an_empty_spelling_is_refused_by_the_table_too(self, db, edition):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.conn.execute(
+                "INSERT INTO legal_spellings (edition_id, spelling) VALUES (%s, '')",
+                (edition.id,),
+            )
+
+    def test_the_table_has_exactly_the_two_columns(self, db):
+        columns = db.conn.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = 'legal_spellings' ORDER BY ordinal_position"
+        ).fetchall()
+
+        assert [c["column_name"] for c in columns] == ["edition_id", "spelling"]
+
+    def test_gets_the_spellings_of_an_edition(self, db, edition):
+        work = Work(author="Other")
+        other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
+        for e, spelling in ((edition, "jey"), (edition, "tey"), (other, "raczey")):
+            db.add_legal_spelling(LegalSpelling(edition_id=e.id, spelling=spelling))
+
+        assert db.get_legal_spellings(edition.id) == {"jey", "tey"}
+        assert db.get_legal_spellings(other.id) == {"raczey"}
+
+    def test_an_edition_without_spellings_or_not_stored_has_none(self, db, edition):
+        assert db.get_legal_spellings(edition.id) == set()
+        assert db.get_legal_spellings(uuid4()) == set()
+
+    def test_the_schema_can_be_created_again(self, db, edition):
+        db.add_legal_spelling(LegalSpelling(edition_id=edition.id, spelling="jey"))
+
+        again = Database()  # runs the schema once more, on the existing tables
+        again.close()
+
+        assert len(self.rows(db)) == 1  # and nothing was lost
+
+
+class TestLegalSpellingsThroughTheEndpoint:
+    """POST /editions/{id}/legal-spellings with the real database behind it."""
+
+    @pytest.fixture
+    def client(self, db, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import app.main as main
+
+        monkeypatch.setattr(main, "db", db)
+        return TestClient(main.app)
+
+    def stored(self, db):
+        return db.conn.execute(
+            "SELECT edition_id, spelling FROM legal_spellings ORDER BY spelling"
+        ).fetchall()
+
+    def test_stores_the_spelling_for_the_edition(self, client, db, edition):
+        response = client.post(
+            f"/editions/{edition.id}/legal-spellings", json={"spelling": "jey"}
+        )
+
+        assert response.status_code == 201
+        assert response.json() == {"edition_id": str(edition.id), "spelling": "jey"}
+        assert self.stored(db) == [{"edition_id": edition.id, "spelling": "jey"}]
+
+    def test_again_is_a_200_and_stores_nothing_more(self, client, db, edition):
+        url = f"/editions/{edition.id}/legal-spellings"
+        client.post(url, json={"spelling": "jey"})
+
+        response = client.post(url, json={"spelling": "jey"})
+
+        assert response.status_code == 200
+        assert len(self.stored(db)) == 1
+
+    def test_an_edition_that_is_not_stored_is_a_404(self, client, db):
+        response = client.post(
+            f"/editions/{uuid4()}/legal-spellings", json={"spelling": "jey"}
+        )
+
+        assert response.status_code == 404
+        assert self.stored(db) == []
+
+    def test_each_edition_has_its_own_spellings(self, client, db, edition):
+        work = Work(author="Other")
+        other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
+
+        for e in (edition, other):
+            assert (
+                client.post(
+                    f"/editions/{e.id}/legal-spellings", json={"spelling": "jey"}
+                ).status_code
+                == 201
+            )
+
+        assert {row["edition_id"] for row in self.stored(db)} == {edition.id, other.id}
+
+    def test_the_spell_check_then_counts_the_spelling_as_correct(
+        self, client, db, edition
+    ):
+        # the dictionary: knows the ordinary words only
+        import app.spelling as spelling
+
+        class Dictionary:
+            def lookup(self, word):
+                return word.lower() in {"ala", "ma"}
+
+        spelling._checker = Dictionary()
+        try:
+            body = {"text": "Ala ma jey tey", "edition_id": str(edition.id)}
+            before = client.post("/spellcheck", json=body).json()["words"]
+            client.post(
+                f"/editions/{edition.id}/legal-spellings", json={"spelling": "jey"}
+            )
+            after = client.post("/spellcheck", json=body).json()["words"]
+        finally:
+            spelling._checker = None
+
+        assert [w["text"] for w in before if not w["correct"]] == ["jey", "tey"]
+        assert [w["text"] for w in after if not w["correct"]] == ["tey"]
+
+    def test_a_refused_spelling_stores_nothing(self, client, db, edition):
+        response = client.post(
+            f"/editions/{edition.id}/legal-spellings", json={"spelling": "je y"}
+        )
+
+        assert response.status_code == 422
+        assert self.stored(db) == []

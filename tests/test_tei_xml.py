@@ -6,9 +6,11 @@ import pytest
 
 from app.tei_xml import (
     TEI_NAMESPACE,
+    CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
+    replace_text_range,
     tag_text_range,
     tei_xml_to_text,
     text_to_tei_xml,
@@ -690,4 +692,208 @@ def test_random_entities_only_add_the_tags(seed):
         assert stripped == xml  # nothing but the two tags was added
         assert result.count(f"<{label}>") == 1
         assert result.count(f"</{label}>") == 1
+        delb.Document(result)  # still well-formed
+
+
+# --- replacing a word in the XML -------------------------------------------
+
+
+def replace(xml: str, before: str, after: str, occurrence: int = 0) -> str:
+    start, end = where(tei_xml_to_text(xml), before, occurrence)
+    return replace_text_range(xml, start, end, before, after)
+
+
+class TestReplaceTextRange:
+    def test_replaces_the_word_where_it_is(self):
+        xml = replace(generated("Ala ma kota jey nie"), "jey", "jej")
+
+        assert inner(xml) == "<p>Ala ma kota jej nie</p>"
+
+    @pytest.mark.parametrize(
+        ("text", "before", "after", "expected"),
+        [
+            ("jey ma kota", "jey", "jej", "<p>jej ma kota</p>"),
+            ("ma kota jey", "jey", "jej", "<p>ma kota jej</p>"),
+            ("jey", "jey", "jej", "<p>jej</p>"),
+            ("a\n\njey\n\nb", "jey", "jej", "<p>a</p><p>jej</p><p>b</p>"),
+            ("a\njey\nb", "jey", "jej", "<p>a<lb/>jej<lb/>b</p>"),
+            ("ala", "ala", "a", "<p>a</p>"),
+            ("a", "a", "bardzo długie słowo", "<p>bardzo długie słowo</p>"),
+        ],
+    )
+    def test_at_the_ends_of_lines_and_paragraphs_and_with_other_lengths(
+        self, text, before, after, expected
+    ):
+        assert inner(replace(generated(text), before, after)) == expected
+
+    def test_the_text_afterwards_is_the_old_text_with_the_word_replaced(self):
+        text = "Wielu Biskupów krak., że dawnieyszych kościół"
+        xml = replace(generated(text), "dawnieyszych", "dawniejszych")
+
+        assert tei_xml_to_text(xml) == text.replace("dawnieyszych", "dawniejszych")
+
+    def test_only_the_occurrence_at_the_offsets_is_replaced(self):
+        xml = replace(generated("tey i tey i tey"), "tey", "tej", occurrence=1)
+
+        assert inner(xml) == "<p>tey i tej i tey</p>"
+
+    def test_offsets_count_code_points(self):
+        xml = replace(generated("😀😀 jey 😀"), "jey", "jej")
+
+        assert inner(xml) == "<p>😀😀 jej 😀</p>"
+
+    def test_a_word_next_to_punctuation(self):
+        xml = replace(generated('(jey), "tey"!'), "jey", "jej")
+
+        assert inner(xml) == '<p>(jej), "tey"!</p>'
+
+    def test_special_characters_in_the_new_text_are_escaped(self):
+        xml = replace(generated("a jey b"), "jey", "<&>")
+
+        assert inner(xml) == "<p>a &lt;&amp;&gt; b</p>"
+        assert tei_xml_to_text(xml) == "a <&> b"
+
+    def test_the_new_text_may_have_spaces_inside(self):
+        xml = replace(generated("a wcałey b"), "wcałey", "w całej")
+
+        assert inner(xml) == "<p>a w całej b</p>"
+
+    def test_the_element_around_the_word_stays(self):
+        xml = tei("<p>a <persName>Janek</persName> b</p>")
+
+        assert inner(replace(xml, "Janek", "Jan")) == (
+            "<p>a <persName>Jan</persName> b</p>"
+        )
+
+    def test_a_word_inside_inline_markup(self):
+        xml = tei("<p>a <hi>jey b</hi> c</p>")
+
+        assert inner(replace(xml, "jey", "jej")) == "<p>a <hi>jej b</hi> c</p>"
+
+    def test_a_word_split_by_markup_goes_into_the_first_node(self):
+        xml = tei("<p>x Ja<hi>n</hi>owi y</p>")
+        assert tei_xml_to_text(xml) == "x Janowi y"
+
+        result = replace(xml, "Janowi", "Janek")
+
+        assert inner(result) == "<p>x Janek<hi/> y</p>"
+        assert tei_xml_to_text(result) == "x Janek y"
+
+    def test_comments_are_left_where_they_are(self):
+        xml = tei("<p>jey<!-- c --> tey</p>")
+
+        assert inner(replace(xml, "jey", "jej")) == "<p>jej<!-- c --> tey</p>"
+
+    def test_whitespace_in_hand_edited_xml(self):
+        xml = tei("<p>\n   Ala   jey\n   tey\n</p>")
+
+        result = replace(xml, "jey", "jej")
+
+        assert tei_xml_to_text(result) == "Ala jej tey"
+        assert "Ala   jej\n   tey" in result  # the layout of the source is kept
+
+    def test_the_declaration_and_the_header_are_kept(self):
+        with_declaration = generated("a jey b")
+        without = with_declaration.split("?>", 1)[1]
+
+        assert replace(with_declaration, "jey", "jej").startswith("<?xml")
+        assert replace(without, "jey", "jej").startswith("<TEI")
+        assert "<title>OCR text of a page</title>" in replace(without, "jey", "jej")
+
+    def test_it_can_be_replaced_again_and_back(self):
+        xml = generated("a jey b")
+
+        there = replace(xml, "jey", "jej")
+
+        assert replace(there, "jej", "jey") == xml
+
+    def test_marking_an_entity_afterwards_still_works(self):
+        xml = replace(generated("Jan Kowalsky mieszka"), "Kowalsky", "Kowalski")
+
+        assert inner(tag(xml, "Jan Kowalski")) == (
+            "<p><persName>Jan Kowalski</persName> mieszka</p>"
+        )
+
+
+class TestReplaceTextRangeErrors:
+    def test_the_text_at_the_offsets_is_not_the_old_word(self):
+        with pytest.raises(TextChanged, match="page has changed"):
+            replace_text_range(generated("Ala ma kota"), 0, 3, "Jan", "Jas")
+
+    @pytest.mark.parametrize(
+        ("start", "end"), [(0, 99), (5, 5), (6, 2), (-1, 2), (99, 100)]
+    )
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            replace_text_range(generated("Ala ma kota"), start, end, "Ala", "Ola")
+
+    @pytest.mark.parametrize(
+        ("text", "start", "end"),
+        [
+            ("Ala ma kota", 0, 6),  # "Ala ma": a space inside
+            ("Ala\nma kota", 0, 6),  # a line break inside
+            ("x Ala y", 1, 5),  # " Ala": a space at the start
+            ("Ala y", 0, 4),  # "Ala ": a space at the end
+        ],
+    )
+    def test_the_old_text_must_not_have_spaces(self, text, start, end):
+        xml = generated(text)
+        before = tei_xml_to_text(xml)[start:end]
+
+        with pytest.raises(CannotReplace, match="spaces or line breaks"):
+            replace_text_range(xml, start, end, before, "Ola")
+
+    @pytest.mark.parametrize(
+        ("after", "message"),
+        [
+            ("", "empty"),
+            (" jej", "start or end with a space"),
+            ("jej ", "start or end with a space"),
+            ("je\nj", "one line"),
+            ("je\tj", "one line"),
+            ("je\x00j", "one line"),
+            ("jey", "same as the old"),
+        ],
+    )
+    def test_the_new_text_must_be_acceptable(self, after, message):
+        xml = generated("a jey b")
+        start, end = where(tei_xml_to_text(xml), "jey")
+
+        with pytest.raises(CannotReplace, match=message):
+            replace_text_range(xml, start, end, "jey", after)
+
+    @pytest.mark.parametrize(
+        "xml", ["", "not xml", "<a/>", f"<TEI xmlns='{TEI_NAMESPACE}'/>"]
+    )
+    def test_xml_that_is_not_tei(self, xml):
+        with pytest.raises(InvalidTei):
+            replace_text_range(xml, 0, 1, "a", "b")
+
+    def test_nothing_is_changed_after_an_error(self):
+        xml = generated("a jey b")
+
+        with pytest.raises(CannotReplace):
+            replace_text_range(xml, 2, 5, "jey", "")
+
+        assert replace(xml, "jey", "jej") == xml.replace("jey", "jej")
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_words_replaced_only_change_the_word(seed):
+    rng = random.Random(seed)
+    text = random_text(rng)
+    xml = generated(text)
+    extracted = tei_xml_to_text(xml)
+    words = [m for m in re.finditer(r"\S+", extracted)]
+    for _ in range(5):
+        match = rng.choice(words)
+        before = match.group()
+        after = rng.choice(["zażółć", "x", "ab cd", "Jan", "😀😀", "a<b&c"])
+        if after == before:
+            continue
+
+        result = replace_text_range(xml, match.start(), match.end(), before, after)
+
+        expected = extracted[: match.start()] + after + extracted[match.end() :]
+        assert tei_xml_to_text(result) == expected
         delb.Document(result)  # still well-formed

@@ -1,4 +1,5 @@
 import type { Entity } from './entities'
+import type { Word } from './segments'
 
 export const DEFAULT_PAGE_NUMBER = 0
 
@@ -128,6 +129,66 @@ export function tagEntity(
       end: entity.end,
       text: entity.text,
       label,
+    }),
+  })
+}
+
+/**
+ * Calls POST /spellcheck: the backend lists every word of a plain text, with
+ * its character offsets and whether it is spelled correctly. The backend alone
+ * decides what a word is. With the edition the text is from, the spellings that
+ * were made legal in that edition count as correct.
+ */
+export async function spellcheck(
+  text: string,
+  editionId?: string,
+): Promise<Word[]> {
+  const { words } = await request<{ words: Word[] }>('/spellcheck', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(
+      editionId === undefined ? { text } : { text, edition_id: editionId },
+    ),
+  })
+  return words
+}
+
+/**
+ * Calls POST /editions/{editionId}/legal-spellings: the backend records that a
+ * spelling is legal in the edition, although the dictionary does not know it.
+ * Sending one that is already recorded is fine.
+ */
+export async function addLegalSpelling(
+  editionId: string,
+  spelling: string,
+): Promise<void> {
+  await request<unknown>(`/editions/${editionId}/legal-spellings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spelling }),
+  })
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/corrections: the backend
+ * replaces the word with `after` in the XML of the page, saves it and records
+ * the correction (before -> after), and returns the updated page. Like for
+ * entities, the frontend only gives the word's offsets and the new text.
+ */
+export function correctWord(
+  editionId: string,
+  number: number,
+  word: Word,
+  after: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/corrections`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: word.start,
+      end: word.end,
+      before: word.text,
+      after,
     }),
   })
 }

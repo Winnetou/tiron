@@ -10,6 +10,7 @@ Connection details are read from environment variables:
 """
 
 import os
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -18,7 +19,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from app.ontology import Correction, Edition, Page, Work
+from app.ontology import Correction, Edition, LegalSpelling, Page, Work
 
 
 def get_conninfo() -> str:
@@ -69,6 +70,13 @@ CREATE TABLE IF NOT EXISTS corrections (
 
 CREATE TABLE IF NOT EXISTS collection (
     id uuid PRIMARY KEY
+);
+
+-- spellings that are legal in an edition; each edition has each spelling once
+CREATE TABLE IF NOT EXISTS legal_spellings (
+    edition_id uuid NOT NULL REFERENCES editions (id),
+    spelling text NOT NULL CHECK (spelling <> ''),
+    PRIMARY KEY (edition_id, spelling)
 );
 
 -- one work per (author, title), case-insensitive; unknown values never match
@@ -194,6 +202,44 @@ class Database:
         ).fetchone()
         return Page.model_validate(row) if row else None
 
+    def apply_correction(
+        self,
+        edition_id: UUID,
+        number: int,
+        replace: Callable[[str], str],
+        before: str,
+        after: str,
+    ) -> Page | None:
+        """Correct the corrected content of a page and record the Correction.
+
+        `replace` is given the page's current corrected content (an empty string
+        if it has none) and returns the new one, which is saved; the Correction
+        (`before` -> `after`) is stored for the page. All of it happens in one
+        transaction with the page's row locked, so the content `replace` sees is
+        the one that is replaced, another edit cannot get in between, and the
+        page is never changed without its Correction being recorded, or the
+        other way round. If `replace` raises, nothing is changed.
+
+        Returns the updated page, or None if there is no such page.
+        """
+        with self.conn.transaction():
+            row = self.conn.execute(
+                "SELECT * FROM pages WHERE edition_id = %s AND number = %s FOR UPDATE",
+                (edition_id, number),
+            ).fetchone()
+            if row is None:
+                return None
+            page = Page.model_validate(row)
+            corrected_content = replace(page.corrected_content or "")
+            updated = self.conn.execute(
+                "UPDATE pages SET corrected_content = %s WHERE id = %s RETURNING *",
+                (corrected_content, page.id),
+            ).fetchone()
+            self.create_correction(
+                Correction(page_id=page.id, before=before, after=after)
+            )
+        return Page.model_validate(updated)
+
     def update_page(
         self,
         edition_id: UUID,
@@ -279,6 +325,31 @@ class Database:
             "SELECT * FROM corrections WHERE id = %s", (correction_id,)
         ).fetchone()
         return Correction.model_validate(row) if row else None
+
+    # Legal spellings
+
+    def add_legal_spelling(self, legal: LegalSpelling) -> bool:
+        """Store a spelling as legal in an edition.
+
+        Returns True if it was added, and False if the edition already had that
+        spelling (the pair is unique), in which case nothing is changed. The
+        edition must be stored: otherwise psycopg raises ForeignKeyViolation.
+        """
+        row = self.conn.execute(
+            "INSERT INTO legal_spellings (edition_id, spelling) VALUES (%s, %s)"
+            " ON CONFLICT DO NOTHING RETURNING edition_id",
+            (legal.edition_id, legal.spelling),
+        ).fetchone()
+        return row is not None
+
+    def get_legal_spellings(self, edition_id: UUID) -> set[str]:
+        """The spellings that are legal in an edition (none if it has none, or is
+        not stored)."""
+        rows = self.conn.execute(
+            "SELECT spelling FROM legal_spellings WHERE edition_id = %s",
+            (edition_id,),
+        ).fetchall()
+        return {row["spelling"] for row in rows}
 
     # Collection
 

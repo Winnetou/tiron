@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.ontology import Page
+from app.ontology import Page, Spelling
 
 
 class PageView(BaseModel):
@@ -95,3 +95,49 @@ class EntityTag(BaseModel):
         if self.end <= self.start:
             raise ValueError("end must be greater than start")
         return self
+
+
+class SpellcheckRequest(BaseModel):
+    text: str = Field(max_length=100_000)
+    # The edition the text is from: its legal spellings count as correct.
+    edition_id: UUID | None = None
+
+
+class Word(BaseModel):
+    """A word of a text and whether it is spelled correctly:
+    `text[start:end] == word.text`."""
+
+    text: str
+    start: int
+    end: int
+    correct: bool
+
+
+class SpellcheckResult(BaseModel):
+    words: list[Word]
+
+
+class WordCorrection(BaseModel):
+    """A word of the text of a page that the user corrected: the characters
+    `start` to `end`, which are `before`, become `after`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    before: str = Field(min_length=1)
+    after: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check_range(self) -> WordCorrection:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class NewLegalSpelling(BaseModel):
+    """A spelling to be made legal in an edition (the edition is in the path)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spelling: Spelling

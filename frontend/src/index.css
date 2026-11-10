@@ -208,12 +208,21 @@ button {
   font-weight: 600;
 }
 
+.spell-count,
 .entity-count {
-  margin-left: auto;
   font-size: 0.85rem;
   color: #c00000;
 }
 
+.spell-count {
+  margin-left: auto;
+}
+
+.entity-count {
+  margin-left: 0.75rem;
+}
+
+.spell-count + .view-switch,
 .entity-count + .view-switch {
   margin-left: 0.75rem;
 }
@@ -277,4 +286,56 @@ button {
 .entity-dialog button {
   width: 100%;
   margin-top: 0.4rem;
+}
+
+/* Words: any word can be clicked to correct it; the misspelled ones are red. */
+.word {
+  cursor: text;
+  border-radius: 0.15rem;
+}
+
+.word:hover {
+  background: rgba(0, 0, 0, 0.07);
+}
+
+.word.misspelled {
+  color: #c00000;
+  text-decoration: underline wavy #c00000;
+  text-underline-offset: 0.2em;
+}
+
+.word-input {
+  box-sizing: content-box;
+  padding: 0 0.15em;
+  border: 1px solid #1a73e8;
+  border-radius: 0.2rem;
+  background: #fff;
+  color: #1a1a1a;
+  font: inherit;
+  line-height: inherit;
+}
+
+/* The editor of a word: the field, and for a misspelled word its button. */
+.word-editor {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  white-space: normal;
+}
+
+.legal-button {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid #1a73e8;
+  border-radius: 0.2rem;
+  background: #e8f0fe;
+  color: #174ea6;
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.legal-button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
