@@ -339,3 +339,58 @@ button {
   opacity: 0.5;
   cursor: default;
 }
+
+/* The structure view: the text, and the dialog next to the selected part. */
+.structure-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.structure-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.structure-box {
+  cursor: text;
+}
+
+.structure-box ::selection {
+  background: #b9d3fb;
+}
+
+.structure-popup {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 0.25rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+}
+
+.structure-popup select {
+  font: inherit;
+  padding: 0.15rem;
+}
+
+.notice {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #1b6b2a;
+}
+
+/* A tool of the sidebar that is on (the structure view). */
+.sidebar-button[aria-pressed='true'] {
+  background: #333;
+  color: #fff;
+}

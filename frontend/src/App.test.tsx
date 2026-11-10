@@ -21,7 +21,7 @@ const xmlOf = (text: string) =>
   `<?xml version="1.0"?><TEI><teiHeader>HEADER</teiHeader><text><p>${text}</p></text></TEI>`
 /** What the backend's POST /tei/text answers for such XML. */
 const textOf = (xml: string) =>
-  xml.match(/<p>(.*)<\/p>/)![1].replace(/<[^>]+>/g, '') // tags are not text
+  xml.match(/<p>([\s\S]*)<\/p>/)![1].replace(/<[^>]+>/g, '') // tags are not text, and the text may have several lines
 
 const PAGE: Page = {
   id: 'a8ae3c6d-c4cf-4d11-82d0-112582bb355f',
@@ -30,6 +30,13 @@ const PAGE: Page = {
   scan_uri: SCAN,
   ready: false,
   content: xmlOf('Ala ma kota'),
+}
+
+interface SectionBody {
+  start: number
+  end: number
+  text: string
+  section: string
 }
 
 interface TagBody {
@@ -75,6 +82,12 @@ interface Options {
    * backend does: the entity's text gets a `label` element around it in the XML.
    */
   tag?: (body: TagBody, page: Page) => Partial<Page> | Error
+  /**
+   * Answer of POST .../sections: the changes to the page. Defaults to what the
+   * backend does for a header, a footer or a page number: the text gets an
+   * element around it in the XML.
+   */
+  section?: (body: SectionBody, page: Page) => Partial<Page> | Error
 }
 
 const reply = (ok: boolean, status: number, body: unknown) => ({
@@ -149,8 +162,12 @@ function fakeBackend(options: Options = {}) {
     }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
+    const sectioning = url.match(/\/pages\/(\d+)\/sections$/)
     const number = Number(
-      tagging?.[1] ?? correcting?.[1] ?? url.split('/').pop(),
+      tagging?.[1] ??
+        correcting?.[1] ??
+        sectioning?.[1] ??
+        url.split('/').pop(),
     )
     const page = pageFor(number)
     if (page instanceof Error) return failure(404, page)
@@ -160,6 +177,21 @@ function fakeBackend(options: Options = {}) {
         ? options.correct(body, current)
         : { content: current.content.replace(body.before, body.after) }
       if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    if (sectioning) {
+      const current = pages.get(number) ?? page
+      const changes = options.section
+        ? options.section(body, current)
+        : {
+            content: current.content.replace(
+              body.text,
+              `<${body.section}>${body.text}</${body.section}>`,
+            ),
+          }
+      if (changes instanceof Error) return failure(422, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
       return reply(true, 200, updated)
@@ -696,13 +728,14 @@ describe('named entity recognition', () => {
     expect(nerCalls()).toHaveLength(0)
   })
 
-  it('leaves the other tool buttons as stubs', async () => {
+  it('leaves the Correction button as a stub', async () => {
     await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
+    const before = calls.length
 
-    await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
     await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
     expect(nerCalls()).toHaveLength(0)
+    expect(calls).toHaveLength(before) // no request
     expect(pageText().textContent).toBe('Jan Kowalski')
   })
 })
@@ -1235,6 +1268,505 @@ describe('confirming or rejecting an entity', () => {
       expect(pageText().querySelectorAll('mark')).toHaveLength(3)
       expect(mark('Paryżu')).toHaveClass('confirmed')
       expect(mark('Adam Mickiewicz')).not.toHaveClass('confirmed')
+    })
+  })
+})
+
+describe('structure view', () => {
+  const TEXT = '84 KATEDRA\n\ncle przekazał\nI. Alfa\nII. Beta\nkoniec\n\nstopka 85'
+  const options = (extra: Options = {}): Options => ({
+    page: () => ({ content: xmlOf(TEXT) }),
+    ...extra,
+  })
+  const structureButton = () => screen.getByRole('button', { name: 'Structure' })
+  const dialog = () => screen.queryByRole('dialog', { name: 'Mark the selected text' })
+  const dropdown = () => screen.getByRole('combobox', { name: 'Section' })
+  const confirmButton = () => screen.getByRole('button', { name: 'Confirm' })
+  const sectionCalls = () => calls.filter((c) => c.url.endsWith('/sections'))
+
+  async function open(extra: Options = {}, shown = TEXT) {
+    await openPage(options(extra))
+    await waitFor(() => expect(pageText().textContent).toBe(shown))
+  }
+
+  async function openStructure(extra: Options = {}) {
+    await open(extra)
+    await userEvent.click(structureButton())
+  }
+
+  /** Select `selected` in the text, as the user does with the mouse. */
+  function select(selected: string, occurrence = 0) {
+    const box = pageText()
+    const node = box.firstChild as Text
+    let from = -1
+    for (let i = 0; i <= occurrence; i++) from = node.data.indexOf(selected, from + 1)
+    const range = document.createRange()
+    range.setStart(node, from)
+    range.setEnd(node, from + selected.length)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.mouseUp(box)
+  }
+
+  afterEach(() => window.getSelection()?.removeAllRanges())
+
+  describe('the view', () => {
+    it('is switched to with the Structure button, which shows it is on', async () => {
+      await open()
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+
+      await userEvent.click(structureButton())
+
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByText(/Select some text to mark it/)).toBeInTheDocument()
+    })
+
+    it('shows the text of the page, and nothing else in it', async () => {
+      await openStructure()
+
+      expect(pageText().textContent).toBe(TEXT)
+      expect(pageText()).toBeInTheDocument()
+    })
+
+    it('goes back to the text when the button is pressed again', async () => {
+      await openStructure()
+
+      await userEvent.click(structureButton())
+
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
+      expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+    })
+
+    it('is left with the Text or the XML button', async () => {
+      await openStructure()
+
+      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('region', { name: 'Page XML' })).toBeInTheDocument()
+
+      await userEvent.click(structureButton())
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
+    })
+
+    it('is left with the NER button too, as the entities are shown in the text', async () => {
+      await open({ ner: () => [] })
+      await userEvent.click(structureButton())
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Named entity recognition' }),
+      )
+
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+    })
+
+    it('is kept when moving to another page', async () => {
+      await open({ page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }) })
+      await userEvent.click(structureButton())
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('makes no request by itself', async () => {
+      await open()
+      const before = calls.length
+
+      await userEvent.click(structureButton())
+
+      expect(calls).toHaveLength(before)
+    })
+  })
+
+  describe('selecting text', () => {
+    it('shows no dialog until text is selected', async () => {
+      await openStructure()
+
+      expect(dialog()).toBeNull()
+    })
+
+    it('shows a dialog when text is selected', async () => {
+      await openStructure()
+
+      select('84 KATEDRA')
+
+      expect(dialog()).toBeInTheDocument()
+    })
+
+    it('the dialog has a dropdown of the sections and a Confirm button', async () => {
+      await openStructure()
+
+      select('84 KATEDRA')
+
+      expect(
+        within(dropdown()).getAllByRole('option').map((o) => o.textContent),
+      ).toEqual([
+        'Choose a section…',
+        'Page header',
+        'Page footer',
+        'Page number',
+        'Table of contents',
+      ])
+      expect(confirmButton()).toBeInTheDocument()
+    })
+
+    it('nothing is chosen at first, so Confirm cannot be pressed', async () => {
+      await openStructure()
+
+      select('84 KATEDRA')
+
+      expect(dropdown()).toHaveValue('')
+      expect(confirmButton()).toBeDisabled()
+    })
+
+    it('Confirm can be pressed once a section is chosen', async () => {
+      await openStructure()
+      select('84 KATEDRA')
+
+      await userEvent.selectOptions(dropdown(), 'Page header')
+
+      expect(confirmButton()).toBeEnabled()
+    })
+
+    it('the dialog is not part of the text', async () => {
+      await openStructure()
+
+      select('84 KATEDRA')
+
+      expect(pageText().textContent).toBe(TEXT)
+      expect(pageText()).not.toContainElement(dialog())
+    })
+
+    it('selecting only sends nothing', async () => {
+      await openStructure()
+      const before = calls.length
+
+      select('84 KATEDRA')
+
+      expect(calls).toHaveLength(before)
+    })
+
+    it('a new selection replaces the dialog, with nothing chosen yet', async () => {
+      await openStructure()
+      select('84 KATEDRA')
+      await userEvent.selectOptions(dropdown(), 'Page header')
+
+      select('stopka 85')
+
+      expect(screen.getAllByRole('dialog')).toHaveLength(1)
+      expect(dropdown()).toHaveValue('')
+    })
+
+    it('the dialog goes when the selection is cleared by a click', async () => {
+      await openStructure()
+      select('84 KATEDRA')
+
+      window.getSelection()!.removeAllRanges()
+      fireEvent.mouseUp(pageText())
+
+      expect(dialog()).toBeNull()
+    })
+
+    it('a selection of only spaces gives no dialog', async () => {
+      await openStructure()
+
+      select('\n\n')
+
+      expect(dialog()).toBeNull()
+    })
+
+    it('a selection outside the text gives no dialog', async () => {
+      await openStructure()
+      const range = document.createRange()
+      range.selectNodeContents(screen.getByText(/Select some text to mark it/))
+      window.getSelection()!.removeAllRanges()
+      window.getSelection()!.addRange(range)
+
+      fireEvent.mouseUp(pageText())
+
+      expect(dialog()).toBeNull()
+    })
+
+    it('Escape closes the dialog, wherever the keyboard focus is', async () => {
+      await openStructure()
+      select('84 KATEDRA')
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(dialog()).toBeNull()
+      expect(window.getSelection()!.isCollapsed).toBe(true)
+    })
+
+    it('Escape closes the dialog while the dropdown has the focus', async () => {
+      await openStructure()
+      select('84 KATEDRA')
+      dropdown().focus()
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(dialog()).toBeNull()
+    })
+
+    it('Escape does nothing when there is no dialog', async () => {
+      await openStructure()
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(dialog()).toBeNull()
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('a selection made with the keyboard (Shift and the arrows) shows it too', async () => {
+      await openStructure()
+      const box = pageText()
+      const node = box.firstChild as Text
+      const range = document.createRange()
+      range.setStart(node, 0)
+      range.setEnd(node, 10)
+      window.getSelection()!.removeAllRanges()
+      window.getSelection()!.addRange(range)
+
+      fireEvent.keyUp(box, { key: 'ArrowRight', shiftKey: true })
+
+      expect(dialog()).toBeInTheDocument()
+    })
+
+    it('the dialog is for the text it was made in: another page has none', async () => {
+      await open({ page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }) })
+      await userEvent.click(structureButton())
+      select('84 KATEDRA')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
+      expect(dialog()).toBeNull()
+    })
+  })
+
+  describe('confirming', () => {
+    async function mark(selected: string, section: string, occurrence = 0) {
+      select(selected, occurrence)
+      await userEvent.selectOptions(dropdown(), section)
+      await userEvent.click(confirmButton())
+    }
+
+    it.each([
+      ['Page header', 'header'],
+      ['Page footer', 'footer'],
+      ['Page number', 'page_number'],
+      ['Table of contents', 'toc'],
+    ])('sends %s to the backend as %s', async (label, section) => {
+      await openStructure()
+
+      await mark('84 KATEDRA', label)
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].method).toBe('POST')
+      expect(sectionCalls()[0].url).toBe(`/editions/${UUID}/pages/0/sections`)
+      expect(sectionCalls()[0].body).toEqual({
+        start: 0,
+        end: 10,
+        text: '84 KATEDRA',
+        section,
+      })
+    })
+
+    it('sends the offsets of the selection, over line breaks too', async () => {
+      await openStructure()
+
+      await mark('I. Alfa\nII. Beta', 'Table of contents')
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      const start = TEXT.indexOf('I. Alfa')
+      expect(sectionCalls()[0].body).toEqual({
+        start,
+        end: start + 'I. Alfa\nII. Beta'.length,
+        text: 'I. Alfa\nII. Beta',
+        section: 'toc',
+      })
+    })
+
+    it('sends the offsets of the occurrence that was selected', async () => {
+      await open({ page: () => ({ content: xmlOf('84 a 84 b') }) }, '84 a 84 b')
+      await userEvent.click(structureButton())
+
+      select('84', 1)
+      await userEvent.selectOptions(dropdown(), 'Page number')
+      await userEvent.click(confirmButton())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].body).toMatchObject({ start: 5, end: 7, text: '84' })
+    })
+
+    it('sends the text without the spaces and line breaks around the selection', async () => {
+      await openStructure()
+
+      await mark('\nI. Alfa\n', 'Table of contents')
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].body).toMatchObject({ text: 'I. Alfa' })
+    })
+
+    it('counts code points, as the backend does, when there is an emoji before it', async () => {
+      const emoji = '😀 84 😀'
+      await open({ page: () => ({ content: xmlOf(emoji) }) }, emoji)
+      await userEvent.click(structureButton())
+
+      select('84')
+      await userEvent.selectOptions(dropdown(), 'Page number')
+      await userEvent.click(confirmButton())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].body).toMatchObject({ start: 2, end: 4, text: '84' })
+    })
+
+    it('closes the dialog and clears the selection', async () => {
+      await openStructure()
+
+      await mark('84 KATEDRA', 'Page header')
+
+      await waitFor(() => expect(dialog()).toBeNull())
+      expect(window.getSelection()!.isCollapsed).toBe(true)
+    })
+
+    it('shows the page with the XML that the backend returns', async () => {
+      await openStructure()
+
+      await mark('84 KATEDRA', 'Page header')
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toContain(
+          '<header>84 KATEDRA</header>',
+        ),
+      )
+    })
+
+    it('does not touch the XML in the browser', async () => {
+      await openStructure({ section: () => ({ content: xmlOf('what the backend says') }) })
+
+      await mark('84 KATEDRA', 'Page header')
+
+      await userEvent.click(await screen.findByRole('button', { name: 'XML' }))
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toBe(
+          xmlOf('what the backend says'),
+        ),
+      )
+    })
+
+    it('tells what was marked', async () => {
+      await openStructure()
+
+      await mark('84 KATEDRA', 'Page footer')
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Marked as page footer.')
+    })
+
+    it('asks the backend for the text again, which can have changed', async () => {
+      // a table of contents splits a paragraph: the text has a blank line more
+      await openStructure({
+        section: () => ({
+          content: xmlOf(TEXT.replace('I. Alfa\nII. Beta', '\nI. Alfa\nII. Beta\n')),
+        }),
+      })
+      calls.length = 0
+
+      await mark('I. Alfa\nII. Beta', 'Table of contents')
+
+      await waitFor(() =>
+        expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+          `POST /editions/${UUID}/pages/0/sections`,
+          'POST /tei/text',
+          'POST /spellcheck', // the words of the new text
+        ]),
+      )
+    })
+
+    it('stays in the structure view with the new text', async () => {
+      await openStructure({
+        section: () => ({ content: xmlOf(`${TEXT}!`) }),
+      })
+
+      await mark('84 KATEDRA', 'Page header')
+
+      await waitFor(() => expect(pageText().textContent).toBe(`${TEXT}!`))
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('can mark another section right after', async () => {
+      await openStructure()
+      await mark('84 KATEDRA', 'Page header')
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      await waitFor(() => expect(confirmButton).toThrow()) // the dialog is gone
+
+      await mark('stopka 85', 'Page footer')
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(2))
+      expect(sectionCalls()[1].body).toMatchObject({ text: 'stopka 85', section: 'footer' })
+    })
+
+    it('is disabled while the request runs', async () => {
+      await openStructure()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (
+            url: string,
+            init?: RequestInit,
+          ) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/sections')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+
+      await mark('84 KATEDRA', 'Page header')
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled())
+      select('stopka 85')
+      await userEvent.selectOptions(dropdown(), 'Page footer')
+      expect(confirmButton()).toBeDisabled()
+      finish()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled())
+    })
+
+    it('shows the backend reason when the section cannot be marked, and the text as it was', async () => {
+      await openStructure({
+        section: () => new Error('The selection spans more than one paragraph or line'),
+      })
+
+      await mark('84 KATEDRA', 'Page header')
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The selection spans more than one paragraph or line',
+      )
+      expect(pageText().textContent).toBe(TEXT)
+      expect(screen.queryByRole('status')).toBeNull() // nothing was marked
+    })
+
+    it('the notice goes with the next request', async () => {
+      await openStructure()
+      await mark('84 KATEDRA', 'Page header')
+      expect(await screen.findByRole('status')).toBeInTheDocument()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
     })
   })
 })

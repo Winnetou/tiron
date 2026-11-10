@@ -1,5 +1,6 @@
 import type { Entity } from './entities'
 import type { Word } from './segments'
+import type { SectionKind, TextSelection } from './sections'
 
 export const DEFAULT_PAGE_NUMBER = 0
 
@@ -189,6 +190,32 @@ export function correctWord(
       end: word.end,
       before: word.text,
       after,
+    }),
+  })
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/sections: the backend marks
+ * the selected text as a section of the page (a header, a footer, the page
+ * number or the table of contents) in the XML of the page, saves it, and returns
+ * the updated page. The frontend only says which stretch of the text it is and
+ * which section; the backend finds the place in the XML and chooses the TEI
+ * element.
+ */
+export function markSection(
+  editionId: string,
+  number: number,
+  selection: TextSelection,
+  section: SectionKind,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/sections`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: selection.start,
+      end: selection.end,
+      text: selection.text,
+      section,
     }),
   })
 }

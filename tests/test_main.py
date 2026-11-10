@@ -1506,3 +1506,217 @@ class TestSpellcheckWithLegalSpellings:
 
         assert response.status_code == 200
         assert self.wrong(response) == ["jey"]
+
+
+class TestMarkPageSection:
+    TEXT = "84 KATEDRA\n\ncle przekazał\nI. Alfa\nII. Beta\nkoniec\n\nstopka 85"
+    XML = str(text_to_tei_xml(TEXT))
+
+    def body(self, selection, section, **extra):
+        start = self.TEXT.index(selection)
+        return {
+            "start": start,
+            "end": start + len(selection),
+            "text": selection,
+            "section": section,
+            **extra,
+        }
+
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/sections"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_content=self.TEXT,
+                corrected_content=self.XML,
+                scan_uri="https://polona.pl/s.jpg",
+            )
+        }
+
+        def update(edition_id, number, **changes):
+            state["page"] = state["page"].model_copy(update=changes)
+            return state["page"]
+
+        monkeypatch.setattr(
+            db, "get_page_by_number", mock.Mock(side_effect=lambda *a: state["page"])
+        )
+        monkeypatch.setattr(db, "update_page", mock.Mock(side_effect=update))
+        return state
+
+    def post(self, stored, body):
+        return client.post(self.url(stored["page"].edition_id), json=body)
+
+    @pytest.mark.parametrize(
+        ("selection", "section", "markup"),
+        [
+            ("84 KATEDRA", "header", '<fw type="header">84 KATEDRA</fw>'),
+            ("stopka 85", "footer", '<fw type="footer">stopka 85</fw>'),
+            ("85", "page_number", '<fw type="pageNum">85</fw>'),
+        ],
+    )
+    def test_marks_the_text_with_the_element_of_the_section(
+        self, stored, selection, section, markup
+    ):
+        response = self.post(stored, self.body(selection, section))
+
+        assert response.status_code == 200
+        assert markup in stored["page"].corrected_content
+        assert tei_xml_to_text(stored["page"].corrected_content) == self.TEXT
+
+    def test_the_table_of_contents_is_a_div_around_paragraphs(self, stored):
+        response = self.post(stored, self.body("I. Alfa\nII. Beta", "toc"))
+
+        assert response.status_code == 200
+        xml = stored["page"].corrected_content
+        assert '<div type="toc"><p><lb/>I. Alfa<lb/>II. Beta</p></div>' in xml
+        assert "<div><p><lb/>koniec</p><p>stopka 85</p></div>" in xml
+
+    def test_saves_the_new_xml_as_the_corrected_content_and_nothing_else(self, stored):
+        page = stored["page"]
+
+        self.post(stored, self.body("84 KATEDRA", "header"))
+
+        db.update_page.assert_called_once()
+        args, kwargs = db.update_page.call_args
+        assert args == (page.edition_id, 4)
+        assert list(kwargs) == ["corrected_content"]
+
+    def test_the_response_is_the_updated_page_view(self, stored):
+        body = self.post(stored, self.body("84 KATEDRA", "header")).json()
+
+        assert set(body) == {
+            "id",
+            "edition_id",
+            "number",
+            "scan_uri",
+            "ready",
+            "content",
+        }
+        assert '<fw type="header">84 KATEDRA</fw>' in body["content"]
+
+    def test_marking_again_changes_nothing_and_saves_nothing(self, stored):
+        self.post(stored, self.body("84 KATEDRA", "header"))
+        db.update_page.reset_mock()
+
+        response = self.post(stored, self.body("84 KATEDRA", "header"))
+
+        assert response.status_code == 200
+        db.update_page.assert_not_called()
+
+    def test_page_not_stored(self, stored):
+        db.get_page_by_number.side_effect = None
+        db.get_page_by_number.return_value = None
+
+        response = client.post(self.url(), json=self.body("84 KATEDRA", "header"))
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Page not found"
+        db.update_page.assert_not_called()
+
+    def test_the_text_at_the_offsets_is_not_the_selection(self, stored):
+        body = self.body("84 KATEDRA", "header") | {"text": "other"}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 409
+        assert "page has changed" in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("selection", "section", "message"),
+        [
+            ("84 KATEDRA\n\ncle przekazał", "header", "more than one paragraph"),
+            ("koniec\n\nstopka 85", "footer", "more than one paragraph"),
+        ],
+    )
+    def test_a_section_that_cannot_be_marked_is_a_422_with_the_reason(
+        self, stored, selection, section, message
+    ):
+        response = self.post(stored, self.body(selection, section))
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("corrected_content", "message"),
+        [
+            (None, "no TEI XML"),
+            ("", "no TEI XML"),
+            ("84 KATEDRA", "not well-formed"),
+            ("<a/>", "root element must be <TEI>"),
+        ],
+    )
+    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+        stored["page"] = stored["page"].model_copy(
+            update={"corrected_content": corrected_content}
+        )
+
+        response = self.post(stored, self.body("84 KATEDRA", "header"))
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"section": "page"},
+            {"section": "div"},
+            {"section": "persName"},
+            {"section": "Header"},
+            {"section": ""},
+            {"section": None},
+            {"end": 0},
+            {"start": 5, "end": 5},
+            {"start": -1},
+            {"text": ""},
+            {"text": None},
+            {"raw_content": "x"},  # not a field of this request
+            {"label": "persName"},  # an entity field
+        ],
+    )
+    def test_bad_requests_are_rejected_before_anything_happens(self, stored, change):
+        response = self.post(stored, self.body("84 KATEDRA", "header") | change)
+
+        assert response.status_code == 422
+        db.get_page_by_number.assert_not_called()
+        db.update_page.assert_not_called()
+
+    @pytest.mark.parametrize("missing", ["start", "end", "text", "section"])
+    def test_every_field_is_needed(self, stored, missing):
+        body = self.body("84 KATEDRA", "header")
+        del body[missing]
+
+        assert client.post(self.url(), json=body).status_code == 422
+
+    def test_invalid_path_arguments(self, stored):
+        body = self.body("84 KATEDRA", "header")
+
+        assert (
+            client.post("/editions/nope/pages/4/sections", json=body).status_code == 422
+        )
+        assert client.post(self.url(number=-1), json=body).status_code == 422
+
+    def test_does_not_check_the_collection_or_call_polona(
+        self, polona, stored, monkeypatch
+    ):
+        check = mock.Mock(return_value=False)
+        monkeypatch.setattr(db, "check_edition_in_collection", check)
+
+        response = self.post(stored, self.body("84 KATEDRA", "header"))
+
+        assert response.status_code == 200
+        check.assert_not_called()
+        polona.assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        path = "/editions/{edition_id}/pages/{number}/sections"
+        assert "post" in schema["paths"][path]
+        assert "SectionMark" in schema["components"]["schemas"]

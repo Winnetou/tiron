@@ -7,7 +7,7 @@ import delb
 from delb import TagNode, tag
 from delb.nodes import TextNode
 
-from app.models import EntityLabel
+from app.models import EntityLabel, SectionKind
 
 TEI_NAMESPACE = "http://www.tei-c.org/ns/1.0"
 
@@ -294,6 +294,36 @@ def _serialise(root: TagNode, original: str) -> str:
     return str(root)
 
 
+def _attributes(node: TagNode) -> dict[str, str]:
+    """The attributes of an element, by name."""
+    return {key[1]: str(attribute.value) for key, attribute in node.attributes.items()}
+
+
+def _locate(
+    xml: str, start: int, end: int, text: str, what: str = "selection"
+) -> tuple[TagNode, list[_Source], int, int]:
+    """Parse the XML and find the text `start` to `end` in it: the root, the
+    source of each character of the text, and the range without the spaces and
+    line breaks at its ends.
+
+    Raises InvalidTei, TextChanged (if `text` is not what is at the offsets), and
+    CannotTag (if the range has no text but spaces).
+    """
+    root = _parse_tei(xml)
+    extracted, sources = _extract(_text_element(root))
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {text!r}: the page has changed"
+        )
+    while extracted[start].isspace():
+        start += 1
+        if start == end:
+            raise CannotTag(f"The {what} has no text")
+    while extracted[end - 1].isspace():
+        end -= 1
+    return root, sources, start, end
+
+
 def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str:
     """Put the characters `start` to `end` of the text of a TEI document inside
     an element called `label`, and return the changed XML.
@@ -319,18 +349,22 @@ def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str
     """
     if label not in get_args(EntityLabel):
         raise CannotTag(f"{label!r} is not an entity label")
-    root = _parse_tei(xml)
-    extracted, sources = _extract(_text_element(root))
-    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
-        raise TextChanged(
-            f"The text at {start}-{end} is not {text!r}: the page has changed"
-        )
-    while extracted[start].isspace():
-        start += 1
-        if start == end:
-            raise CannotTag("The entity has no text")
-    while extracted[end - 1].isspace():
-        end -= 1
+    return _wrap_inline(xml, start, end, text, label, {}, what="entity")
+
+
+def _wrap_inline(
+    xml: str,
+    start: int,
+    end: int,
+    text: str,
+    name: str,
+    attributes: dict[str, str],
+    what: str = "selection",
+) -> str:
+    """The inline wrapping behind tag_text_range, for an element `name` with the
+    given attributes (see there for what it does and when it refuses). `what`
+    is how the messages call the text: "entity", "selection"."""
+    root, sources, start, end = _locate(xml, start, end, text, what)
     first, last = sources[start], sources[end - 1]
     assert first is not None and last is not None  # not whitespace: real text
     (first_node, first_index), (last_node, last_index) = first, last
@@ -346,31 +380,35 @@ def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str
         + 1
     ]
     if any(_contains_structure(node) for node in covered):
-        raise CannotTag("The entity spans more than one paragraph or line")
+        raise CannotTag(f"The {what} spans more than one paragraph or line")
     if isinstance(start_child, TagNode) and not _blank_before(
         start_child, first_node, first_index
     ):
-        raise CannotTag(f"The entity starts inside <{start_child.local_name}>")
+        raise CannotTag(f"The {what} starts inside <{start_child.local_name}>")
     if isinstance(end_child, TagNode) and not _blank_after(
         end_child, last_node, last_index
     ):
-        raise CannotTag(f"The entity ends inside <{end_child.local_name}>")
-    if parent.local_name == label and all(
-        any(node is other for other in covered)
-        for node in children
-        if not (isinstance(node, TextNode) and not node.content.strip())
+        raise CannotTag(f"The {what} ends inside <{end_child.local_name}>")
+    if (
+        parent.local_name == name
+        and _attributes(parent) == attributes
+        and all(
+            any(node is other for other in covered)
+            for node in children
+            if not (isinstance(node, TextNode) and not node.content.strip())
+        )
     ):
         return xml  # already marked, and the whole of the element
     # Comments and processing instructions are not reachable as children, so
-    # they could not be moved along with the entity.
+    # they could not be moved along with the selection.
     serialised = str(parent)
     if "<!--" in serialised or "<?" in serialised:
         raise CannotTag(
-            f"The entity is in a <{parent.local_name}> that contains a comment or "
+            f"The {what} is in a <{parent.local_name}> that contains a comment or "
             "processing instruction, which cannot be moved"
         )
 
-    # Cut the text nodes at the ends of the entity.
+    # Cut the text nodes at the ends of the selection.
     if isinstance(end_child, TextNode) and last_index + 1 < len(end_child.content):
         tail = end_child.content[last_index + 1 :]
         end_child.content = end_child.content[: last_index + 1]
@@ -383,7 +421,7 @@ def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str
             end_child = moved
         covered[0] = moved
 
-    wrapper = TagNode(label, namespace=TEI_NAMESPACE)
+    wrapper = TagNode(name, attributes, namespace=TEI_NAMESPACE)
     covered[0].add_preceding_siblings(wrapper)
     for node in covered:
         node.detach()
@@ -463,3 +501,256 @@ def replace_text_range(xml: str, start: int, end: int, before: str, after: str) 
         else:
             node.detach()
     return _serialise(root, xml)
+
+
+# The sections of a page that can be marked, by the name the API gives them: the
+# element they become and its attributes. A running header or footer and a
+# printed page number are forme work (<fw>) in TEI.
+SECTIONS: dict[str, tuple[str, dict[str, str]]] = {
+    "header": ("fw", {"type": "header"}),
+    "footer": ("fw", {"type": "footer"}),
+    "page_number": ("fw", {"type": "pageNum"}),
+    "toc": ("div", {"type": "toc"}),
+}
+
+
+def _blocks_around(node: TextNode, text_element: TagNode) -> TagNode | None:
+    """The nearest block (paragraph, ...) that contains the text node."""
+    parent = node.parent
+    while parent is not None and parent is not text_element:
+        if parent.local_name in _BLOCK_ELEMENTS:
+            return parent
+        parent = parent.parent
+    return None
+
+
+def _is_blank(node: Any) -> bool:
+    return isinstance(node, TextNode) and not node.content.strip()
+
+
+def _leading(node: Any) -> bool:
+    """Is it a line break or spaces: what only separates lines?"""
+    return _is_blank(node) or (isinstance(node, TagNode) and node.local_name == "lb")
+
+
+def _split_before(block: TagNode, boundary: Any) -> TagNode:
+    """Cut `block` in two before its child `boundary`: the part from `boundary`
+    on moves into a new element like `block`, right after it, which is returned."""
+    nodes = []
+    node: Any = boundary
+    while node is not None:
+        nodes.append(node)
+        node = node.fetch_following_sibling()
+    part = TagNode(block.local_name, _attributes(block), namespace=TEI_NAMESPACE)
+    block.add_following_siblings(part)
+    for node in nodes:
+        node.detach()
+    part.append_children(*nodes)
+    return part
+
+
+def _wrap_blocks(
+    xml: str, start: int, end: int, text: str, name: str, attributes: dict[str, str]
+) -> str:
+    """Put whole paragraphs inside an element `name` (a <div>), for the
+    characters `start` to `end` of the text (see mark_section)."""
+    root, sources, start, end = _locate(xml, start, end, text)
+    first, last = sources[start], sources[end - 1]
+    assert first is not None and last is not None
+    (first_node, first_index), (last_node, last_index) = first, last
+    text_element = _text_element(root)
+
+    first_block = _blocks_around(first_node, text_element)
+    last_block = _blocks_around(last_node, text_element)
+    for block in (first_block, last_block):
+        if block is None or block.local_name != "p":
+            where = (
+                "outside a paragraph" if block is None else f"in a <{block.local_name}>"
+            )
+            raise CannotTag(f"The selection starts or ends {where}, not in a paragraph")
+    assert first_block is not None and last_block is not None
+    container = first_block.parent
+    if last_block.parent is not container:
+        raise CannotTag(
+            "The selection spans paragraphs in different divisions of the page"
+        )
+
+    # Where the selection starts and ends within its paragraphs: the child of the
+    # paragraph, and whether the text of that child starts/ends the selection.
+    start_child = _child_of(first_block, first_node)
+    end_child = _child_of(last_block, last_node)
+    if isinstance(start_child, TagNode) and not _blank_before(
+        start_child, first_node, first_index
+    ):
+        raise CannotTag(f"The selection starts inside <{start_child.local_name}>")
+    if isinstance(end_child, TagNode) and not _blank_after(
+        end_child, last_node, last_index
+    ):
+        raise CannotTag(f"The selection ends inside <{end_child.local_name}>")
+
+    def has_real_content(nodes: list[Any]) -> bool:
+        return any(not _leading(node) for node in nodes)
+
+    def siblings(block: TagNode) -> list[Any]:
+        return list(block.iterate_children())
+
+    starts_block = not has_real_content(
+        siblings(first_block)[: siblings(first_block).index(start_child)]
+    ) and not (
+        isinstance(start_child, TextNode) and start_child.content[:first_index].strip()
+    )
+    ends_block = not has_real_content(
+        siblings(last_block)[siblings(last_block).index(end_child) + 1 :]
+    ) and not (
+        isinstance(end_child, TextNode) and end_child.content[last_index + 1 :].strip()
+    )
+
+    # Already exactly the content of such a div: nothing to do.
+    if (
+        container.local_name == name
+        and _attributes(container) == attributes
+        and starts_block
+        and ends_block
+        and all(
+            any(
+                node is other
+                for other in _blocks_between(container, first_block, last_block)
+            )
+            for node in container.iterate_children()
+            if not _is_blank(node)
+        )
+    ):
+        return xml
+
+    for block, splitting in (
+        (first_block, not starts_block),
+        (last_block, not ends_block),
+    ):
+        serialised = str(block)
+        if splitting and ("<!--" in serialised or "<?" in serialised):
+            raise CannotTag(
+                "The paragraph contains a comment or processing instruction, "
+                "which cannot be moved when the paragraph is split"
+            )
+
+    # Cut the end first (it may be in the same paragraph as the start): a text
+    # node is cut after the selection, and the part after it becomes a paragraph
+    # of its own, with the line break that starts its first line.
+    selected_last = last_block
+    if not ends_block:
+        if (
+            isinstance(end_child, TextNode)
+            and end_child.content[last_index + 1 :].strip()
+        ):
+            tail = end_child.content[last_index + 1 :]
+            end_child.content = end_child.content[: last_index + 1]
+            (boundary,) = end_child.add_following_siblings(tail)
+        else:
+            boundary = end_child.fetch_following_sibling()
+            while boundary is not None and _is_blank(boundary):
+                boundary = boundary.fetch_following_sibling()
+        if boundary is not None:
+            _split_before(last_block, boundary)
+
+    selected_first = first_block
+    if not starts_block:
+        if (
+            isinstance(start_child, TextNode)
+            and start_child.content[:first_index].strip()
+        ):
+            head = start_child.content[:first_index]
+            rest = start_child.content[first_index:]
+            start_child.content = head
+            (boundary,) = start_child.add_following_siblings(rest)
+        else:
+            boundary = start_child
+        # a line break belongs to the line it starts, so it goes with it
+        previous = boundary.fetch_preceding_sibling()
+        while previous is not None and _leading(previous):
+            boundary = previous
+            previous = boundary.fetch_preceding_sibling()
+        selected_first = _split_before(first_block, boundary)
+        if first_block is last_block:
+            selected_last = selected_first
+
+    selected = _blocks_between(container, selected_first, selected_last)
+    wrapper = TagNode(name, attributes, namespace=TEI_NAMESPACE)
+    selected[0].add_preceding_siblings(wrapper)
+    for node in selected:
+        node.detach()
+    wrapper.append_children(*selected)
+    _keep_divs_valid(container)
+    return _serialise(root, xml)
+
+
+def _blocks_between(container: TagNode, first: TagNode, last: TagNode) -> list[Any]:
+    """The children of `container` from `first` to `last`, both included."""
+    children = list(container.iterate_children())
+    i = next(i for i, child in enumerate(children) if child is first)
+    j = next(i for i, child in enumerate(children) if child is last)
+    return children[i : j + 1]
+
+
+def _keep_divs_valid(container: TagNode) -> None:
+    """In TEI nothing but <div>s (and <fw>) may follow a <div> in the same
+    element, so the paragraphs after the first <div> of `container` are each put
+    in a plain <div>, which is what keeps the document valid."""
+    run: list[Any] = []
+    seen_div = False
+    for child in list(container.iterate_children()):
+        if not isinstance(child, TagNode):
+            continue  # text (spaces): stays where it is
+        if child.local_name == "div":
+            seen_div = True
+        if seen_div and child.local_name not in ("div", "fw"):
+            run.append(child)
+            continue
+        if run:
+            _wrap_in_div(run)
+            run = []
+    if run:
+        _wrap_in_div(run)
+
+
+def _wrap_in_div(nodes: list[Any]) -> None:
+    div = TagNode("div", namespace=TEI_NAMESPACE)
+    nodes[0].add_preceding_siblings(div)
+    for node in nodes:
+        node.detach()
+    div.append_children(*nodes)
+
+
+def mark_section(xml: str, start: int, end: int, section: str, text: str) -> str:
+    """Mark the characters `start` to `end` of the text of a TEI document as a
+    section of the page, and return the changed XML.
+
+    `section` is one of SECTIONS: a running `header` or `footer` and the printed
+    `page_number` become <fw type="header">, <fw type="footer"> and
+    <fw type="pageNum"> around the text, and `toc` (the table of contents)
+    becomes <div type="toc">. `start` and `end` are character offsets into what
+    tei_xml_to_text returns for the same XML, and `text` is what is expected
+    there; if it is not, the text has changed since the offsets were taken.
+
+    The <fw> elements go around the text itself, like an entity does (see
+    tag_text_range), so the text does not change, and what they cannot do is
+    start or end inside other markup or span paragraphs.
+
+    A <div> may not contain bare text, nor be inside a paragraph, so it goes
+    around whole paragraphs: a paragraph that the selection starts or ends in the
+    middle of is split in two there (the line break that starts a line goes with
+    that line), and the paragraphs of the selection are put in the <div>. The
+    text then has a blank line where a paragraph was split. Because TEI does not
+    allow paragraphs after a <div>, the paragraphs that follow are put in a plain
+    <div> each.
+
+    If the selection is already exactly such a section, nothing is changed.
+
+    Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
+    offsets is not `text`, and CannotTag if the section cannot be marked.
+    """
+    if section not in get_args(SectionKind):
+        raise CannotTag(f"{section!r} is not a section of a page")
+    name, attributes = SECTIONS[section]
+    if name == "div":
+        return _wrap_blocks(xml, start, end, text, name, attributes)
+    return _wrap_inline(xml, start, end, text, name, attributes)

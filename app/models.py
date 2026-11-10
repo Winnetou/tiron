@@ -78,6 +78,10 @@ class NerResult(BaseModel):
 EntityLabel = Literal["date", "geogName", "orgName", "persName", "placeName", "time"]
 
 
+# The sections of a page that can be marked, as the API calls them.
+SectionKind = Literal["header", "footer", "page_number", "toc"]
+
+
 class EntityTag(BaseModel):
     """An entity to mark in the XML of a page: `label` becomes the TEI element
     around the characters `start` to `end` of the page's text, which must be
@@ -141,3 +145,22 @@ class NewLegalSpelling(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     spelling: Spelling
+
+
+class SectionMark(BaseModel):
+    """A section of a page to mark in the XML: the characters `start` to `end`
+    of the page's text, which must be `text` (as the client saw it), are marked
+    as the `section`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str = Field(min_length=1)
+    section: SectionKind
+
+    @model_validator(mode="after")
+    def check_range(self) -> SectionMark:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
