@@ -318,6 +318,77 @@ added). Nothing else is changed: this only records the spelling.
   keeps a word that was made legal from being red again on the next page of the
   edition, or after a reload. Nothing lists them yet.
 
+### The sections marked in a page
+
+`POST /tei/sections` takes `{"xml": "..."}` like `POST /tei/text` (422 in the same
+cases) and lists the sections that are marked in it: the elements that
+`POST .../sections` makes (`<fw>`, `<div type="toc">`, `<noteGrp>`, `<note>`),
+outer ones first. Each has `start` and `end` (offsets into the text that
+`/tei/text` gives, counted the way Python does) and `open` and `close`, its tags
+as written in the XML, e.g. `<note n="1">` and `</note>`. Entities and the plain
+`<div>`s that follow a table of contents are not sections. Nothing is stored.
+
+### Marking the sections of a page
+
+`POST /editions/{edition_id}/pages/{number}/sections` marks a stretch of the
+text of a stored page as a section of the page, in its TEI XML, and saves the
+changed XML as the page's `corrected_content`:
+
+```json
+{"start": 0, "end": 10, "text": "84 KATEDRA", "section": "header"}
+```
+
+`start`/`end` are offsets into the text that `POST /tei/text` gives for the page
+(counted the way Python does), and `text` is the selection as the client saw it:
+if it is not what is at those offsets the page has changed, and the answer is
+409. The response is the updated page, like `GET`. The `section` is one of:
+
+| `section`     | In the XML                          | What it is                      |
+|---------------|-------------------------------------|---------------------------------|
+| `header`      | `<fw type="header">…</fw>`          | the running head of the page    |
+| `footer`      | `<fw type="footer">…</fw>`          | the foot of the page            |
+| `page_number` | `<fw type="pageNum">…</fw>`         | the printed page number         |
+| `toc`         | `<div type="toc"><p>…</p></div>`    | the table of contents           |
+| `note`        | `<note>…</note>`, `<note n="1">…</note>` | one note (a footnote, say) |
+| `note_group`  | `<noteGrp><note>…</note>…</noteGrp>` | a group of notes               |
+
+`fw` (forme work) is the TEI element for the furniture of a printed page.
+
+- **`header`, `footer` and `page_number` go around the text itself**, the way an
+  entity does (see "Marking an entity in the XML"), so the text does not change.
+  The same limits apply: they can span a line break, but cannot span paragraphs
+  or start or end inside other markup, and marking the same thing again changes
+  nothing. A page number can be inside a header (`<fw type="header"><fw
+  type="pageNum">84</fw> KATEDRA</fw>`).
+- **`toc` goes around whole paragraphs.** TEI does not allow a `<div>` to hold
+  bare text or to sit inside a paragraph, so the selection cannot just be wrapped
+  in one. Instead a paragraph that the selection starts or ends in the middle of
+  is split there (the `<lb/>` that starts a line goes with that line), the
+  paragraphs of the selection are put in `<div type="toc">`, and, because TEI
+  allows nothing but `<div>`s after a `<div>`, the paragraphs that follow it are
+  each put in a plain `<div>`. Paragraphs before it stay as they are. The text
+  has a blank line where a paragraph was split, so for `toc` the offsets of the
+  page's words, entities and so on are no longer valid. The selection must start
+  and end in `<p>` paragraphs that are in the same division of the page, not
+  inside other markup, and a paragraph that has to be split must not contain a
+  comment or processing instruction (they cannot be moved).
+- **`note` goes around the text itself**, like the `<fw>` elements. The body can
+  have an optional `n`, the number of the note (`{"…": "…", "section": "note",
+  "n": "1"}`, at most 20 characters, trimmed, not empty); any other section with
+  an `n` is a 422.
+- **`note_group` goes around notes that are already marked.** TEI lets a
+  `<noteGrp>` hold only notes (no text, not even an `<lb/>`), so mark each note
+  first, then select all of them, and nothing else: anything else in the
+  selection is a 422 ("A note group holds only notes…"). A line break between the
+  notes cannot stay an `<lb/>` inside the group, so it becomes a newline in the
+  XML, which the text extraction reads as a line break again: the text of the
+  page does not change.
+- The documents this produces were checked against the official TEI schema
+  (`tei_all`), including random pages with several marks one after the other.
+- 404 if the page is not stored, 422 if it has no valid TEI XML or the section
+  cannot be marked (with the reason). Like `PATCH`, it does not check the
+  collection or fetch from Polona.
+
 ### What the frontend shows
 
 A page's `content` is TEI XML, but the frontend never shows it, and it never
@@ -429,6 +500,42 @@ the entity's dialog getting in the way), and an entity that starts or ends in
 the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
+
+**The structure view.** The **Structure** button (the first in the sidebar) turns
+a third view on, next to Text and XML: the text of the page, in which the sections
+of the page can be marked. It is a toggle (it is dark while it is on; press it
+again to go back to the text), and the Text, XML and named entity recognition
+buttons also leave it. In this view, **select some text with the mouse** (or
+Shift and the arrows) and a small dialog appears right next to the end of the
+selection, with a **dropdown** of the sections (Page header, Page footer, Page
+number, Table of contents, Note group, Note) and a **Confirm** button. For a
+Note, a small field for its **number** (optional) appears next to the dropdown;
+Enter in it confirms. Nothing is chosen at first,
+and Confirm waits until a section is. Escape, or a click that clears the
+selection, closes the dialog.
+
+**The marked sections are shown in the text.** The structure view asks
+`POST /tei/sections` (above) for the XML of the page and shows what is marked
+with its tags in blue, before and after it (`<fw type="header">84 KATEDRA</fw>`,
+`<noteGrp>` around its `<note n="1">`s, ...), nested where the XML is. The tags
+are drawn by the stylesheet (generated content), so they are not text: they
+cannot be selected or edited, and a selection's offsets are still those of the
+text alone. The frontend does not read the XML; the backend says where the
+sections are, and they are asked for again after each marking. If that fails the
+view just shows the text.
+
+On Confirm the frontend sends the selection to `POST .../sections` (above): the
+offsets of the selected text (without the spaces and line breaks at its ends,
+and counted the way the backend counts, which the frontend converts for text with
+emoji and the like), the text, and the section. The backend puts the text inside
+the right element in the XML; the frontend never touches the XML. The page is then
+shown again with the text the backend returns, which for a table of contents has
+a blank line where a paragraph was split, the view stays on the structure view,
+and a short note says what was marked ("Marked as page header."). While the
+request runs nothing else can be confirmed, and if the backend refuses (for
+example a header cannot span paragraphs) its reason is shown and the text stays
+as it was. The result is visible in the XML view. The Correction button is still a
+stub.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.

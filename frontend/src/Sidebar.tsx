@@ -6,6 +6,7 @@ interface Tool {
 }
 
 const NER_LABEL = 'Named entity recognition'
+const STRUCTURE_LABEL = 'Structure'
 
 // Simple 24x24 stroke icons (no icon dependency).
 function Icon({ children }: { children: ReactNode }) {
@@ -65,21 +66,28 @@ interface Props {
   /** False when there is no text to recognize entities in. */
   canRecognize: boolean
   recognizing: boolean
+  /** Whether the structure view is the one shown. */
+  structureActive: boolean
+  /** Switch to the structure view, or back to the text if it is shown. */
+  onToggleStructure: () => void
 }
 
 /**
- * Vertical tool bar on the right. Only named entity recognition does anything
- * so far; the other buttons are stubs.
+ * Vertical tool bar on the right. Structure (a view to mark the sections of a
+ * page) and named entity recognition work; the other button is a stub.
  */
 export default function Sidebar({
   onRecognizeEntities,
   canRecognize,
   recognizing,
+  structureActive,
+  onToggleStructure,
 }: Props) {
   return (
     <aside className="sidebar" aria-label="Tools">
       {TOOLS.map(({ label, icon }) => {
         const isNer = label === NER_LABEL
+        const isStructure = label === STRUCTURE_LABEL
         return (
           <button
             key={label}
@@ -87,9 +95,16 @@ export default function Sidebar({
             className="sidebar-button"
             aria-label={label}
             data-tooltip={label}
-            onClick={isNer ? onRecognizeEntities : undefined}
+            onClick={
+              isNer
+                ? onRecognizeEntities
+                : isStructure
+                  ? onToggleStructure
+                  : undefined
+            }
             disabled={isNer && (!canRecognize || recognizing)}
             aria-busy={isNer && recognizing ? true : undefined}
+            aria-pressed={isStructure ? structureActive : undefined}
           >
             {icon}
           </button>

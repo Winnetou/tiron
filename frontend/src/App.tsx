@@ -3,6 +3,7 @@ import {
   addLegalSpelling,
   correctWord,
   getPage,
+  markSection,
   pageNumberFromUrl,
   recognizeEntities,
   spellcheck,
@@ -14,6 +15,11 @@ import {
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
 import type { Word } from './segments'
+import {
+  sectionLabel,
+  type SectionKind,
+  type TextSelection,
+} from './sections'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -85,6 +91,8 @@ export default function App() {
     entities: Entity[]
   } | null>(null)
   const [recognizing, setRecognizing] = useState(false)
+  // What was done last, to tell the user (not an error): cleared by the next request.
+  const [notice, setNotice] = useState<string | null>(null)
   // What the user decided about the entities of a text. Like `recognized`, it
   // belongs to one text and is not used for any other.
   const [decided, setDecided] = useState<{
@@ -114,6 +122,7 @@ export default function App() {
   async function run(request: Promise<Page>, onSuccess?: (page: Page) => void) {
     setBusy(true)
     setActionError(null)
+    setNotice(null)
     try {
       const shown = await withText(await request)
       onSuccess?.(shown.page)
@@ -237,6 +246,23 @@ export default function App() {
     }
   }
 
+  /**
+   * Have the backend mark the selected text of the page as a section of it (a
+   * header, a footer, the page number, the table of contents) in the XML. The
+   * page is shown again with its text, which can have changed: the backend
+   * splits a paragraph where a table of contents starts or ends in it.
+   */
+  function markPageSection(
+    page: Page,
+    selection: TextSelection,
+    section: SectionKind,
+    n?: string,
+  ) {
+    return run(markSection(page.edition_id, page.number, selection, section, n), () =>
+      setNotice(`Marked as ${sectionLabel(section).toLowerCase()}.`),
+    )
+  }
+
   /** Set the ready flag of the open page. */
   function markReady(page: Page) {
     return run(updatePage(page.edition_id, page.number, { ready: true }))
@@ -266,6 +292,10 @@ export default function App() {
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
+        onMarkSection={(selection, section, n) =>
+          markPageSection(page, selection, section, n)
+        }
+        notice={notice}
       />
     )
   }

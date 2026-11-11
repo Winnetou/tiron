@@ -36,6 +36,10 @@ function EntityMark({
   onReject,
 }: EntityMarkProps) {
   const [open, setOpen] = useState(false)
+  // In the lower half of the page the dialog goes above the entity: below it
+  // it would be out of sight.
+  const [above, setAbove] = useState(false)
+  const wrap = useRef<HTMLSpanElement>(null)
   const [choice, setChoice] = useState(entity.label)
   const confirmed = decision?.kind === 'confirmed'
   const group = `entity-${entity.start}-${entity.end}`
@@ -46,12 +50,25 @@ function EntityMark({
     else onConfirm(entity, choice)
   }
 
+  /** Show the dialog (unless there is nothing to choose), placed by where the entity is. */
+  function show() {
+    const show = !confirmed && !editing
+    if (show && wrap.current) {
+      const page = wrap.current.closest('.page-box')?.getBoundingClientRect()
+      const mark = wrap.current.getBoundingClientRect()
+      // (jsdom, the tests, has no layout: everything is at 0, so below)
+      setAbove(!!page && mark.bottom - page.top > page.height / 2)
+    }
+    setOpen(show)
+  }
+
   return (
     <span
       className="entity-wrap"
-      onMouseEnter={() => setOpen(!confirmed && !editing)}
+      ref={wrap}
+      onMouseEnter={show}
       onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(!confirmed && !editing)}
+      onFocus={show}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
       }}
@@ -74,7 +91,7 @@ function EntityMark({
         <div
           role="dialog"
           aria-label={`Named entity: ${entity.text}`}
-          className="entity-dialog"
+          className={above ? 'entity-dialog above' : 'entity-dialog'}
         >
           {[...labelOptions(entity), NOT_NER].map((option) => (
             <label key={option}>

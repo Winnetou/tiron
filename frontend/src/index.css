@@ -275,6 +275,11 @@ button {
   text-align: left;
 }
 
+.entity-dialog.above {
+  top: auto;
+  bottom: 100%;
+}
+
 .entity-dialog label {
   display: flex;
   align-items: center;
@@ -338,4 +343,85 @@ button {
 .legal-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* The structure view: the text, and the dialog next to the selected part. */
+.structure-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.structure-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.structure-box {
+  cursor: text;
+}
+
+.structure-box ::selection {
+  background: #b9d3fb;
+}
+
+.structure-popup {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 0.25rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+}
+
+.structure-popup select {
+  font: inherit;
+  padding: 0.15rem;
+}
+
+.notice {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #1b6b2a;
+}
+
+/* A tool of the sidebar that is on (the structure view). */
+.sidebar-button[aria-pressed='true'] {
+  background: #333;
+  color: #fff;
+}
+
+/* A section marked in the XML, in the structure view: its tags are drawn before
+   and after it, in blue. They are generated content, so they are not text: they
+   cannot be selected or edited. */
+.section::before,
+.section::after {
+  padding: 0 0.25em;
+  border-radius: 0.2rem;
+  background: #e3edfc;
+  color: #1a56c4;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.section::before {
+  content: attr(data-open);
+  margin-right: 0.2em;
+}
+
+.section::after {
+  content: attr(data-close);
+  margin-left: 0.2em;
 }

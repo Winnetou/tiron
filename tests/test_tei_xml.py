@@ -10,8 +10,10 @@ from app.tei_xml import (
     CannotTag,
     InvalidTei,
     TextChanged,
+    mark_section,
     replace_text_range,
     tag_text_range,
+    tei_xml_sections,
     tei_xml_to_text,
     text_to_tei_xml,
 )
@@ -897,3 +899,568 @@ def test_random_words_replaced_only_change_the_word(seed):
         expected = extracted[: match.start()] + after + extracted[match.end() :]
         assert tei_xml_to_text(result) == expected
         delb.Document(result)  # still well-formed
+
+
+# --- marking the sections of a page -----------------------------------------
+
+
+def mark(
+    xml: str, selection: str, section: str, occurrence: int = 0, n: str | None = None
+) -> str:
+    start, end = where(tei_xml_to_text(xml), selection, occurrence)
+    return mark_section(xml, start, end, section, selection, n)
+
+
+def text_without_spaces(xml: str) -> str:
+    return re.sub(r"\s+", "", tei_xml_to_text(xml))
+
+
+class TestMarkSectionFw:
+    """Header, footer and page number: <fw> around the text itself."""
+
+    @pytest.mark.parametrize(
+        ("section", "markup"),
+        [
+            ("header", '<fw type="header">'),
+            ("footer", '<fw type="footer">'),
+            ("page_number", '<fw type="pageNum">'),
+        ],
+    )
+    def test_each_is_a_forme_work_element_of_its_type(self, section, markup):
+        xml = mark(generated("Ala ma 84 kota"), "84", section)
+
+        assert inner(xml) == f"<p>Ala ma {markup}84</fw> kota</p>"
+
+    def test_a_header_that_is_a_paragraph_of_its_own(self):
+        xml = mark(generated("84 KATEDRA\n\ncle przekazał"), "84 KATEDRA", "header")
+
+        assert (
+            inner(xml) == '<p><fw type="header">84 KATEDRA</fw></p><p>cle przekazał</p>'
+        )
+
+    def test_a_footer_after_a_line_break(self):
+        xml = mark(generated("text\nstopka 84"), "stopka 84", "footer")
+
+        assert inner(xml) == '<p>text<lb/><fw type="footer">stopka 84</fw></p>'
+
+    def test_it_can_span_a_line_break(self):
+        xml = mark(generated("a head\nline b"), "head\nline", "header")
+
+        assert inner(xml) == '<p>a <fw type="header">head<lb/>line</fw> b</p>'
+
+    def test_the_text_does_not_change(self):
+        text = "84 KATEDRA\n\ncle przekazał\nniami"
+
+        for section in ("header", "footer", "page_number"):
+            assert tei_xml_to_text(mark(generated(text), "84", section)) == text
+
+    def test_a_page_number_inside_a_header(self):
+        xml = mark(generated("84 KATEDRA"), "KATEDRA", "header")  # not this
+        xml = mark(generated("84 KATEDRA"), "84 KATEDRA", "header")
+
+        xml = mark(xml, "84", "page_number")
+
+        assert inner(xml) == (
+            '<p><fw type="header"><fw type="pageNum">84</fw> KATEDRA</fw></p>'
+        )
+
+    def test_spaces_and_line_breaks_around_the_selection_are_left_out(self):
+        xml = tei("<p>a<lb/>84 <lb/>b</p>")
+        text = tei_xml_to_text(xml)
+        assert text == "a\n84\nb"
+        start, end = where(text, "\n84\n")
+
+        result = mark_section(xml, start, end, "page_number", "\n84\n")
+
+        # the line breaks (and the space after the number) stay outside the element
+        assert inner(result) == '<p>a<lb/><fw type="pageNum">84</fw> <lb/>b</p>'
+
+    def test_marking_the_same_again_changes_nothing(self):
+        once = mark(generated("a 84 b"), "84", "page_number")
+
+        assert mark(once, "84", "page_number") == once
+
+    def test_a_different_section_for_the_same_text_goes_inside_the_element(self):
+        once = mark(generated("a 84 b"), "84", "page_number")
+
+        twice = mark(once, "84", "footer")
+
+        # like an entity: the selection is the content of the pageNum element, so
+        # the new element goes around that content, inside it
+        assert inner(twice) == (
+            '<p>a <fw type="pageNum"><fw type="footer">84</fw></fw> b</p>'
+        )
+
+    def test_only_the_occurrence_at_the_offsets(self):
+        xml = mark(generated("84 a 84"), "84", "page_number", occurrence=1)
+
+        assert inner(xml) == '<p>84 a <fw type="pageNum">84</fw></p>'
+
+    def test_offsets_count_code_points(self):
+        xml = mark(generated("😀 84 😀"), "84", "page_number")
+
+        assert inner(xml) == '<p>😀 <fw type="pageNum">84</fw> 😀</p>'
+
+    def test_it_cannot_span_paragraphs(self):
+        xml = generated("one\n\ntwo")
+
+        with pytest.raises(CannotTag, match="more than one paragraph"):
+            mark(xml, "one\n\ntwo", "header")
+
+    def test_it_cannot_start_inside_other_markup(self):
+        xml = tei("<p>a <hi>kota</hi> i psa</p>")
+
+        with pytest.raises(CannotTag, match="starts inside <hi>"):
+            mark(xml, "ota i", "header")
+
+
+class TestMarkSectionNotes:
+    """A note is <note> around the text; a note group is a <noteGrp> of notes."""
+
+    def test_a_note(self):
+        xml = mark(generated("Ala ma kota 1 przypis"), "1 przypis", "note")
+
+        assert inner(xml) == "<p>Ala ma kota <note>1 przypis</note></p>"
+
+    def test_a_note_with_its_number(self):
+        xml = mark(generated("Ala 1 przypis"), "1 przypis", "note", n="1")
+
+        assert inner(xml) == '<p>Ala <note n="1">1 przypis</note></p>'
+
+    def test_a_note_can_span_a_line_break_and_keeps_the_text(self):
+        original = generated("a\nprzypis jeden\ndalej b")
+        xml = mark(original, "przypis jeden\ndalej", "note", n="2")
+
+        assert tei_xml_to_text(xml) == tei_xml_to_text(original)
+        assert '<note n="2">przypis jeden<lb/>dalej</note>' in xml
+
+    def test_a_number_is_only_for_a_note(self):
+        with pytest.raises(CannotTag, match="number"):
+            mark(generated("Ala"), "Ala", "header", n="1")
+
+    def test_marking_the_same_note_again_changes_nothing(self):
+        once = mark(generated("x 1 przypis"), "1 przypis", "note", n="1")
+
+        assert mark(once, "1 przypis", "note", n="1") == once
+
+    def notes(self):
+        xml = generated("tekst\n1 pierwszy\n2 drugi\nkoniec")
+        xml = mark(xml, "1 pierwszy", "note", n="1")
+        return mark(xml, "2 drugi", "note", n="2")
+
+    def test_a_group_of_notes_on_separate_lines(self):
+        before = self.notes()
+
+        xml = mark(before, "1 pierwszy\n2 drugi", "note_group")
+
+        assert (
+            '<noteGrp><note n="1">1 pierwszy</note>\n<note n="2">2 drugi</note>'
+            "</noteGrp>"
+        ) in xml  # the <lb/> between them, which a <noteGrp> may not hold, is a newline
+        assert tei_xml_to_text(xml) == tei_xml_to_text(before)
+
+    def test_a_group_of_notes_in_one_line(self):
+        xml = mark(generated("a 1 jeden 2 dwa b"), "1 jeden", "note", n="1")
+        xml = mark(xml, "2 dwa", "note", n="2")
+
+        grouped = mark(xml, "1 jeden 2 dwa", "note_group")
+
+        assert inner(grouped) == (
+            '<p>a <noteGrp><note n="1">1 jeden</note> <note n="2">2 dwa</note>'
+            "</noteGrp> b</p>"
+        )
+        assert tei_xml_to_text(grouped) == tei_xml_to_text(xml)
+
+    def test_a_group_of_one_note(self):
+        xml = mark(generated("a 1 jeden b"), "1 jeden", "note", n="1")
+
+        assert inner(mark(xml, "1 jeden", "note_group")) == (
+            '<p>a <noteGrp><note n="1">1 jeden</note></noteGrp> b</p>'
+        )
+
+    @pytest.mark.parametrize("selection", ["a 1 jeden", "1 jeden 2", "jeden"])
+    def test_a_group_is_refused_for_what_is_not_only_notes(self, selection):
+        xml = mark(generated("a 1 jeden 2 dwa b"), "1 jeden", "note", n="1")
+        xml = mark(xml, "2 dwa", "note", n="2")
+
+        with pytest.raises(CannotTag, match="only notes"):
+            mark(xml, selection, "note_group")
+
+    def test_a_group_is_refused_for_text_that_is_not_a_note(self):
+        with pytest.raises(CannotTag, match="only notes"):
+            mark(generated("Ala ma kota"), "Ala", "note_group")
+
+    def test_marking_the_same_group_again_changes_nothing(self):
+        xml = mark(generated("a 1 jeden 2 dwa b"), "1 jeden", "note", n="1")
+        xml = mark(xml, "2 dwa", "note", n="2")
+        once = mark(xml, "1 jeden 2 dwa", "note_group")
+
+        assert mark(once, "1 jeden 2 dwa", "note_group") == once
+
+    def test_the_result_is_well_formed(self):
+        xml = mark(generated("a 1 jeden 2 dwa b"), "1 jeden", "note", n="1")
+        xml = mark(xml, "2 dwa", "note", n="2")
+
+        delb.Document(mark(xml, "1 jeden 2 dwa", "note_group"))
+
+
+class TestMarkSectionToc:
+    """The table of contents: <div type="toc"> around whole paragraphs."""
+
+    def test_a_paragraph_in_the_middle(self):
+        xml = mark(generated("a\n\nI. Alfa\n\nb\n\nc"), "I. Alfa", "toc")
+
+        assert inner(xml) == (
+            '<p>a</p><div type="toc"><p>I. Alfa</p></div><div><p>b</p><p>c</p></div>'
+        )
+
+    def test_several_paragraphs(self):
+        xml = mark(
+            generated("a\n\nI. Alfa\n\nII. Beta\n\nb"), "I. Alfa\n\nII. Beta", "toc"
+        )
+
+        assert inner(xml) == (
+            '<p>a</p><div type="toc"><p>I. Alfa</p><p>II. Beta</p></div>'
+            "<div><p>b</p></div>"
+        )
+
+    def test_the_last_paragraph_needs_no_div_after_it(self):
+        xml = mark(generated("a\n\nb\n\nI. Alfa"), "I. Alfa", "toc")
+
+        assert inner(xml) == '<p>a</p><p>b</p><div type="toc"><p>I. Alfa</p></div>'
+
+    def test_the_first_paragraph(self):
+        xml = mark(generated("I. Alfa\n\na\n\nb"), "I. Alfa", "toc")
+
+        assert (
+            inner(xml)
+            == '<div type="toc"><p>I. Alfa</p></div><div><p>a</p><p>b</p></div>'
+        )
+
+    def test_the_only_paragraph(self):
+        xml = mark(generated("I. Alfa\nII. Beta"), "I. Alfa\nII. Beta", "toc")
+
+        assert inner(xml) == '<div type="toc"><p>I. Alfa<lb/>II. Beta</p></div>'
+
+    def test_lines_in_the_middle_of_a_paragraph_split_it_in_three(self):
+        xml = mark(generated("a\nI. Alfa\nII. Beta\nz"), "I. Alfa\nII. Beta", "toc")
+
+        # the line break that starts a line goes with that line
+        assert inner(xml) == (
+            '<p>a</p><div type="toc"><p><lb/>I. Alfa<lb/>II. Beta</p></div>'
+            "<div><p><lb/>z</p></div>"
+        )
+
+    def test_lines_at_the_start_of_a_paragraph_split_it_in_two(self):
+        xml = mark(generated("I. Alfa\nII. Beta\nz"), "I. Alfa\nII. Beta", "toc")
+
+        assert inner(xml) == (
+            '<div type="toc"><p>I. Alfa<lb/>II. Beta</p></div><div><p><lb/>z</p></div>'
+        )
+
+    def test_lines_at_the_end_of_a_paragraph_split_it_in_two(self):
+        xml = mark(generated("a\nI. Alfa\nII. Beta"), "I. Alfa\nII. Beta", "toc")
+
+        assert inner(xml) == (
+            '<p>a</p><div type="toc"><p><lb/>I. Alfa<lb/>II. Beta</p></div>'
+        )
+
+    def test_part_of_a_line_splits_the_paragraph_there(self):
+        xml = mark(generated("a I. Alfa b"), "I. Alfa", "toc")
+
+        assert (
+            inner(xml)
+            == '<p>a </p><div type="toc"><p>I. Alfa</p></div><div><p> b</p></div>'
+        )
+
+    def test_from_the_middle_of_one_paragraph_to_the_middle_of_another(self):
+        xml = mark(generated("a b\nc d\n\ne f\ng h\n\ni"), "c d\n\ne f", "toc")
+
+        assert inner(xml) == (
+            '<p>a b</p><div type="toc"><p><lb/>c d</p><p>e f</p></div>'
+            "<div><p><lb/>g h</p><p>i</p></div>"
+        )
+
+    def test_the_text_has_a_blank_line_where_a_paragraph_was_split(self):
+        text = "a\nI. Alfa\nII. Beta\nz"
+
+        xml = mark(generated(text), "I. Alfa\nII. Beta", "toc")
+
+        assert tei_xml_to_text(xml) == "a\n\nI. Alfa\nII. Beta\n\nz"
+        assert text_without_spaces(xml) == re.sub(r"\s+", "", text)
+
+    def test_the_text_does_not_change_when_no_paragraph_is_split(self):
+        text = "a\n\nI. Alfa\n\nb"
+
+        assert tei_xml_to_text(mark(generated(text), "I. Alfa", "toc")) == text
+
+    def test_spaces_around_the_selection_are_ignored(self):
+        xml = generated("a\n\n I. Alfa \n\nb")
+        text = tei_xml_to_text(xml)
+        start, end = where(text, "I. Alfa")
+
+        trimmed = mark_section(xml, start, end, "toc", "I. Alfa")
+        padded = mark_section(xml, start - 1, end + 1, "toc", text[start - 1 : end + 1])
+
+        assert inner(trimmed) == inner(padded)
+
+    def test_a_paragraph_with_inline_markup_is_split_before_the_markup(self):
+        xml = tei("<p>a <hi>b</hi> c</p>")
+
+        result = mark(xml, "b c", "toc")
+
+        assert inner(result) == ('<p>a </p><div type="toc"><p><hi>b</hi> c</p></div>')
+
+    def test_it_cannot_start_inside_inline_markup(self):
+        xml = tei("<p>a <hi>bcd</hi> e</p>")
+
+        with pytest.raises(CannotTag, match="starts inside <hi>"):
+            mark(xml, "cd e", "toc")
+
+    def test_it_cannot_end_inside_inline_markup(self):
+        xml = tei("<p>a <hi>bcd</hi> e</p>")
+
+        with pytest.raises(CannotTag, match="ends inside <hi>"):
+            mark(xml, "a bc", "toc")
+
+    def test_the_same_again_changes_nothing(self):
+        once = mark(generated("a\n\nI. Alfa\n\nb"), "I. Alfa", "toc")
+
+        assert mark(once, "I. Alfa", "toc") == once
+
+    def test_marking_part_of_a_toc_again_nests_or_splits_inside_it(self):
+        once = mark(
+            generated("a\n\nI. Alfa\nII. Beta\n\nb"), "I. Alfa\nII. Beta", "toc"
+        )
+
+        twice = mark(once, "II. Beta", "toc")
+
+        # the second line becomes a toc of its own, inside the first
+        assert 'type="toc"' in inner(twice)
+        assert tei_xml_to_text(twice).count("II. Beta") == 1
+
+    def test_a_second_toc_further_on(self):
+        xml = generated("a\n\nI. Alfa\n\nb\n\nII. Beta\n\nc")
+        first = mark(xml, "I. Alfa", "toc")
+
+        second = mark(first, "II. Beta", "toc")
+
+        assert inner(second) == (
+            '<p>a</p><div type="toc"><p>I. Alfa</p></div>'
+            '<div><p>b</p><div type="toc"><p>II. Beta</p></div>'
+            "<div><p>c</p></div></div>"
+        )
+
+    def test_the_xml_declaration_is_kept_or_absent_like_the_input(self):
+        with_declaration = generated("a\n\nI. Alfa")
+        without = with_declaration.split("?>", 1)[1]
+
+        assert mark(with_declaration, "I. Alfa", "toc").startswith("<?xml")
+        assert mark(without, "I. Alfa", "toc").startswith("<TEI")
+
+    def test_the_header_is_kept(self):
+        xml = mark(generated("a\n\nI. Alfa"), "I. Alfa", "toc")
+
+        assert "<title>OCR text of a page</title>" in xml
+
+    def test_hand_edited_xml_with_indentation(self):
+        xml = tei("\n  <p>a</p>\n  <p>I. Alfa</p>\n  <p>b</p>\n")
+
+        result = mark(xml, "I. Alfa", "toc")
+
+        assert re.sub(r">\s+<", "><", inner(result).strip()) == (
+            '<p>a</p><div type="toc"><p>I. Alfa</p></div><div><p>b</p></div>'
+        )
+
+    @pytest.mark.parametrize(
+        ("body", "selection"),
+        [
+            ("<head>Spis</head><p>x</p>", "Spis"),
+            ("<ab>I. Alfa</ab>", "I. Alfa"),
+        ],
+    )
+    def test_text_that_is_not_in_a_paragraph_is_refused(self, body, selection):
+        with pytest.raises(CannotTag, match="not in a paragraph"):
+            mark(tei(body), selection, "toc")
+
+    def test_paragraphs_in_different_divisions_are_refused(self):
+        xml = tei("<div><p>a</p></div><div><p>b</p></div>")
+
+        with pytest.raises(CannotTag, match="different divisions"):
+            mark(xml, "a\n\nb", "toc")
+
+    def test_a_paragraph_with_a_comment_that_has_to_be_split_is_refused(self):
+        xml = tei("<p>a<!-- c --> I. Alfa</p>")
+
+        with pytest.raises(CannotTag, match="comment"):
+            mark(xml, "I. Alfa", "toc")
+
+    def test_a_comment_in_a_paragraph_that_is_not_split_is_fine(self):
+        xml = tei("<p>x</p><p>I. Alfa<!-- c --></p><p>y</p>")
+
+        result = mark(xml, "I. Alfa", "toc")
+
+        assert '<div type="toc"><p>I. Alfa<!-- c --></p></div>' in result
+
+
+class TestMarkSectionErrors:
+    def test_the_text_at_the_offsets_is_not_the_selection(self):
+        with pytest.raises(TextChanged, match="page has changed"):
+            mark_section(generated("Ala ma kota"), 0, 3, "header", "Jan")
+
+    @pytest.mark.parametrize(
+        ("start", "end"), [(0, 99), (5, 5), (6, 2), (-1, 2), (99, 100)]
+    )
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            mark_section(generated("Ala ma kota"), start, end, "toc", "Ala")
+
+    def test_a_selection_of_only_spaces(self):
+        with pytest.raises(CannotTag, match="no text"):
+            mark_section(generated("a b"), 1, 2, "header", " ")
+
+    @pytest.mark.parametrize("section", ["", "page", "H", "div", "persName", "x y"])
+    def test_a_section_that_is_not_one(self, section):
+        with pytest.raises(CannotTag, match="not a section"):
+            mark_section(generated("Ala"), 0, 3, section, "Ala")
+
+    @pytest.mark.parametrize(
+        "xml", ["", "not xml", "<a/>", f"<TEI xmlns='{TEI_NAMESPACE}'/>"]
+    )
+    def test_xml_that_is_not_tei(self, xml):
+        with pytest.raises(InvalidTei):
+            mark_section(xml, 0, 1, "header", "a")
+
+    def test_nothing_is_changed_after_an_error(self):
+        xml = generated("one\n\ntwo")
+
+        with pytest.raises(CannotTag):
+            mark(xml, "one\n\ntwo", "header")
+
+        assert mark(xml, "two", "header") == xml.replace(
+            "two", '<fw type="header">two</fw>'
+        )
+
+    def test_the_entity_errors_still_say_entity(self):
+        xml = generated("one\n\ntwo")
+        start, end = where(tei_xml_to_text(xml), "one\n\ntwo")
+
+        with pytest.raises(CannotTag, match="The entity spans"):
+            tag_text_range(xml, start, end, "persName", "one\n\ntwo")
+
+
+def structure_is_valid_tei(xml: str) -> bool:
+    """TEI allows nothing but <div> (and <fw>) after a <div> in the same element."""
+    root = delb.parse_tree(xml)
+
+    def check(node) -> bool:
+        seen_div = False
+        for child in node.iterate_children():
+            if not isinstance(child, delb.TagNode):
+                continue
+            if child.local_name == "div":
+                seen_div = True
+            elif seen_div and child.local_name not in ("fw",):
+                return False
+            if not check(child):
+                return False
+        return True
+
+    return check(root)
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_random_sections_keep_the_text_and_a_valid_structure(seed):
+    rng = random.Random(seed)
+    text = random_text(rng)
+    xml = generated(text)
+    for _ in range(rng.randint(1, 4)):
+        extracted = tei_xml_to_text(xml)
+        start = rng.choice([m.start() for m in re.finditer(r"\S", extracted)])
+        end = min(len(extracted), start + rng.randint(1, 50))
+        selection = extracted[start:end]
+        section = rng.choice(["header", "footer", "page_number", "toc", "toc"])
+        try:
+            result = mark_section(xml, start, end, section, selection)
+        except CannotTag:
+            continue
+
+        assert text_without_spaces(result) == text_without_spaces(
+            xml
+        )  # only blank lines
+        assert structure_is_valid_tei(result)
+        delb.Document(result)  # well-formed
+        if section != "toc":
+            assert tei_xml_to_text(result) == extracted  # the text is the same
+        xml = result
+
+
+class TestSectionsOfTheXml:
+    def marked(self):
+        xml = generated("84 KATEDRA\n\nAla 1 jeden 2 dwa b\n\nstopka 85")
+        xml = mark(xml, "84 KATEDRA", "header")
+        xml = mark(xml, "1 jeden", "note", n="1")
+        xml = mark(xml, "2 dwa", "note", n="2")
+        xml = mark(xml, "1 jeden 2 dwa", "note_group")
+        return mark(xml, "stopka 85", "footer")
+
+    def test_nothing_is_marked(self):
+        assert tei_xml_sections(generated("Ala ma kota")) == []
+
+    def test_each_section_with_its_place_and_tags(self):
+        xml = self.marked()
+        text = tei_xml_to_text(xml)
+
+        found = [
+            (text[s["start"] : s["end"]], s["open"], s["close"])
+            for s in tei_xml_sections(xml)
+        ]
+
+        assert found == [
+            ("84 KATEDRA", '<fw type="header">', "</fw>"),
+            ("1 jeden 2 dwa", "<noteGrp>", "</noteGrp>"),
+            ("1 jeden", '<note n="1">', "</note>"),
+            ("2 dwa", '<note n="2">', "</note>"),
+            ("stopka 85", '<fw type="footer">', "</fw>"),
+        ]
+
+    def test_a_table_of_contents_spans_its_paragraphs(self):
+        xml = mark(generated("a\n\nb\n\nc\n\nd"), "b\n\nc", "toc")
+        text = tei_xml_to_text(xml)
+
+        (toc,) = tei_xml_sections(xml)
+
+        assert text[toc["start"] : toc["end"]] == "b\n\nc"
+        assert toc["open"] == '<div type="toc">'
+
+    def test_the_plain_divs_after_a_table_of_contents_are_not_sections(self):
+        xml = mark(generated("a\n\nb\n\nc"), "a", "toc")
+
+        assert len(tei_xml_sections(xml)) == 1
+
+    def test_entities_are_not_sections(self):
+        xml = tag_text_range(
+            generated("Jan Kowalski"), 0, 12, "persName", "Jan Kowalski"
+        )
+
+        assert tei_xml_sections(xml) == []
+
+    def test_offsets_count_code_points(self):
+        xml = mark(generated("😀 a 84 b"), "84", "page_number")
+        text = tei_xml_to_text(xml)
+
+        (section,) = tei_xml_sections(xml)
+
+        assert text[section["start"] : section["end"]] == "84"
+
+    def test_attribute_values_are_escaped(self):
+        xml = mark(generated("a 1 b"), "1", "note", n='x"y<')
+
+        (section,) = tei_xml_sections(xml)
+
+        assert section["open"] == "<note n='x\"y&lt;'>"
+
+    @pytest.mark.parametrize("xml", ["", "not xml", "<a/>"])
+    def test_xml_that_is_not_tei(self, xml):
+        with pytest.raises(InvalidTei):
+            tei_xml_sections(xml)

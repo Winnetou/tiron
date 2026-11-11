@@ -3,14 +3,16 @@ import type { Page } from './api'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
+import type { SectionKind, TextSelection } from './sections'
 import Sidebar from './Sidebar'
+import StructureView from './StructureView'
 import XmlView from './XmlView'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
-type View = 'text' | 'xml'
+type View = 'text' | 'xml' | 'structure'
 
 interface Props {
   page: Page
@@ -43,15 +45,24 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /** Mark the selected text of the page as a section of it. */
+  onMarkSection: (
+    selection: TextSelection,
+    section: SectionKind,
+    n?: string,
+  ) => void
+  /** What was done last, to tell the user (not an error). */
+  notice: string | null
 }
 
 /**
  * Left half: the scan, with zoom buttons.
  * Right half: previous/next page and "Mark as ready" buttons, a switch between
- * the two views of the page, and the page itself, read-only: its text (the
- * default, as extracted by the backend, with the named entities in red once
- * they are recognized) or the TEI XML it comes from, with the markup on a grey
- * background.
+ * the text and the XML, and the page itself, read-only: its text (the default,
+ * as extracted by the backend, with the named entities in red once they are
+ * recognized) or the TEI XML it comes from, with the markup on a grey
+ * background. The Structure button of the sidebar shows the text in a way that
+ * the sections of the page can be marked in it.
  */
 export default function PageViewer({
   page,
@@ -72,6 +83,8 @@ export default function PageViewer({
   onRejectEntity,
   onCorrectWord,
   onLegalSpelling,
+  onMarkSection,
+  notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
   // The entities that are still shown: not the ones rejected as "Not NER".
@@ -163,10 +176,15 @@ export default function PageViewer({
         {spellError && (
           <p role="alert">The spelling cannot be checked: {spellError}</p>
         )}
+        {notice && (
+          <p role="status" className="notice">
+            {notice}
+          </p>
+        )}
         {textError && (
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
-        {view === 'text' ? (
+        {view === 'text' && (
           <PageText
             text={text}
             words={words}
@@ -178,11 +196,22 @@ export default function PageViewer({
             onCorrectWord={onCorrectWord}
             onLegalSpelling={onLegalSpelling}
           />
-        ) : (
-          <XmlView xml={page.content} />
+        )}
+        {view === 'xml' && <XmlView xml={page.content} />}
+        {view === 'structure' && (
+          <StructureView
+            text={text}
+            xml={page.content}
+            busy={busy}
+            onMark={onMarkSection}
+          />
         )}
       </section>
       <Sidebar
+        structureActive={view === 'structure'}
+        onToggleStructure={() =>
+          setView((current) => (current === 'structure' ? 'text' : 'structure'))
+        }
         canRecognize={text.trim() !== ''}
         recognizing={recognizing}
         onRecognizeEntities={() => {

@@ -15,8 +15,10 @@ from app.models import (
     NewLegalSpelling,
     PageUpdate,
     PageView,
+    SectionMark,
     SpellcheckRequest,
     SpellcheckResult,
+    TeiSections,
     TeiText,
     TeiXml,
     WordCorrection,
@@ -30,8 +32,10 @@ from app.tei_xml import (
     CannotTag,
     InvalidTei,
     TextChanged,
+    mark_section,
     replace_text_range,
     tag_text_range,
+    tei_xml_sections,
     tei_xml_to_text,
     text_to_tei_xml,
 )
@@ -196,6 +200,71 @@ def tag_entity(
     return PageView.from_page(page)
 
 
+@app.post("/editions/{edition_id}/pages/{number}/sections", response_model=PageView)
+def mark_page_section(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], mark: SectionMark
+) -> PageView:
+    """Mark a section of a page in the TEI XML of a stored page: the characters
+    `start` to `end` of the page's text become a running header, a footer, the
+    printed page number, or the table of contents, and the changed XML is saved
+    as the page's corrected content.
+
+    The body is `{"start": 0, "end": 10, "text": "84 KATEDRA", "section":
+    "header"}`. The offsets are those of the text that `POST /tei/text` gives
+    for this page, and `text` is the selection as the client saw it, which the
+    backend checks. The `section` is one of:
+
+    - `header`: `<fw type="header">` around the text
+    - `footer`: `<fw type="footer">` around the text
+    - `page_number`: `<fw type="pageNum">` around the text (the printed number)
+    - `toc`: `<div type="toc">` around whole paragraphs
+    - `note`: `<note>` around the text, like an entity; with the optional `n`
+      (e.g. `"n": "1"`, only for a note) it is `<note n="1">`
+    - `note_group`: `<noteGrp>` around notes that are already marked and next to
+      each other, and nothing else: TEI lets a `<noteGrp>` hold only notes, so
+      anything else in the selection is a 422
+
+    The `<fw>` elements go around the text, like an entity, and cannot span
+    paragraphs or start inside other markup. A `<div>` cannot hold bare text or
+    sit in a paragraph, so a paragraph that the selection starts or ends in the
+    middle of is split there, the paragraphs of the selection go in the `<div>`,
+    and the paragraphs after it each go in a plain `<div>` (TEI allows nothing
+    else after a `<div>`). The text of the page then has a blank line where a
+    paragraph was split, so for `toc` the offsets of the page's words, entities
+    and so on are no longer valid. Marking a section that is already marked
+    changes nothing.
+
+    404 if the page is not stored. 409 if the text at the offsets is not `text`,
+    because the page has changed since. 422 if the page has no valid TEI XML or
+    the section cannot be marked in it, with the reason. Returns the updated page
+    as a PageView.
+    """
+    page = db.get_page_by_number(edition_id, number)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    if not page.corrected_content:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The page has no TEI XML to mark sections in",
+        )
+    try:
+        xml = mark_section(
+            page.corrected_content,
+            mark.start,
+            mark.end,
+            mark.section,
+            mark.text,
+            mark.n,
+        )
+    except TextChanged as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotTag) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if xml != page.corrected_content:
+        page = db.update_page(edition_id, number, corrected_content=xml) or page
+    return PageView.from_page(page)
+
+
 @app.post("/tei/text", response_model=TeiText)
 def tei_to_text(tei: TeiXml) -> TeiText:
     """Validate a TEI XML document and return just the text extracted from it.
@@ -213,6 +282,26 @@ def tei_to_text(tei: TeiXml) -> TeiText:
     """
     try:
         return TeiText(text=tei_xml_to_text(tei.xml))
+    except InvalidTei as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@app.post("/tei/sections", response_model=TeiSections)
+def tei_sections(tei: TeiXml) -> TeiSections:
+    """The sections of a page that are marked in a TEI XML document: the
+    elements that `POST .../sections` makes (`<fw>`, `<div type="toc">`,
+    `<noteGrp>`, `<note>`), to show where they are in the text.
+
+    The body is `{"xml": "<TEI ...>...</TEI>"}`, as for `POST /tei/text`, and
+    the answer is 422 in the same cases. The response is `{"sections": [...]}`,
+    in the order of the document, outer ones first. Each section has `start`
+    and `end`, the characters of the text that `POST /tei/text` gives for the
+    same XML (counted the way Python does), and `open` and `close`, its tags as
+    they are written in the XML, e.g. `<note n="1">` and `</note>`. Nothing is
+    stored.
+    """
+    try:
+        return TeiSections(sections=tei_xml_sections(tei.xml))
     except InvalidTei as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 

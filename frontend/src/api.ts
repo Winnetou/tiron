@@ -1,5 +1,6 @@
 import type { Entity } from './entities'
 import type { Word } from './segments'
+import type { SectionKind, TextSelection } from './sections'
 
 export const DEFAULT_PAGE_NUMBER = 0
 
@@ -92,6 +93,34 @@ export async function teiToText(xml: string): Promise<string> {
     body: JSON.stringify({ xml }),
   })
   return text
+}
+
+/** A section marked in the XML: its place in the text, and its tags. */
+export interface SectionSpan {
+  /** Offsets in the text, in code points (as the backend counts). */
+  start: number
+  end: number
+  /** The tags as written in the XML, e.g. `<note n="1">` and `</note>`. */
+  open: string
+  close: string
+}
+
+/**
+ * Calls POST /tei/sections: the backend lists the sections that are marked in
+ * the XML (headers, footers, page numbers, the table of contents, notes and
+ * note groups) with where they are in the text and what their tags are, so that
+ * the structure view can show them. The frontend does not read the XML itself.
+ */
+export async function teiSections(xml: string): Promise<SectionSpan[]> {
+  const { sections } = await request<{ sections: SectionSpan[] }>(
+    '/tei/sections',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    },
+  )
+  return sections
 }
 
 /**
@@ -189,6 +218,35 @@ export function correctWord(
       end: word.end,
       before: word.text,
       after,
+    }),
+  })
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/sections: the backend marks
+ * the selected text as a section of the page (a header, a footer, the page
+ * number or the table of contents) in the XML of the page, saves it, and returns
+ * the updated page. The frontend only says which stretch of the text it is and
+ * which section; the backend finds the place in the XML and chooses the TEI
+ * element.
+ */
+export function markSection(
+  editionId: string,
+  number: number,
+  selection: TextSelection,
+  section: SectionKind,
+  n?: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/sections`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: selection.start,
+      end: selection.end,
+      text: selection.text,
+      section,
+      // the number of a note, if given: <note n="1">
+      ...(n ? { n } : {}),
     }),
   })
 }
