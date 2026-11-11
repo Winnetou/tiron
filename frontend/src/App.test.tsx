@@ -6,8 +6,8 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Page } from './api'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Page, SectionSpan } from './api'
 import App from './App'
 import type { Entity } from './entities'
 import './index.css'
@@ -88,6 +88,8 @@ interface Options {
    * element around it in the XML.
    */
   section?: (body: SectionBody, page: Page) => Partial<Page> | Error
+  /** Answer of POST /tei/sections for the XML: the marked sections (default none). */
+  sections?: (xml: string) => SectionSpan[] | Error
 }
 
 const reply = (ok: boolean, status: number, body: unknown) => ({
@@ -159,6 +161,12 @@ function fakeBackend(options: Options = {}) {
         ? options.tei(body.xml)
         : { text: textOf(body.xml) }
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url === '/tei/sections') {
+      const answer = options.sections ? options.sections(body.xml) : []
+      return answer instanceof Error
+        ? failure(422, answer)
+        : reply(true, 200, { sections: answer })
     }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
@@ -775,6 +783,70 @@ describe('confirming or rejecting an entity', () => {
     )
   }
 
+  describe('where the dialog appears', () => {
+    // jsdom has no layout: the page box is 400px high from y=100, and each
+    // entity is where `at` says.
+    const BOX = { top: 100, bottom: 500, left: 0, right: 300, width: 300, height: 400 }
+    let at: Record<string, number> = {}
+    const original = Element.prototype.getBoundingClientRect
+
+    beforeEach(() => {
+      at = {}
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        if (this.classList.contains('page-box')) return BOX as DOMRect
+        const top = this.classList.contains('entity-wrap')
+          ? at[this.textContent ?? '']
+          : undefined
+        if (top === undefined) return original.call(this)
+        return { ...BOX, top, bottom: top + 24, height: 24 } as DOMRect
+      }
+    })
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = original
+    })
+
+    it('is below an entity in the upper half of the page', async () => {
+      await recognized()
+      at['Adam Mickiewicz'] = 120
+
+      await hover('Adam Mickiewicz')
+
+      expect(dialog()).not.toHaveClass('above')
+    })
+
+    it('is above an entity in the lower half, so that it stays in sight', async () => {
+      await recognized()
+      at['Paryżu'] = 440
+
+      await hover('Paryżu')
+
+      expect(dialog()).toHaveClass('above')
+      expect(within(dialog()!).getByRole('button', { name: 'Confirm' })).toBeEnabled()
+    })
+
+    it('is placed again each time, by where the entity is', async () => {
+      await recognized()
+      at['Paryżu'] = 440
+      at['Adam Mickiewicz'] = 120
+
+      await hover('Paryżu')
+      expect(dialog()).toHaveClass('above')
+      await userEvent.unhover(mark('Paryżu'))
+      await hover('Adam Mickiewicz')
+
+      expect(dialog()).not.toHaveClass('above')
+    })
+
+    it('is above also when opened with the keyboard', async () => {
+      await recognized()
+      at['Paryżu'] = 440
+
+      mark('Paryżu').focus()
+
+      await waitFor(() => expect(dialog()).toHaveClass('above'))
+    })
+  })
+
   describe('the dialog', () => {
     it('is not there until the mouse is over an entity', async () => {
       await recognized()
@@ -1282,7 +1354,8 @@ describe('structure view', () => {
   const dialog = () => screen.queryByRole('dialog', { name: 'Mark the selected text' })
   const dropdown = () => screen.getByRole('combobox', { name: 'Section' })
   const confirmButton = () => screen.getByRole('button', { name: 'Confirm' })
-  const sectionCalls = () => calls.filter((c) => c.url.endsWith('/sections'))
+  const sectionCalls = () =>
+    calls.filter((c) => /\/pages\/\d+\/sections$/.test(c.url))
 
   async function open(extra: Options = {}, shown = TEXT) {
     await openPage(options(extra))
@@ -1310,6 +1383,285 @@ describe('structure view', () => {
   }
 
   afterEach(() => window.getSelection()?.removeAllRanges())
+
+  describe('the sections in the text', () => {
+    const at = (selected: string, occurrence = 0) => {
+      let from = -1
+      for (let i = 0; i <= occurrence; i++) from = TEXT.indexOf(selected, from + 1)
+      return from
+    }
+    const span = (selected: string, open: string, close: string, occurrence = 0) => ({
+      start: at(selected, occurrence),
+      end: at(selected, occurrence) + [...selected].length,
+      open,
+      close,
+    })
+    const HEADER = span('84 KATEDRA', '<fw type="header">', '</fw>')
+    const FOOTER = span('stopka 85', '<fw type="footer">', '</fw>')
+    const tags = (element: Element) => [
+      element.getAttribute('data-open'),
+      element.getAttribute('data-close'),
+    ]
+    const sections = () => [...pageText().querySelectorAll('.section')]
+
+    it('are shown with their tags around them', async () => {
+      await openStructure({ sections: () => [HEADER, FOOTER] })
+
+      await waitFor(() => expect(sections()).toHaveLength(2))
+      expect(sections().map((s) => s.textContent)).toEqual(['84 KATEDRA', 'stopka 85'])
+      expect(sections().map(tags)).toEqual([
+        ['<fw type="header">', '</fw>'],
+        ['<fw type="footer">', '</fw>'],
+      ])
+    })
+
+    it('are not text: the page text is the same, so selecting is unaffected', async () => {
+      await openStructure({ sections: () => [HEADER, FOOTER] })
+      await waitFor(() => expect(sections()).toHaveLength(2))
+
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('are not part of the text: the tags cannot be selected or edited', async () => {
+      await openStructure({ sections: () => [HEADER] })
+      await waitFor(() => expect(sections()).toHaveLength(1))
+
+      // the tags are generated by the stylesheet, not elements or text nodes
+      expect(pageText().textContent).not.toContain('<fw')
+      expect(pageText().querySelectorAll('input, textarea, [contenteditable]')).toHaveLength(0)
+    })
+
+    it('can be nested, as a note group holds its notes', async () => {
+      const NOTES = '1 jeden 2 dwa'
+      const text = `Ala ${NOTES} b`
+      const outer = { start: 4, end: 4 + NOTES.length, open: '<noteGrp>', close: '</noteGrp>' }
+      const first = { start: 4, end: 11, open: '<note n="1">', close: '</note>' }
+      const second = { start: 12, end: 17, open: '<note n="2">', close: '</note>' }
+      await open(
+        { page: () => ({ content: xmlOf(text) }), sections: () => [outer, first, second] },
+        text,
+      )
+      await userEvent.click(structureButton())
+
+      await waitFor(() => expect(sections()).toHaveLength(3))
+      const group = sections()[0]
+      expect(tags(group)).toEqual(['<noteGrp>', '</noteGrp>'])
+      expect(group.textContent).toBe(NOTES)
+      expect([...group.querySelectorAll('.section')].map(tags)).toEqual([
+        ['<note n="1">', '</note>'],
+        ['<note n="2">', '</note>'],
+      ])
+      expect(pageText().textContent).toBe(text)
+    })
+
+    it('can have the same place, the outer one first', async () => {
+      const one = { ...span('84 KATEDRA', '<fw type="header">', '</fw>') }
+      const inner = { ...one, open: '<fw type="pageNum">', close: '</fw>' }
+      await openStructure({ sections: () => [one, inner] })
+
+      await waitFor(() => expect(sections()).toHaveLength(2))
+      expect(tags(sections()[0])).toEqual(['<fw type="header">', '</fw>'])
+      expect(tags(sections()[0].querySelector('.section')!)).toEqual([
+        '<fw type="pageNum">',
+        '</fw>',
+      ])
+    })
+
+    it('spans lines and paragraphs, as a table of contents does', async () => {
+      const toc = span('I. Alfa\nII. Beta\nkoniec', '<div type="toc">', '</div>')
+      await openStructure({ sections: () => [toc] })
+
+      await waitFor(() => expect(sections()).toHaveLength(1))
+      expect(sections()[0].textContent).toBe('I. Alfa\nII. Beta\nkoniec')
+    })
+
+    it('are placed by code points: after an emoji too', async () => {
+      const text = '😀 a 84 b'
+      const number = { start: 4, end: 6, open: '<fw type="pageNum">', close: '</fw>' }
+      await open(
+        { page: () => ({ content: xmlOf(text) }), sections: () => [number] },
+        text,
+      )
+      await userEvent.click(structureButton())
+
+      await waitFor(() => expect(sections()).toHaveLength(1))
+      expect(sections()[0].textContent).toBe('84')
+    })
+
+    it('are asked for the XML of the page', async () => {
+      await openStructure({ sections: () => [] })
+
+      await waitFor(() =>
+        expect(calls.filter((c) => c.url === '/tei/sections')).toHaveLength(1),
+      )
+      expect(calls.find((c) => c.url === '/tei/sections')!.body).toEqual({
+        xml: xmlOf(TEXT),
+      })
+    })
+
+    it('are shown again, from the new XML, after marking a section', async () => {
+      const marked = xmlOf(`${TEXT} `)
+      await openStructure({
+        section: () => ({ content: marked }),
+        sections: (xml) => (xml === marked ? [HEADER] : []),
+      })
+      expect(sections()).toHaveLength(0)
+
+      select('84 KATEDRA')
+      await userEvent.selectOptions(dropdown(), 'Page header')
+      await userEvent.click(confirmButton())
+
+      await waitFor(() => expect(sections()).toHaveLength(1))
+      expect(tags(sections()[0])).toEqual(['<fw type="header">', '</fw>'])
+    })
+
+    it('are not shown for another page than their own', async () => {
+      await openStructure({
+        page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }),
+        sections: (xml) => (xml === xmlOf(TEXT) ? [HEADER] : []),
+      })
+      await waitFor(() => expect(sections()).toHaveLength(1))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
+      expect(sections()).toHaveLength(0)
+    })
+
+    it('are not shown in the text view', async () => {
+      await open({ sections: () => [HEADER] })
+
+      expect(sections()).toHaveLength(0)
+    })
+
+    it('show just the text if the backend cannot say, and the page still works', async () => {
+      await openStructure({ sections: () => new Error('no') })
+
+      await waitFor(() =>
+        expect(calls.filter((c) => c.url === '/tei/sections')).toHaveLength(1),
+      )
+      expect(sections()).toHaveLength(0)
+      expect(pageText().textContent).toBe(TEXT)
+      select('84 KATEDRA')
+      expect(dialog()).toBeInTheDocument()
+    })
+
+    it('leave a selection across them as it is: offsets are those of the text', async () => {
+      await openStructure({ sections: () => [HEADER] })
+      await waitFor(() => expect(sections()).toHaveLength(1))
+      const box = pageText()
+      const range = document.createRange()
+      // from inside the header to the next line, over the element's border
+      range.setStart(sections()[0].firstChild!, 3)
+      range.setEnd(box.lastChild!, 6)
+      window.getSelection()!.removeAllRanges()
+      window.getSelection()!.addRange(range)
+      fireEvent.mouseUp(box)
+
+      await userEvent.selectOptions(dropdown(), 'Table of contents')
+      await userEvent.click(confirmButton())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      const start = TEXT.indexOf('84 KATEDRA') + 3
+      const end = TEXT.indexOf('84 KATEDRA') + 10 + 6 // 6 characters after the header
+      const selected = TEXT.slice(start, end).replace(/\s+$/, '')
+      expect(sectionCalls()[0].body).toMatchObject({
+        start,
+        end: start + selected.length,
+        text: selected,
+      })
+    })
+  })
+
+  describe('where the dialog appears', () => {
+    // jsdom has no layout: the box is 400px high from y=100, and the selection
+    // is where each test says.
+    const AREA = { left: 0, top: 100, right: 300, bottom: 500, width: 300, height: 400 }
+    const rectOf = (top: number, bottom: number) => ({
+      left: 20, right: 120, top, bottom, width: 100, height: bottom - top,
+    })
+    let selected = rectOf(0, 0)
+    const original = Element.prototype.getBoundingClientRect
+    const originalRange = Range.prototype.getBoundingClientRect
+
+    beforeEach(() => {
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        return (
+          this.classList.contains('structure-wrap') ? AREA : original.call(this)
+        ) as DOMRect
+      }
+      Range.prototype.getBoundingClientRect = () => selected as DOMRect
+    })
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = original
+      Range.prototype.getBoundingClientRect = originalRange
+    })
+
+    it('is below a selection in the upper half of the box', async () => {
+      await openStructure()
+      selected = rectOf(120, 140) // 20-40px into the box
+
+      select('84 KATEDRA')
+
+      const style = dialog()!.style
+      expect(style.top).toBe('46px') // 140 - 100 + 6
+      expect(style.bottom).toBe('')
+    })
+
+    it('is above a selection in the lower half, so that it stays in sight', async () => {
+      await openStructure()
+      selected = rectOf(440, 460) // the last line, 340-360px into the box
+
+      select('stopka 85')
+
+      const style = dialog()!.style
+      expect(style.bottom).toBe('66px') // 500 - 440 + 6
+      expect(style.top).toBe('')
+      expect(dropdown()).toBeInTheDocument() // still usable there
+    })
+
+    it('goes by where the selection ends: a long one ending low is above', async () => {
+      await openStructure()
+      selected = rectOf(130, 330) // ends at 230px of 400: just past the middle
+
+      select('cle przekazał\nI. Alfa\nII. Beta\nkoniec')
+
+      expect(dialog()!.style.bottom).toBe('376px') // 500 - 130 + 6
+    })
+
+    it('is below a selection that ends exactly in the middle', async () => {
+      await openStructure()
+      selected = rectOf(280, 300) // ends at 200px: the middle
+
+      select('I. Alfa')
+
+      expect(dialog()!.style.top).toBe('206px')
+    })
+
+    it('can be used from above: choosing and confirming works', async () => {
+      await openStructure()
+      selected = rectOf(440, 460)
+      select('stopka 85')
+
+      await userEvent.selectOptions(dropdown(), 'Page footer')
+      await userEvent.click(confirmButton())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+    })
+
+    it('is placed again for each selection', async () => {
+      await openStructure()
+      selected = rectOf(440, 460)
+      select('stopka 85')
+      expect(dialog()!.style.bottom).not.toBe('')
+
+      selected = rectOf(120, 140)
+      select('84 KATEDRA')
+
+      expect(dialog()!.style.top).toBe('46px')
+      expect(dialog()!.style.bottom).toBe('')
+    })
+  })
 
   describe('the view', () => {
     it('is switched to with the Structure button, which shows it is on', async () => {
@@ -1376,13 +1728,16 @@ describe('structure view', () => {
       expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
     })
 
-    it('makes no request by itself', async () => {
+    it('only asks for the sections marked in the XML, which changes nothing', async () => {
       await open()
       const before = calls.length
 
       await userEvent.click(structureButton())
 
-      expect(calls).toHaveLength(before)
+      await waitFor(() => expect(calls).toHaveLength(before + 1))
+      expect(calls.slice(before).map((c) => `${c.method} ${c.url}`)).toEqual([
+        'POST /tei/sections',
+      ])
     })
   })
 
@@ -1414,6 +1769,8 @@ describe('structure view', () => {
         'Page footer',
         'Page number',
         'Table of contents',
+        'Note group',
+        'Note',
       ])
       expect(confirmButton()).toBeInTheDocument()
     })
@@ -1563,6 +1920,8 @@ describe('structure view', () => {
       ['Page footer', 'footer'],
       ['Page number', 'page_number'],
       ['Table of contents', 'toc'],
+      ['Note group', 'note_group'],
+      ['Note', 'note'],
     ])('sends %s to the backend as %s', async (label, section) => {
       await openStructure()
 
@@ -1576,6 +1935,84 @@ describe('structure view', () => {
         end: 10,
         text: '84 KATEDRA',
         section,
+      })
+    })
+
+    describe('the number of a note', () => {
+      const noteNumber = () => screen.queryByRole('textbox', { name: 'Note number' })
+
+      it('is asked for only when the section is a note', async () => {
+        await openStructure()
+        select('I. Alfa')
+        expect(noteNumber()).toBeNull()
+
+        await userEvent.selectOptions(dropdown(), 'Note')
+        expect(noteNumber()).toBeInTheDocument()
+
+        await userEvent.selectOptions(dropdown(), 'Note group')
+        expect(noteNumber()).toBeNull()
+      })
+
+      it('is sent as n with the note', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.type(noteNumber()!, ' 1 ')
+        await userEvent.click(confirmButton())
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).toEqual({
+          start: TEXT.indexOf('I. Alfa'),
+          end: TEXT.indexOf('I. Alfa') + 7,
+          text: 'I. Alfa',
+          section: 'note',
+          n: '1',
+        })
+      })
+
+      it('is left out when it is empty: the note has no n', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.type(noteNumber()!, '   ')
+        await userEvent.click(confirmButton())
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).not.toHaveProperty('n')
+      })
+
+      it('is not sent when the section is changed to another after typing it', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.type(noteNumber()!, '7')
+        await userEvent.selectOptions(dropdown(), 'Note group')
+        await userEvent.click(confirmButton())
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).not.toHaveProperty('n')
+      })
+
+      it('confirms with Enter', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.type(noteNumber()!, '3{Enter}')
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).toMatchObject({ section: 'note', n: '3' })
+      })
+
+      it('is empty again for the next selection', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.type(noteNumber()!, '3')
+        select('II. Beta')
+
+        await userEvent.selectOptions(dropdown(), 'Note')
+
+        expect(noteNumber()).toHaveValue('')
       })
     })
 
@@ -1688,6 +2125,7 @@ describe('structure view', () => {
           `POST /editions/${UUID}/pages/0/sections`,
           'POST /tei/text',
           'POST /spellcheck', // the words of the new text
+          'POST /tei/sections', // and what is marked in the new XML
         ]),
       )
     })

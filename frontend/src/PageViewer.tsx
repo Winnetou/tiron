@@ -46,7 +46,11 @@ interface Props {
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
   /** Mark the selected text of the page as a section of it. */
-  onMarkSection: (selection: TextSelection, section: SectionKind) => void
+  onMarkSection: (
+    selection: TextSelection,
+    section: SectionKind,
+    n?: string,
+  ) => void
   /** What was done last, to tell the user (not an error). */
   notice: string | null
 }
@@ -195,7 +199,12 @@ export default function PageViewer({
         )}
         {view === 'xml' && <XmlView xml={page.content} />}
         {view === 'structure' && (
-          <StructureView text={text} busy={busy} onMark={onMarkSection} />
+          <StructureView
+            text={text}
+            xml={page.content}
+            busy={busy}
+            onMark={onMarkSection}
+          />
         )}
       </section>
       <Sidebar

@@ -95,6 +95,34 @@ export async function teiToText(xml: string): Promise<string> {
   return text
 }
 
+/** A section marked in the XML: its place in the text, and its tags. */
+export interface SectionSpan {
+  /** Offsets in the text, in code points (as the backend counts). */
+  start: number
+  end: number
+  /** The tags as written in the XML, e.g. `<note n="1">` and `</note>`. */
+  open: string
+  close: string
+}
+
+/**
+ * Calls POST /tei/sections: the backend lists the sections that are marked in
+ * the XML (headers, footers, page numbers, the table of contents, notes and
+ * note groups) with where they are in the text and what their tags are, so that
+ * the structure view can show them. The frontend does not read the XML itself.
+ */
+export async function teiSections(xml: string): Promise<SectionSpan[]> {
+  const { sections } = await request<{ sections: SectionSpan[] }>(
+    '/tei/sections',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    },
+  )
+  return sections
+}
+
 /**
  * Calls POST /ner: the backend finds the named entities (people, places,
  * organisations, dates, ...) in a plain text. Each has the character offsets
@@ -207,6 +235,7 @@ export function markSection(
   number: number,
   selection: TextSelection,
   section: SectionKind,
+  n?: string,
 ): Promise<Page> {
   return request<Page>(`${pageUrl(editionId, number)}/sections`, {
     method: 'POST',
@@ -216,6 +245,8 @@ export function markSection(
       end: selection.end,
       text: selection.text,
       section,
+      // the number of a note, if given: <note n="1">
+      ...(n ? { n } : {}),
     }),
   })
 }

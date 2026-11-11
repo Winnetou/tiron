@@ -57,6 +57,20 @@ class TeiText(BaseModel):
     text: str
 
 
+class SectionSpan(BaseModel):
+    """A section marked in the XML of a page: the characters `start` to `end` of
+    its text, and the tags around them as written in the XML."""
+
+    start: int
+    end: int
+    open: str
+    close: str
+
+
+class TeiSections(BaseModel):
+    sections: list[SectionSpan]
+
+
 class NerRequest(BaseModel):
     text: str = Field(max_length=100_000)
 
@@ -79,7 +93,7 @@ EntityLabel = Literal["date", "geogName", "orgName", "persName", "placeName", "t
 
 
 # The sections of a page that can be marked, as the API calls them.
-SectionKind = Literal["header", "footer", "page_number", "toc"]
+SectionKind = Literal["header", "footer", "page_number", "toc", "note_group", "note"]
 
 
 class EntityTag(BaseModel):
@@ -158,9 +172,17 @@ class SectionMark(BaseModel):
     end: int = Field(ge=1)
     text: str = Field(min_length=1)
     section: SectionKind
+    # The number of a note (<note n="1">); only for a `note`, and optional.
+    n: str | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
     def check_range(self) -> SectionMark:
         if self.end <= self.start:
             raise ValueError("end must be greater than start")
+        if self.n is not None:
+            self.n = self.n.strip()
+            if not self.n:
+                raise ValueError("n must not be empty")
+            if self.section != "note":
+                raise ValueError("n is only for a note")
         return self

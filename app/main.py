@@ -18,6 +18,7 @@ from app.models import (
     SectionMark,
     SpellcheckRequest,
     SpellcheckResult,
+    TeiSections,
     TeiText,
     TeiXml,
     WordCorrection,
@@ -34,6 +35,7 @@ from app.tei_xml import (
     mark_section,
     replace_text_range,
     tag_text_range,
+    tei_xml_sections,
     tei_xml_to_text,
     text_to_tei_xml,
 )
@@ -216,6 +218,11 @@ def mark_page_section(
     - `footer`: `<fw type="footer">` around the text
     - `page_number`: `<fw type="pageNum">` around the text (the printed number)
     - `toc`: `<div type="toc">` around whole paragraphs
+    - `note`: `<note>` around the text, like an entity; with the optional `n`
+      (e.g. `"n": "1"`, only for a note) it is `<note n="1">`
+    - `note_group`: `<noteGrp>` around notes that are already marked and next to
+      each other, and nothing else: TEI lets a `<noteGrp>` hold only notes, so
+      anything else in the selection is a 422
 
     The `<fw>` elements go around the text, like an entity, and cannot span
     paragraphs or start inside other markup. A `<div>` cannot hold bare text or
@@ -242,7 +249,12 @@ def mark_page_section(
         )
     try:
         xml = mark_section(
-            page.corrected_content, mark.start, mark.end, mark.section, mark.text
+            page.corrected_content,
+            mark.start,
+            mark.end,
+            mark.section,
+            mark.text,
+            mark.n,
         )
     except TextChanged as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -270,6 +282,26 @@ def tei_to_text(tei: TeiXml) -> TeiText:
     """
     try:
         return TeiText(text=tei_xml_to_text(tei.xml))
+    except InvalidTei as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@app.post("/tei/sections", response_model=TeiSections)
+def tei_sections(tei: TeiXml) -> TeiSections:
+    """The sections of a page that are marked in a TEI XML document: the
+    elements that `POST .../sections` makes (`<fw>`, `<div type="toc">`,
+    `<noteGrp>`, `<note>`), to show where they are in the text.
+
+    The body is `{"xml": "<TEI ...>...</TEI>"}`, as for `POST /tei/text`, and
+    the answer is 422 in the same cases. The response is `{"sections": [...]}`,
+    in the order of the document, outer ones first. Each section has `start`
+    and `end`, the characters of the text that `POST /tei/text` gives for the
+    same XML (counted the way Python does), and `open` and `close`, its tags as
+    they are written in the XML, e.g. `<note n="1">` and `</note>`. Nothing is
+    stored.
+    """
+    try:
+        return TeiSections(sections=tei_xml_sections(tei.xml))
     except InvalidTei as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 

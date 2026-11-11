@@ -2,6 +2,7 @@
 
 import re
 from typing import Any, get_args
+from xml.sax.saxutils import quoteattr
 
 import delb
 from delb import TagNode, tag
@@ -140,6 +141,14 @@ def _flatten(node: TagNode, out: list[_Char]) -> None:
     """Append the characters under `node`, with marks where blocks and lines end."""
     for child in node.iterate_children():
         if isinstance(child, TextNode):
+            if (
+                node.local_name == "noteGrp"
+                and "\n" in child.content
+                and not child.content.strip()
+            ):
+                # A <noteGrp> may not hold an <lb/>, so a line break between its
+                # notes is a newline in the XML, which is a line break here.
+                out.append((_LINE_MARK, None))
             out.extend(
                 (char, (child, index)) for index, char in enumerate(child.content)
             )
@@ -217,6 +226,63 @@ def tei_xml_to_text(xml: str) -> str:
     Raises InvalidTei if the XML is not a TEI document (see _parse_tei).
     """
     return _extract(_text_element(_parse_tei(xml)))[0]
+
+
+def _is_section(node: TagNode) -> bool:
+    """Is the element one of those that mark_section makes?"""
+    name = node.local_name
+    if name == "div":
+        return _attributes(node).get("type") == "toc"
+    return name in {"fw", "noteGrp", "note"}
+
+
+def tei_xml_sections(xml: str) -> list[dict[str, Any]]:
+    """The sections of a page that are marked in the XML (the elements that
+    mark_section makes: <fw>, a <div> of type "toc", <noteGrp> and <note>), in
+    the order of the document, outer ones first.
+
+    Each is `start` and `end`, the characters of the text that tei_xml_to_text
+    gives for the same XML (in code points), and `open` and `close`, the tags as
+    written in the XML (`<fw type="header">` and `</fw>`). An element without
+    text is left out.
+
+    Raises InvalidTei if the XML is not a TEI document (see _parse_tei).
+    """
+    text_element = _text_element(_parse_tei(xml))
+    _, sources = _extract(text_element)
+    first: dict[int, int] = {}
+    last: dict[int, int] = {}
+    for index, source in enumerate(sources):
+        if source is not None:
+            key = id(source[0])
+            first.setdefault(key, index)
+            last[key] = index
+
+    sections: list[dict[str, Any]] = []
+
+    def walk(node: TagNode) -> None:
+        for child in node.iterate_children():
+            if not isinstance(child, TagNode):
+                continue
+            if _is_section(child):
+                keys = [id(t) for t in _text_nodes(child) if id(t) in first]
+                if keys:
+                    attributes = "".join(
+                        f" {name}={quoteattr(value)}"
+                        for name, value in _attributes(child).items()
+                    )
+                    sections.append(
+                        {
+                            "start": min(first[k] for k in keys),
+                            "end": max(last[k] for k in keys) + 1,
+                            "open": f"<{child.local_name}{attributes}>",
+                            "close": f"</{child.local_name}>",
+                        }
+                    )
+            walk(child)
+
+    walk(text_element)
+    return sections
 
 
 class TextChanged(ValueError):
@@ -505,12 +571,15 @@ def replace_text_range(xml: str, start: int, end: int, before: str, after: str) 
 
 # The sections of a page that can be marked, by the name the API gives them: the
 # element they become and its attributes. A running header or footer and a
-# printed page number are forme work (<fw>) in TEI.
+# printed page number are forme work (<fw>) in TEI, and a note is a <note> (a
+# `note_group` is a <noteGrp>, which holds only notes).
 SECTIONS: dict[str, tuple[str, dict[str, str]]] = {
     "header": ("fw", {"type": "header"}),
     "footer": ("fw", {"type": "footer"}),
     "page_number": ("fw", {"type": "pageNum"}),
     "toc": ("div", {"type": "toc"}),
+    "note_group": ("noteGrp", {}),
+    "note": ("note", {}),
 }
 
 
@@ -720,16 +789,97 @@ def _wrap_in_div(nodes: list[Any]) -> None:
     div.append_children(*nodes)
 
 
-def mark_section(xml: str, start: int, end: int, section: str, text: str) -> str:
+def _wrap_notes(xml: str, start: int, end: int, text: str) -> str:
+    """Put the notes of the selection in a <noteGrp>. TEI lets a <noteGrp> hold
+    only notes (no text, not even an <lb/>), so the selection must be notes that
+    are already marked, next to each other, and nothing else but spaces and line
+    breaks; a line break between notes is kept as a newline in the text."""
+    root, sources, start, end = _locate(xml, start, end, text)
+    first, last = sources[start], sources[end - 1]
+    assert first is not None and last is not None
+    (first_node, first_index), (last_node, last_index) = first, last
+
+    parent = _common_parent(first_node, last_node)
+    start_child = _child_of(parent, first_node)
+    end_child = _child_of(parent, last_node)
+    if parent.local_name == "note" and parent.parent is not None:
+        # inside one note: the group is of that note, if it is all of it
+        whole = _blank_before(parent, first_node, first_index) and _blank_after(
+            parent, last_node, last_index
+        )
+        if whole:
+            start_child = end_child = parent
+            parent = parent.parent
+    children = list(parent.iterate_children())
+    begin = next(i for i, c in enumerate(children) if c is start_child)
+    finish = next(i for i, c in enumerate(children) if c is end_child)
+    covered = children[begin : finish + 1]
+
+    only_notes = (
+        isinstance(start_child, TagNode)
+        and start_child.local_name == "note"
+        and isinstance(end_child, TagNode)
+        and end_child.local_name == "note"
+        and all(
+            (isinstance(c, TagNode) and c.local_name in {"note", "lb"})
+            or (isinstance(c, TextNode) and not c.content.strip())
+            for c in covered
+        )
+    )
+    inside_ok = only_notes and (
+        start_child is not first_node
+        and _blank_before(start_child, first_node, first_index)
+        and _blank_after(end_child, last_node, last_index)
+    )
+    if not inside_ok:
+        raise CannotTag(
+            "A note group holds only notes: select notes that are already marked "
+            "(and nothing else), next to each other"
+        )
+    if parent.local_name == "noteGrp":
+        if all(
+            any(c is o for o in covered)
+            for c in children
+            if not (isinstance(c, TextNode) and not c.content.strip())
+        ):
+            return xml  # already a group, and all of it
+        raise CannotTag("The notes are already in a note group")
+    serialised = str(parent)
+    if "<!--" in serialised or "<?" in serialised:
+        raise CannotTag(
+            f"The selection is in a <{parent.local_name}> that contains a comment "
+            "or processing instruction, which cannot be moved"
+        )
+
+    # A <noteGrp> may not hold a line break (<lb/>) between its notes, so each
+    # becomes a line break in the text, which keeps the text as it was.
+    for i, node in enumerate(covered):
+        if isinstance(node, TagNode) and node.local_name == "lb":
+            (covered[i],) = node.add_preceding_siblings("\n")
+            node.detach()
+    wrapper = TagNode("noteGrp", {}, namespace=TEI_NAMESPACE)
+    covered[0].add_preceding_siblings(wrapper)
+    for node in covered:
+        node.detach()
+    wrapper.append_children(*covered)
+    return _serialise(root, xml)
+
+
+def mark_section(
+    xml: str, start: int, end: int, section: str, text: str, n: str | None = None
+) -> str:
     """Mark the characters `start` to `end` of the text of a TEI document as a
     section of the page, and return the changed XML.
 
     `section` is one of SECTIONS: a running `header` or `footer` and the printed
     `page_number` become <fw type="header">, <fw type="footer"> and
-    <fw type="pageNum"> around the text, and `toc` (the table of contents)
-    becomes <div type="toc">. `start` and `end` are character offsets into what
-    tei_xml_to_text returns for the same XML, and `text` is what is expected
-    there; if it is not, the text has changed since the offsets were taken.
+    <fw type="pageNum"> around the text, `toc` (the table of contents) becomes
+    <div type="toc">, a `note` becomes <note> (with `n="..."` if `n` is given,
+    the number of the note), and a `note_group` becomes <noteGrp> around notes
+    that are already marked (TEI lets it hold nothing else). `start` and `end`
+    are character offsets into what tei_xml_to_text returns for the same XML,
+    and `text` is what is expected there; if it is not, the text has changed
+    since the offsets were taken.
 
     The <fw> elements go around the text itself, like an entity does (see
     tag_text_range), so the text does not change, and what they cannot do is
@@ -751,6 +901,12 @@ def mark_section(xml: str, start: int, end: int, section: str, text: str) -> str
     if section not in get_args(SectionKind):
         raise CannotTag(f"{section!r} is not a section of a page")
     name, attributes = SECTIONS[section]
+    if n is not None:
+        if section != "note":
+            raise CannotTag("Only a note has a number")
+        attributes = {**attributes, "n": n}
     if name == "div":
         return _wrap_blocks(xml, start, end, text, name, attributes)
+    if name == "noteGrp":
+        return _wrap_notes(xml, start, end, text)
     return _wrap_inline(xml, start, end, text, name, attributes)

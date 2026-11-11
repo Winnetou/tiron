@@ -1567,6 +1567,53 @@ class TestMarkPageSection:
         assert markup in stored["page"].corrected_content
         assert tei_xml_to_text(stored["page"].corrected_content) == self.TEXT
 
+    def test_a_note_with_its_number(self, stored):
+        response = self.post(stored, self.body("I. Alfa", "note", n="1"))
+
+        assert response.status_code == 200
+        assert '<note n="1">I. Alfa</note>' in stored["page"].corrected_content
+
+    def test_a_note_without_a_number(self, stored):
+        self.post(stored, self.body("I. Alfa", "note"))
+
+        assert "<note>I. Alfa</note>" in stored["page"].corrected_content
+
+    def test_the_number_is_trimmed(self, stored):
+        self.post(stored, self.body("I. Alfa", "note", n=" 2 "))
+
+        assert '<note n="2">' in stored["page"].corrected_content
+
+    @pytest.mark.parametrize("n", ["", "   ", "x" * 21])
+    def test_a_bad_number_is_refused(self, stored, n):
+        response = self.post(stored, self.body("I. Alfa", "note", n=n))
+
+        assert response.status_code == 422
+        db.update_page.assert_not_called()
+
+    def test_a_number_for_something_that_is_not_a_note_is_refused(self, stored):
+        response = self.post(stored, self.body("84 KATEDRA", "header", n="1"))
+
+        assert response.status_code == 422
+        db.update_page.assert_not_called()
+
+    def test_a_group_of_notes(self, stored):
+        self.post(stored, self.body("I. Alfa", "note", n="1"))
+        self.post(stored, self.body("II. Beta", "note", n="2"))
+
+        response = self.post(stored, self.body("I. Alfa\nII. Beta", "note_group"))
+
+        assert response.status_code == 200
+        xml = stored["page"].corrected_content
+        assert '<noteGrp><note n="1">I. Alfa</note>' in xml
+        assert tei_xml_to_text(xml) == self.TEXT
+
+    def test_a_group_of_what_is_not_notes_is_refused_with_the_reason(self, stored):
+        response = self.post(stored, self.body("I. Alfa", "note_group"))
+
+        assert response.status_code == 422
+        assert "only notes" in response.json()["detail"]
+        db.update_page.assert_not_called()
+
     def test_the_table_of_contents_is_a_div_around_paragraphs(self, stored):
         response = self.post(stored, self.body("I. Alfa\nII. Beta", "toc"))
 
@@ -1720,3 +1767,33 @@ class TestMarkPageSection:
         path = "/editions/{edition_id}/pages/{number}/sections"
         assert "post" in schema["paths"][path]
         assert "SectionMark" in schema["components"]["schemas"]
+
+
+class TestTeiSections:
+    def test_lists_the_sections_marked_in_the_xml(self):
+        xml = str(text_to_tei_xml("84 KATEDRA\n\ncle"))
+        xml = xml.replace(
+            "<p>84 KATEDRA</p>", '<p><fw type="header">84 KATEDRA</fw></p>'
+        )
+
+        response = client.post("/tei/sections", json={"xml": xml})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "sections": [
+                {"start": 0, "end": 10, "open": '<fw type="header">', "close": "</fw>"}
+            ]
+        }
+
+    def test_no_sections(self):
+        xml = str(text_to_tei_xml("Ala"))
+
+        response = client.post("/tei/sections", json={"xml": xml})
+
+        assert response.json() == {"sections": []}
+
+    def test_xml_that_is_not_tei_is_422(self):
+        response = client.post("/tei/sections", json={"xml": "<a/>"})
+
+        assert response.status_code == 422
+        assert "TEI" in response.json()["detail"]

@@ -256,8 +256,9 @@ export default function App() {
     page: Page,
     selection: TextSelection,
     section: SectionKind,
+    n?: string,
   ) {
-    return run(markSection(page.edition_id, page.number, selection, section), () =>
+    return run(markSection(page.edition_id, page.number, selection, section, n), () =>
       setNotice(`Marked as ${sectionLabel(section).toLowerCase()}.`),
     )
   }
@@ -291,8 +292,8 @@ export default function App() {
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
-        onMarkSection={(selection, section) =>
-          markPageSection(page, selection, section)
+        onMarkSection={(selection, section, n) =>
+          markPageSection(page, selection, section, n)
         }
         notice={notice}
       />
