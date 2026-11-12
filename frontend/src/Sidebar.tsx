@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react'
 
+/** The views that the sidebar switches between. */
+export type SidebarView = 'correction' | 'structure' | 'ner'
+
 interface Tool {
+  view: SidebarView
   label: string
   icon: ReactNode
 }
-
-const NER_LABEL = 'Named entity recognition'
-const STRUCTURE_LABEL = 'Structure'
 
 // Simple 24x24 stroke icons (no icon dependency).
 function Icon({ children }: { children: ReactNode }) {
@@ -27,18 +28,10 @@ function Icon({ children }: { children: ReactNode }) {
   )
 }
 
+// In this order, from the top. The first is the view the page opens in.
 const TOOLS: Tool[] = [
   {
-    label: 'Structure',
-    // outline: headings and indented lines
-    icon: (
-      <Icon>
-        <path d="M4 6h16M8 12h12M8 18h12" />
-        <path d="M4 12h.01M4 18h.01" />
-      </Icon>
-    ),
-  },
-  {
+    view: 'correction',
     label: 'Correction',
     // pencil
     icon: (
@@ -49,7 +42,19 @@ const TOOLS: Tool[] = [
     ),
   },
   {
-    label: NER_LABEL,
+    view: 'structure',
+    label: 'Structure',
+    // outline: headings and indented lines
+    icon: (
+      <Icon>
+        <path d="M4 6h16M8 12h12M8 18h12" />
+        <path d="M4 12h.01M4 18h.01" />
+      </Icon>
+    ),
+  },
+  {
+    view: 'ner',
+    label: 'Named entity recognition',
     // tag
     icon: (
       <Icon>
@@ -61,50 +66,40 @@ const TOOLS: Tool[] = [
 ]
 
 interface Props {
-  /** Send the text of the page to be recognized for named entities. */
-  onRecognizeEntities: () => void
+  /** The view that is shown, which is the button that is on; none for the XML. */
+  active: SidebarView | null
+  onSelect: (view: SidebarView) => void
   /** False when there is no text to recognize entities in. */
   canRecognize: boolean
   recognizing: boolean
-  /** Whether the structure view is the one shown. */
-  structureActive: boolean
-  /** Switch to the structure view, or back to the text if it is shown. */
-  onToggleStructure: () => void
 }
 
 /**
- * Vertical tool bar on the right. Structure (a view to mark the sections of a
- * page) and named entity recognition work; the other button is a stub.
+ * Vertical tool bar on the right: one button for each view of the page
+ * (correction, structure, named entity recognition). The button of the view that
+ * is shown is on (pressed and highlighted), the others are off.
  */
 export default function Sidebar({
-  onRecognizeEntities,
+  active,
+  onSelect,
   canRecognize,
   recognizing,
-  structureActive,
-  onToggleStructure,
 }: Props) {
   return (
     <aside className="sidebar" aria-label="Tools">
-      {TOOLS.map(({ label, icon }) => {
-        const isNer = label === NER_LABEL
-        const isStructure = label === STRUCTURE_LABEL
+      {TOOLS.map(({ view, label, icon }) => {
+        const isNer = view === 'ner'
         return (
           <button
-            key={label}
+            key={view}
             type="button"
             className="sidebar-button"
             aria-label={label}
             data-tooltip={label}
-            onClick={
-              isNer
-                ? onRecognizeEntities
-                : isStructure
-                  ? onToggleStructure
-                  : undefined
-            }
+            onClick={() => onSelect(view)}
             disabled={isNer && (!canRecognize || recognizing)}
             aria-busy={isNer && recognizing ? true : undefined}
-            aria-pressed={isStructure ? structureActive : undefined}
+            aria-pressed={active === view}
           >
             {icon}
           </button>

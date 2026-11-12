@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Page } from './api'
-import { entityKey, type Decision, type Entity } from './entities'
+import type { Decision, Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
@@ -12,7 +12,12 @@ const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
-type View = 'text' | 'xml' | 'structure'
+/**
+ * What the right half shows: one of the three views that the sidebar switches
+ * between (correction, the default; structure; named entity recognition), or
+ * the XML (chosen with the XML button: none of the three is on then).
+ */
+type View = 'correction' | 'structure' | 'ner'
 
 interface Props {
   page: Page
@@ -87,13 +92,10 @@ export default function PageViewer({
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
-  // The entities that are still shown: not the ones rejected as "Not NER".
-  const misspelled = (words ?? []).filter((word) => !word.correct).length
-  const entityCount = (entities ?? []).filter(
-    (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
-  ).length
-  // Kept while moving from page to page.
-  const [view, setView] = useState<View>('text')
+  // Every page opens in the correction view, whatever was shown before.
+  const [view, setView] = useState<View>('correction')
+  // The XML is shown instead of the text of the view, which is kept meanwhile.
+  const [showXml, setShowXml] = useState(false)
 
   return (
     <div className="viewer">
@@ -129,13 +131,25 @@ export default function PageViewer({
         <nav className="page-nav">
           <button
             type="button"
-            onClick={onPrevious}
+            onClick={() => {
+              setView('correction')
+              setShowXml(false)
+              onPrevious()
+            }}
             disabled={page.number === 0 || busy}
           >
             Previous page
           </button>
           <span>Page {page.number}</span>
-          <button type="button" onClick={onNext} disabled={busy}>
+          <button
+            type="button"
+            onClick={() => {
+              setView('correction')
+              setShowXml(false)
+              onNext()
+            }}
+            disabled={busy}
+          >
             Next page
           </button>
         </nav>
@@ -147,25 +161,13 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
-          {words && (
-            <span className="spell-count" aria-live="polite">
-              {misspelled === 0 ? 'No misspelled words' : `${misspelled} misspelled`}
-            </span>
-          )}
-          {entities && (
-            <span className="entity-count" aria-live="polite">
-              {entityCount === 0
-                ? 'No entities'
-                : `${entityCount} ${entityCount === 1 ? 'entity' : 'entities'}`}
-            </span>
-          )}
           <div className="view-switch" role="group" aria-label="Show">
             {(['text', 'xml'] as const).map((choice) => (
               <button
                 key={choice}
                 type="button"
-                aria-pressed={view === choice}
-                onClick={() => setView(choice)}
+                aria-pressed={choice === 'xml' ? showXml : !showXml}
+                onClick={() => setShowXml(choice === 'xml')}
               >
                 {choice === 'text' ? 'Text' : 'XML'}
               </button>
@@ -184,11 +186,13 @@ export default function PageViewer({
         {textError && (
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
-        {view === 'text' && (
+        {!showXml && (view === 'correction' || view === 'ner') && (
           <PageText
             text={text}
-            words={words}
-            entities={entities}
+            // the NER view shows only the entities: no misspelled words there
+            words={view === 'ner' ? null : words}
+            // the entities are the NER view's: they are shown only there
+            entities={view === 'ner' ? entities : null}
             decisions={decisions}
             busy={busy}
             onConfirm={onConfirmEntity}
@@ -197,8 +201,8 @@ export default function PageViewer({
             onLegalSpelling={onLegalSpelling}
           />
         )}
-        {view === 'xml' && <XmlView xml={page.content} />}
-        {view === 'structure' && (
+        {showXml && <XmlView xml={page.content} />}
+        {!showXml && view === 'structure' && (
           <StructureView
             text={text}
             xml={page.content}
@@ -208,16 +212,16 @@ export default function PageViewer({
         )}
       </section>
       <Sidebar
-        structureActive={view === 'structure'}
-        onToggleStructure={() =>
-          setView((current) => (current === 'structure' ? 'text' : 'structure'))
-        }
+        active={view}
+        onSelect={(selected) => {
+          setShowXml(false)
+          // pressing the structure button again goes back to the correction view
+          setView(view === 'structure' && selected === 'structure' ? 'correction' : selected)
+          // the button recognizes the entities (again, on every click)
+          if (selected === 'ner') onRecognizeEntities()
+        }}
         canRecognize={text.trim() !== ''}
         recognizing={recognizing}
-        onRecognizeEntities={() => {
-          setView('text') // the entities are shown in the text
-          onRecognizeEntities()
-        }}
       />
     </div>
   )

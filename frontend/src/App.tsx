@@ -21,6 +21,9 @@ import {
   type TextSelection,
 } from './sections'
 
+/** Filled in the edition input at the start, just to make testing easier. */
+const TEST_EDITION_UUID = 'c10409b4-4ae3-4393-91b2-c36d132cf741'
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -80,7 +83,7 @@ async function withText(page: Page): Promise<PageWithText> {
 }
 
 export default function App() {
-  const [uuid, setUuid] = useState('')
+  const [uuid, setUuid] = useState(TEST_EDITION_UUID)
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)

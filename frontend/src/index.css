@@ -202,29 +202,11 @@ button {
 /* Named entities in the text: highlighted in red. */
 .entity {
   padding: 0 0.1em;
+  border: 1px solid #5aa469;
   border-radius: 0.2rem;
-  background: #fde0e0;
-  color: #c00000;
+  background: #e3f4e6;
+  color: #1b5e2b;
   font-weight: 600;
-}
-
-.spell-count,
-.entity-count {
-  font-size: 0.85rem;
-  color: #c00000;
-}
-
-.spell-count {
-  margin-left: auto;
-}
-
-.entity-count {
-  margin-left: 0.75rem;
-}
-
-.spell-count + .view-switch,
-.entity-count + .view-switch {
-  margin-left: 0.75rem;
 }
 
 /* Shown while a recognition request is running. */
@@ -241,8 +223,9 @@ button {
 
 /* An entity that was confirmed, so it is marked in the XML: green. */
 .entity.confirmed {
-  background: #ddf2df;
-  color: #1b6b2a;
+  border-color: #1b6b2a;
+  background: #b9e3c1;
+  color: #124a1e;
 }
 
 .entity-wrap {

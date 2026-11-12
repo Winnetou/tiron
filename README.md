@@ -416,8 +416,9 @@ XML, which is when it is most useful for seeing what is wrong.
 
 The "Named entity recognition" button in the sidebar sends the text on the
 screen (the plain text, not the XML) to `POST /ner`, and the entities the
-backend finds are highlighted in red in the text view, with how many were found
-next to the switch. The highlighting follows the `start`/`end` offsets from the
+backend finds are highlighted in green, in a thin frame, in the named entity
+recognition view (which shows only the entities, not the misspelled words). The
+highlighting follows the `start`/`end` offsets from the
 backend rather than searching for the words, so a word is only marked where the
 model found an entity, not everywhere it appears. The offsets count characters
 the way Python does, which the frontend converts for strings with emoji and the
@@ -440,7 +441,7 @@ selected; if the recognition is wrong, choose the right label instead, or
   turns green, because it is now in the XML as `<persName>...</persName>` (see
   it in the XML view; hovering the green entity shows the label it was marked
   with), and has no dialog any more. The text stays the same.
-- With "Not NER", the highlight is removed and the count goes down. The XML is
+- With "Not NER", the highlight is removed. The XML is
   not changed and no request is made. This is not saved: recognizing again for
   the same page in the same session remembers it, but after reloading the
   entity is found again.
@@ -452,8 +453,9 @@ selected; if the recognition is wrong, choose the right label instead, or
 
 **Spelling.** As soon as the text of a page is shown, the frontend sends it to
 `POST /spellcheck`, with no click, and every word it gets back can be clicked.
-The misspelled ones are in red with a wavy underline, and how many there are is
-shown next to the switch ("41 misspelled"). The frontend does not decide what a
+The misspelled ones are in red with a wavy underline (in the correction view; the
+named entity recognition view shows only entities). There is no count of them and
+no list of them: the frontend does not decide what a
 word is or whether it is right: it shows what the backend says. If the spelling
 cannot be checked (for example the dictionary is missing) the text is shown as
 it is, with the reason above it.
@@ -494,18 +496,23 @@ editing). While a request is running both the field and the button are disabled.
 Either way, the frontend does not decide what is red: after the request it asks
 the backend again, and shows what the backend says.
 
-The words and the entities are shown together: a word inside an entity is
-still a word (it is red if misspelled and can be corrected in place, without
-the entity's dialog getting in the way), and an entity that starts or ends in
-the middle of a word cuts it in two, and either part edits the whole word. A
-correction changes the text, so the entities recognized in the old text are not
-shown for the new one; click the NER button again.
+The words and the entities are in different views: the correction view shows the
+words (the misspelled ones in red), the named entity recognition view shows only the
+entities. A correction changes the text, so the entities recognized in the old
+text are not shown for the new one; click the NER button again.
 
-**The structure view.** The **Structure** button (the first in the sidebar) turns
-a third view on, next to Text and XML: the text of the page, in which the sections
-of the page can be marked. It is a toggle (it is dark while it is on; press it
-again to go back to the text), and the Text, XML and named entity recognition
-buttons also leave it. In this view, **select some text with the mouse** (or
+**The views.** The sidebar has one button for each view of the page, from the
+top: **Correction**, **Structure** and **Named entity recognition**. The button
+of the view that is shown is on (dark, `aria-pressed`), and the others are off, so
+it is always clear which view you are in; pressing another one switches to it.
+The page opens in the correction view, so that button is on first. The entities
+are shown only in the named entity recognition view (each press of its button
+recognizes them again), and the XML button of the page shows the XML, which turns
+all three buttons off; the Text button goes back to the correction view. Pressing
+the Structure button again goes back to the correction view.
+
+**The structure view.** The **Structure** button is the second in the sidebar.
+In this view, **select some text with the mouse** (or
 Shift and the arrows) and a small dialog appears right next to the end of the
 selection, with a **dropdown** of the sections (Page header, Page footer, Page
 number, Table of contents, Note group, Note) and a **Confirm** button. For a
@@ -534,8 +541,7 @@ a blank line where a paragraph was split, the view stays on the structure view,
 and a short note says what was marked ("Marked as page header."). While the
 request runs nothing else can be confirmed, and if the backend refuses (for
 example a header cannot span paragraphs) its reason is shown and the text stays
-as it was. The result is visible in the XML view. The Correction button is still a
-stub.
+as it was. The result is visible in the XML view.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.

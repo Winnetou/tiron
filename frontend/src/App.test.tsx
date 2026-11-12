@@ -235,6 +235,7 @@ async function openPage(options?: Options, search = '') {
   window.history.pushState({}, '', `/${search}`)
   const fetchMock = fakeBackend(options)
   render(<App />)
+  await userEvent.clear(screen.getByLabelText('Edition UUID'))
   await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
   await userEvent.click(screen.getByRole('button', { name: 'Open' }))
   return fetchMock
@@ -249,17 +250,24 @@ afterEach(() => {
 })
 
 describe('first screen', () => {
-  it('asks for a uuid and nothing else', () => {
+  it('asks for a uuid and nothing else', async () => {
     render(<App />)
 
     expect(screen.getByLabelText('Edition UUID')).toBeInTheDocument()
+    // filled in already, to make testing easier
+    expect(screen.getByLabelText('Edition UUID')).toHaveValue(
+      'c10409b4-4ae3-4393-91b2-c36d132cf741',
+    )
     expect(screen.getAllByRole('textbox')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Open' })).toBeEnabled() // a valid uuid
+    await userEvent.clear(screen.getByLabelText('Edition UUID'))
     expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled()
   })
 
   it('keeps the button disabled for an invalid uuid', async () => {
     render(<App />)
 
+    await userEvent.clear(screen.getByLabelText('Edition UUID'))
     await userEvent.type(screen.getByLabelText('Edition UUID'), 'not-a-uuid')
 
     expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled()
@@ -293,6 +301,7 @@ describe('first screen', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
     render(<App />)
 
+    await userEvent.clear(screen.getByLabelText('Edition UUID'))
     await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
@@ -349,6 +358,7 @@ describe('text from the TEI XML', () => {
       return reply(true, 200, PAGE)
     })
     render(<App />)
+    await userEvent.clear(screen.getByLabelText('Edition UUID'))
     await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
@@ -467,16 +477,18 @@ describe('switch between text and XML', () => {
     expect(parseFloat(tagStyle.fontSize)).toBeLessThan(contentSize)
   })
 
-  it('keeps the chosen view when moving to another page', async () => {
+  it('opens another page in the text, not in the XML', async () => {
     await openText()
     await userEvent.click(xmlButton())
 
     await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
-    await waitFor(() =>
-      expect(xmlBox().textContent).toBe(xmlOf('text of page 1')),
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+    expect(xmlButton()).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     )
-    expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('still shows the XML when the backend rejects it as TEI', async () => {
@@ -559,7 +571,7 @@ describe('named entity recognition', () => {
     expect(pageText().querySelector('mark')).not.toHaveAttribute('title')
   })
 
-  it('highlights in red', async () => {
+  it('highlights in green, in a thin frame', async () => {
     await openWithText('Adam Mickiewicz', [entity('Adam Mickiewicz', 0)])
 
     await userEvent.click(nerButton())
@@ -569,15 +581,17 @@ describe('named entity recognition', () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    const [r, g, b] = getComputedStyle(mark).color.match(/\d+/g)!.map(Number)
-    expect(r).toBeGreaterThan(150)
-    expect(g).toBeLessThan(50)
-    expect(b).toBeLessThan(50)
-    const [br, bg, bb] = getComputedStyle(mark).backgroundColor.match(/\d+/g)!.map(Number)
-    expect(br).toBeGreaterThan(bg) // a red-tinted background
-    expect(br).toBeGreaterThan(bb)
-    // ...and the text around it is not red
-    expect(getComputedStyle(pageText()).color).not.toBe(getComputedStyle(mark).color)
+    const style = getComputedStyle(mark)
+    const [r, g, b] = style.color.match(/\d+/g)!.map(Number)
+    expect(g).toBeGreaterThan(r) // green text
+    expect(g).toBeGreaterThan(b)
+    const [br, bg, bb] = style.backgroundColor.match(/\d+/g)!.map(Number)
+    expect(bg).toBeGreaterThan(bb) // a greenish background
+    expect(bg).toBeGreaterThan(br)
+    expect(style.borderTopWidth).toBe('1px') // a thin frame
+    expect(style.borderTopStyle).toBe('solid')
+    // ...and the text around it is not green
+    expect(getComputedStyle(pageText()).color).not.toBe(style.color)
   })
 
   it('marks only the stretch the backend pointed at, not every equal word', async () => {
@@ -614,23 +628,6 @@ describe('named entity recognition', () => {
     await userEvent.click(nerButton())
 
     await waitFor(() => expect(marks()).toEqual(['kota']))
-  })
-
-  it('says how many entities were found', async () => {
-    await openWithText('Jan i Ewa', [entity('Jan', 0), entity('Ewa', 6)])
-
-    await userEvent.click(nerButton())
-
-    expect(await screen.findByText('2 entities')).toBeInTheDocument()
-  })
-
-  it('says when there are none', async () => {
-    await openWithText('Ala ma kota', [])
-
-    await userEvent.click(nerButton())
-
-    expect(await screen.findByText('No entities')).toBeInTheDocument()
-    expect(marks()).toEqual([])
   })
 
   it('sends a new request on every click', async () => {
@@ -1074,7 +1071,6 @@ describe('confirming or rejecting an entity', () => {
       expect(pageText().textContent).toBe(TEXT)
       expect(mark('Adam Mickiewicz')).not.toHaveClass('confirmed')
       expect(mark('1840 roku')).not.toHaveClass('confirmed')
-      expect(screen.getByText('3 entities')).toBeInTheDocument()
     })
 
     it('asks the backend about the text again, which is the same', async () => {
@@ -1267,26 +1263,6 @@ describe('confirming or rejecting an entity', () => {
       expect(calls).toEqual([])
     })
 
-    it('counts the entities that are left', async () => {
-      await recognized()
-      expect(screen.getByText('3 entities')).toBeInTheDocument()
-
-      await reject('Paryżu')
-
-      expect(screen.getByText('2 entities')).toBeInTheDocument()
-    })
-
-    it('says there are none when all were rejected', async () => {
-      await recognized()
-
-      await reject('Paryżu')
-      await reject('Adam Mickiewicz')
-      await reject('1840 roku')
-
-      expect(screen.getByText('No entities')).toBeInTheDocument()
-      expect(pageText().querySelectorAll('mark')).toHaveLength(0)
-    })
-
     it('does not confirm anything if the choice is changed back to the label', async () => {
       await recognized()
       await hover('Paryżu')
@@ -1336,8 +1312,15 @@ describe('confirming or rejecting an entity', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
       await waitFor(() => expect(pageText().textContent).toBe(TEXT))
-      // no new recognition: what was found, and decided, for this text is back
-      expect(pageText().querySelectorAll('mark')).toHaveLength(3)
+      // the page opens in the correction view, which does not show entities;
+      // in the NER view what was decided for this text is back
+      expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Named entity recognition' }),
+      )
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('mark')).toHaveLength(3),
+      )
       expect(mark('Paryżu')).toHaveClass('confirmed')
       expect(mark('Adam Mickiewicz')).not.toHaveClass('confirmed')
     })
@@ -1694,17 +1677,16 @@ describe('structure view', () => {
       )
     })
 
-    it('is left with the Text or the XML button', async () => {
+    it('is still the view after the XML was shown and the Text button is pressed', async () => {
       await openStructure()
 
       await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
       expect(screen.getByRole('region', { name: 'Page XML' })).toBeInTheDocument()
 
-      await userEvent.click(structureButton())
       await userEvent.click(screen.getByRole('button', { name: 'Text' }))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
-      expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByText(/Select some text to mark it/)).toBeInTheDocument()
     })
 
     it('is left with the NER button too, as the entities are shown in the text', async () => {
@@ -1718,14 +1700,15 @@ describe('structure view', () => {
       expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
     })
 
-    it('is kept when moving to another page', async () => {
+    it('is left for the correction view when moving to another page', async () => {
       await open({ page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }) })
       await userEvent.click(structureButton())
 
       await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
       await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
     })
 
     it('only asks for the sections marked in the XML, which changes nothing', async () => {
@@ -2297,26 +2280,6 @@ describe('spell check', () => {
     expect(pageText().textContent).toBe(TEXT)
   })
 
-  it('counts the misspelled words', async () => {
-    await open()
-
-    expect(screen.getByText('2 misspelled')).toBeInTheDocument()
-  })
-
-  it('says when all words are correct', async () => {
-    await open({ ...spellOptions(), spell: (text) => wordsOf(text, []) })
-
-    expect(screen.getByText('No misspelled words')).toBeInTheDocument()
-    expect(misspelled()).toEqual([])
-  })
-
-  it('shows no count when the spelling was not checked', async () => {
-    await openPage({ ...spellOptions(), spell: () => new Error('The pl_PL dictionary is not available') })
-    await screen.findByRole('alert')
-
-    expect(screen.queryByText(/misspelled/)).toBeNull()
-  })
-
   it('shows the backend reason when the spelling cannot be checked, and the text anyway', async () => {
     await openPage({
       ...spellOptions(),
@@ -2599,7 +2562,6 @@ describe('correcting a word', () => {
           ),
         ).toEqual(['tey']),
       )
-      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
     })
 
     it('shows the new word in the XML, which the backend changed', async () => {
@@ -2750,108 +2712,6 @@ describe('correcting a word', () => {
     })
   })
 
-  describe('with the entities', () => {
-    const ETEXT = 'Jan Kowalski mieszka w Paryżu.'
-    const entity = (text: string, label: string): Entity => ({
-      text,
-      label,
-      start: ETEXT.indexOf(text),
-      end: ETEXT.indexOf(text) + [...text].length,
-    })
-    const nerButton = () =>
-      screen.getByRole('button', { name: 'Named entity recognition' })
-
-    async function recognized(entities: Entity[]) {
-      await open({
-        page: () => ({ content: xmlOf(ETEXT) }),
-        spell: (text) => wordsOf(text, ['Kowalski']),
-        ner: () => entities,
-      })
-      await userEvent.click(nerButton())
-      await waitFor(() =>
-        expect(pageText().querySelectorAll('mark.entity').length).toBeGreaterThan(0),
-      )
-    }
-
-    it('words inside an entity are words, and the entity is still marked', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-
-      const mark = pageText().querySelector('mark.entity')!
-      expect(mark.textContent).toBe('Jan Kowalski')
-      expect(Array.from(mark.querySelectorAll('.word')).map((w) => w.textContent)).toEqual([
-        'Jan',
-        'Kowalski',
-      ])
-      expect(mark.querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
-      expect(pageText().textContent).toBe(ETEXT)
-    })
-
-    it('a word inside an entity can be corrected', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('Kowalsky{Enter}')
-
-      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
-      expect(correctionCalls()[0].body).toMatchObject({
-        before: 'Kowalski',
-        after: 'Kowalsky',
-        start: ETEXT.indexOf('Kowalski'),
-      })
-    })
-
-    it('shows no entity dialog over a word that is being edited', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-      expect(screen.queryByRole('dialog')).toBeInTheDocument()
-
-      await userEvent.click(word('Kowalski'))
-
-      expect(editor()).toBeInTheDocument()
-      expect(screen.queryByRole('dialog')).toBeNull()
-    })
-
-    it('the dialog is back for the entity once the editing is over', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('{Escape}')
-      await userEvent.unhover(pageText().querySelector('mark.entity')!)
-
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-    })
-
-    it('an entity that starts in the middle of a word cuts the word in two, and either part edits all of it', async () => {
-      // the entity is "Kowal", the word "Kowalski"
-      await recognized([entity('Kowal', 'persName')].map((e) => ({
-        ...e,
-        start: ETEXT.indexOf('Kowalski'),
-        end: ETEXT.indexOf('Kowalski') + 5,
-      })))
-      const pieces = [word('Kowal'), word('ski')]
-      expect(pieces[0].closest('mark')).not.toBeNull() // the part in the entity
-      expect(pieces[1].closest('mark')).toBeNull() // and the part after it
-
-      await userEvent.click(pieces[1])
-
-      expect(editor()).toHaveValue('Kowalski') // the whole word
-      // the word is the field, and (it is misspelled) its button
-      expect(pageText().textContent).toBe(
-        ETEXT.replace('Kowalski', 'Legal spelling'),
-      )
-    })
-
-    it('after a correction the entities of the old text are not shown for the new one', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-
-      await userEvent.click(word('Jan'))
-      await userEvent.keyboard('Janek{Enter}')
-
-      await waitFor(() => expect(pageText().textContent).toContain('Janek'))
-      expect(pageText().querySelectorAll('mark')).toHaveLength(0)
-    })
-  })
 })
 
 describe('legal spellings', () => {
@@ -2988,14 +2848,12 @@ describe('legal spellings', () => {
 
     it('closes the field and shows the new count', async () => {
       await open()
-      expect(screen.getByText('3 misspelled')).toBeInTheDocument()
       await userEvent.click(word('jey'))
 
       await userEvent.click(legalButton()!)
 
       await waitFor(() => expect(editor()).toBeNull())
       // "jey" and its capital form "Jey" are both legal now
-      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
     })
 
     it('makes the same spelling legal everywhere in the text, capital forms too', async () => {
@@ -3318,8 +3176,8 @@ describe('page view', () => {
     const buttons = within(sidebar).getAllByRole('button')
 
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
-      'Structure',
       'Correction',
+      'Structure',
       'Named entity recognition',
     ])
     for (const button of buttons) {
@@ -3445,5 +3303,155 @@ describe('mark as ready', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
     expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
+  })
+})
+
+describe('which view is shown', () => {
+  const button = (name: string) => screen.getByRole('button', { name })
+  const correction = () => button('Correction')
+  const structure = () => button('Structure')
+  const ner = () => button('Named entity recognition')
+  const pressed = () =>
+    [correction(), structure(), ner()].map((b) => b.getAttribute('aria-pressed'))
+  const options: Options = {
+    page: () => ({ content: xmlOf('Ala ma kota') }),
+    ner: () => [{ text: 'Ala', label: 'persName', start: 0, end: 3 }],
+  }
+  const entities = () => document.querySelectorAll('mark.entity')
+
+  async function open() {
+    await openPage(options)
+    await waitFor(() => expect(pageText().textContent).toBe('Ala ma kota'))
+  }
+
+  it('is the correction view when the page opens, and its button is on', async () => {
+    await open()
+
+    expect(pressed()).toEqual(['true', 'false', 'false'])
+    expect(correction()).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('is still the same view after the XML was shown and the text is back', async () => {
+    await open()
+    await userEvent.click(ner())
+    await waitFor(() => expect(entities()).toHaveLength(1))
+
+    await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+    expect(pressed()).toEqual(['false', 'false', 'true'])
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+    expect(pressed()).toEqual(['false', 'false', 'true'])
+    expect(entities()).toHaveLength(1)
+  })
+
+  it('has the Correction button on the top', async () => {
+    await open()
+
+    const buttons = within(screen.getByRole('complementary', { name: 'Tools' }))
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label'))
+    expect(buttons[0]).toBe('Correction')
+  })
+
+  it('moves the highlight to the structure button, and back', async () => {
+    await open()
+
+    await userEvent.click(structure())
+    expect(pressed()).toEqual(['false', 'true', 'false'])
+
+    await userEvent.click(correction())
+    expect(pressed()).toEqual(['true', 'false', 'false'])
+  })
+
+  it('moves the highlight to the NER button, and shows the entities there only', async () => {
+    await open()
+
+    await userEvent.click(ner())
+    await waitFor(() => expect(entities()).toHaveLength(1))
+    expect(pressed()).toEqual(['false', 'false', 'true'])
+
+    await userEvent.click(correction())
+    expect(pressed()).toEqual(['true', 'false', 'false'])
+    expect(entities()).toHaveLength(0)
+
+    await userEvent.click(ner())
+    await waitFor(() => expect(entities()).toHaveLength(1))
+  })
+
+  it('shows only the entities in the NER view, and the words in the correction view', async () => {
+    await openPage({
+      ...options,
+      spell: (text) => wordsOf(text, ['kota']),
+    })
+    await waitFor(() => expect(pageText().textContent).toBe('Ala ma kota'))
+    const words = () => pageText().querySelectorAll('.word')
+    await waitFor(() => expect(words().length).toBeGreaterThan(0))
+    expect(pageText().querySelectorAll('.word.misspelled')).toHaveLength(1)
+
+    await userEvent.click(ner())
+
+    await waitFor(() => expect(entities()).toHaveLength(1))
+    expect(words()).toHaveLength(0) // no words to click, nor misspelled ones in red
+    expect(pageText().textContent).toBe('Ala ma kota')
+
+    await userEvent.click(correction())
+
+    expect(entities()).toHaveLength(0)
+    expect(words().length).toBeGreaterThan(0)
+    expect(pageText().querySelectorAll('.word.misspelled')).toHaveLength(1)
+  })
+
+  it('goes from one view to another directly', async () => {
+    await open()
+
+    await userEvent.click(structure())
+    await userEvent.click(ner())
+    expect(pressed()).toEqual(['false', 'false', 'true'])
+
+    await userEvent.click(structure())
+    expect(pressed()).toEqual(['false', 'true', 'false'])
+  })
+
+  it('has one button on at a time, whatever is pressed', async () => {
+    await open()
+
+    for (const press of [structure, ner, correction, ner, structure, correction]) {
+      await userEvent.click(press())
+      expect(pressed().filter((value) => value === 'true')).toHaveLength(1)
+    }
+  })
+
+  it('keeps the view on while the XML is shown, and returns to it with Text', async () => {
+    await open()
+    await userEvent.click(structure())
+
+    await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+    expect(pressed()).toEqual(['false', 'true', 'false'])
+
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+    expect(pressed()).toEqual(['false', 'true', 'false'])
+  })
+
+  it('opens every page in the correction view, the default', async () => {
+    await open()
+    await userEvent.click(structure())
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await waitFor(() => expect(pressed()).toEqual(['true', 'false', 'false']))
+    await userEvent.click(ner())
+    await waitFor(() => expect(pressed()).toEqual(['false', 'false', 'true']))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+
+    await waitFor(() => expect(pressed()).toEqual(['true', 'false', 'false']))
+  })
+
+  it('shows the highlight with the pressed style', async () => {
+    await open()
+
+    // (the stylesheet is not loaded here: the state is what the style goes by)
+    expect(correction().matches("[aria-pressed='true']")).toBe(true)
+    expect(structure().matches("[aria-pressed='true']")).toBe(false)
   })
 })
