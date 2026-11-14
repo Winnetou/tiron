@@ -143,7 +143,13 @@ export default function PageViewer({
           <button
             type="button"
             onClick={onMarkReady}
-            disabled={page.ready || busy}
+            // a page with a misspelled word (in red) cannot be marked as ready
+            disabled={page.ready || busy || misspelled > 0}
+            title={
+              misspelled > 0 && !page.ready
+                ? 'Correct the misspelled words first'
+                : undefined
+            }
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
