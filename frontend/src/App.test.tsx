@@ -2639,7 +2639,7 @@ describe('correcting a word', () => {
       await correct('jey', 'jej')
 
       await waitFor(() => expect(pageText().textContent).toContain('jej'))
-      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
+      expect(calls.filter((c) => c.method === 'PATCH')).toEqual([])
     })
 
     it('can correct the same word again', async () => {
@@ -3110,7 +3110,6 @@ describe('legal spellings', () => {
       await userEvent.click(legalButton()!)
 
       await waitFor(() => expect(misspelled()).not.toContain('jey'))
-      expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
       expect(
         calls.filter((c) => c.method === 'PATCH' || c.url.includes('/entities')),
       ).toEqual([])
@@ -3435,6 +3434,45 @@ describe('mark as ready', () => {
     await openPage({ page: () => ({ ready: true }) })
 
     expect(await screen.findByRole('button', { name: 'Ready' })).toBeDisabled()
+  })
+
+  describe('with misspelled words', () => {
+    const ready = () => screen.getByRole('button', { name: 'Mark as ready' })
+    const open = async (wrong: string[]) => {
+      await openPage({
+        page: () => ({ content: xmlOf('Ala ma jey kota') }),
+        spell: (text) => wordsOf(text, wrong),
+      })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    }
+
+    it('is inactive while a word is wrong', async () => {
+      await open(['jey'])
+
+      expect(ready()).toBeDisabled()
+    })
+
+    it('is active when no word is wrong', async () => {
+      await open([])
+
+      expect(ready()).toBeEnabled()
+    })
+
+    it('becomes active when the last wrong word is corrected', async () => {
+      await openPage({
+        page: () => ({ content: xmlOf('Ala ma jey kota') }),
+        spell: (text) => wordsOf(text, text.includes('jey') ? ['jey'] : []),
+      })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+      expect(ready()).toBeDisabled()
+
+      await userEvent.click(screen.getByText('jey'))
+      const field = await screen.findByRole('textbox')
+      await userEvent.clear(field)
+      await userEvent.type(field, 'jej{Enter}')
+
+      await waitFor(() => expect(ready()).toBeEnabled())
+    })
   })
 
   it('shows an error when marking as ready fails', async () => {
