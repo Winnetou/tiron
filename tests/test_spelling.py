@@ -51,22 +51,42 @@ class TestWords:
         for word in check_words(text):
             assert text[word.start : word.end] == word.text
 
-    def test_punctuation_and_spaces_are_not_words(self, fake):
-        assert [w.text for w in check_words('  Ala,  "ma"; (kota)...\n\n')] == [
-            "Ala",
-            "ma",
-            "kota",
+    def test_signs_are_tokens_that_count_as_correct(self, fake):
+        assert words('  Ala,  "ma"; (kota)...\n\n') == [
+            ("Ala", True),
+            (",", True),
+            ('"', True),
+            ("ma", True),
+            ('";', True),
+            ("(", True),
+            ("kota", True),
+            (")...", True),
         ]
 
-    def test_empty_text_and_text_without_words(self, fake):
+    def test_a_lonely_sign_and_signs_glued_to_a_word(self, fake):
+        text = "Ala $ ma (|}kota"
+
+        assert words(text) == [
+            ("Ala", True),
+            ("$", True),
+            ("ma", True),
+            ("(|}", True),
+            ("kota", True),
+        ]
+        for word in check_words(text):
+            assert text[word.start : word.end] == word.text
+
+    def test_only_white_space_is_not_a_token(self, fake):
         assert check_words("") == []
-        assert check_words("  \n ,.;: ()—… ") == []
+        assert check_words("  \n\t ") == []
 
     def test_offsets_count_code_points(self, fake):
         text = "😀😀 Ala 😀 ma"
 
         assert [(w.text, w.start, w.end) for w in check_words(text)] == [
+            ("😀😀", 0, 2),
             ("Ala", 3, 6),
+            ("😀", 7, 8),
             ("ma", 9, 11),
         ]
 
@@ -91,6 +111,7 @@ class TestWords:
         # "o-" / "wych": the two halves of a word split over two lines
         assert [(w.text, w.start, w.end) for w in check_words("o-\nwych")] == [
             ("o", 0, 1),
+            ("-", 1, 2),
             ("wych", 3, 7),
         ]
 
@@ -98,12 +119,14 @@ class TestWords:
         "text", ["-Ala", "Ala-", "--Ala--", "Ala - ma", "Ala -- ma"]
     )
     def test_loose_hyphens_are_not_part_of_words(self, fake, text):
-        assert [w.text for w in check_words(text)] == [
-            part for part in text.replace("-", " ").split()
-        ]
+        # they are signs: tokens of their own, which are not spelled
+        assert [
+            (w.text, w.correct) for w in check_words(text) if "-" not in w.text
+        ] == [(part, True) for part in text.replace("-", " ").split()]
+        assert all(w.correct for w in check_words(text))
 
     def test_underscores_are_not_letters(self, fake):
-        assert [w.text for w in check_words("Ala_ma")] == ["Ala", "ma"]
+        assert [w.text for w in check_words("Ala_ma")] == ["Ala", "_", "ma"]
 
 
 class TestVerdicts:
@@ -116,6 +139,7 @@ class TestVerdicts:
             ("l840", True),
             ("A4", True),
             ("10", True),
+            (".", True),
         ]
         assert fake.asked == []  # nothing was looked up
 
@@ -321,4 +345,4 @@ class TestWithTheRealDictionary:
         result = check_words(text)
 
         assert time.perf_counter() - start < 3
-        assert len(result) == 40 * 6
+        assert len(result) == 40 * 8

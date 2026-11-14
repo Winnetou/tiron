@@ -1038,10 +1038,12 @@ class TestSpellcheck:
             "Ala",
             "ma",
             "kota",
+            ",",
             "a",
             "jey",
             "nie",
             "ma",
+            ".",
         ]
         assert [w["text"] for w in words if not w["correct"]] == ["jey"]
         assert all(text[w["start"] : w["end"]] == w["text"] for w in words)

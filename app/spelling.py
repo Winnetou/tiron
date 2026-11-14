@@ -14,6 +14,9 @@ LANGUAGE = "pl_PL"
 # ("biało-czerwony"). A hyphen at the end of a line ("o-" / "wych") is not part
 # of a word, so the two halves are two words.
 _WORD = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
+# A sign: a run of other characters that are not white space ("$", "(|}", "..."),
+# on its own or glued to a word. It is not spelled, but it can be corrected.
+_TOKEN = re.compile(rf"{_WORD.pattern}|(?:[^\w\s]|_)+")
 _JOINERS = re.compile(r"['’-]")
 
 _checker: phunspell.Phunspell | None = None
@@ -44,6 +47,8 @@ def get_checker() -> phunspell.Phunspell:
 
 
 def _is_correct(word: str, checker: phunspell.Phunspell) -> bool:
+    if not any(character.isalnum() for character in word):
+        return True  # signs are not spelled
     if any(character.isdigit() for character in word):
         return True  # numbers, and words with digits in them, are not checked
     if checker.lookup(word):
@@ -59,8 +64,9 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
 
     `start` and `end` are character offsets in `text` (counted in code points),
     so text[start:end] is the word. Words that contain digits are not checked
-    and are reported as correct. Everything between the words (spaces,
-    punctuation, line breaks) is not a word.
+    and are reported as correct. A run of signs ("$", "(|}", ",") is a token too,
+    reported as correct, so that it can be corrected like a word; only white
+    space is not a token.
 
     `legal` are spellings that are legal in the edition the text is from: such a
     word is correct even if the dictionary does not know it. They match the way
@@ -72,7 +78,7 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
     checker = get_checker()
     verdicts: dict[str, bool] = {}  # each distinct word is looked up once
     words = []
-    for match in _WORD.finditer(text):
+    for match in _TOKEN.finditer(text):
         word = match.group()
         if word not in verdicts:
             verdicts[word] = (

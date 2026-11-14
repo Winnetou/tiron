@@ -239,9 +239,11 @@ frontend sends the edition with every check.
 - **The backend decides what a word is**, which is why all words are listed and
   not only the wrong ones: the frontend does not tokenize anything. A word is
   made of letters and digits, with a single hyphen or apostrophe inside it
-  (`biało-czerwony`). Spaces, punctuation and line breaks are not words, and a
-  hyphen at the end of a line is not part of one, so the two halves of a word
-  split over two lines (`o-` / `wych`) are two words.
+  (`biało-czerwony`). A run of signs (`$`, `(|}`, a comma), alone or glued to a word, is a token
+  too: it is never wrong, but it can be clicked and corrected like a word. Only
+  white space is not a token. A hyphen at the end of a line is not part of a
+  word, so the two halves of a word split over two lines (`o-` / `wych`) are two
+  words.
 - A word with digits in it is not checked and counts as correct. A hyphenated
   word is correct if it is in the dictionary, or if all its parts are. Capital
   letters do not matter.

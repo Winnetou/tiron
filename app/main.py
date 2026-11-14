@@ -337,7 +337,8 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
     every word of it, in order, as `{"text", "start", "end", "correct"}`:
     `start` and `end` are character offsets in the submitted text, so
     `text[start:end]` is the word, and `correct` says whether it is spelled
-    correctly. Everything between the words is not a word. A word is made of
+    correctly. Only white space is not a token. A run of signs ("$", "(|}", ",") is a
+    token too, and counts as correct, so that it can be corrected. A word is made of
     letters and digits, with a hyphen or apostrophe inside it; words with digits
     are not checked and count as correct. Listing all words rather than only the
     wrong ones means the backend alone decides what a word is.
