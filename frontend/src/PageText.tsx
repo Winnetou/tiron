@@ -141,7 +141,8 @@ function WordEditor({ word, busy, onSubmit, onLegal, onCancel }: WordEditorProps
 
   function submit() {
     const after = value.trim()
-    if (after === '' || after === word.text) onCancel()
+    if (after === word.text) onCancel()
+    // an empty field removes the token: the backend replaces it with nothing
     else onSubmit(after)
   }
 
@@ -158,6 +159,7 @@ function WordEditor({ word, busy, onSubmit, onLegal, onCancel }: WordEditorProps
         ref={input}
         className="word-input"
         aria-label={`Correct "${word.text}"`}
+        title="Leave it empty to remove it"
         value={value}
         size={Math.max(value.length, 2)}
         disabled={busy}

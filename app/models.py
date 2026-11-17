@@ -144,7 +144,8 @@ class WordCorrection(BaseModel):
     start: int = Field(ge=0)
     end: int = Field(ge=1)
     before: str = Field(min_length=1)
-    after: str = Field(min_length=1)
+    # An empty `after` removes the token (nothing is recorded for that).
+    after: str
 
     @model_validator(mode="after")
     def check_range(self) -> WordCorrection:
