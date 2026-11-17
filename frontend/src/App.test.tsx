@@ -2490,15 +2490,15 @@ describe('correcting a word', () => {
       expect(correctionCalls()).toEqual([])
     })
 
-    it('Enter on an empty field sends nothing', async () => {
+    it('Enter on an empty field removes the token: it is sent as an empty text', async () => {
       await open()
       await userEvent.click(word('jey'))
       await userEvent.clear(editor()!)
 
       await userEvent.keyboard('{Enter}')
 
-      expect(editor()).toBeNull()
-      expect(correctionCalls()).toEqual([])
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].body).toMatchObject({ before: 'jey', after: '' })
     })
 
     it('the keyboard works: Enter on a focused misspelled word starts editing', async () => {
@@ -3182,15 +3182,22 @@ describe('legal spellings', () => {
       expect(legalCalls()).toEqual([])
     })
 
-    it('sends nothing when the word is not changed, or empty', async () => {
+    it('sends nothing when the word is not changed', async () => {
       await open()
       await userEvent.click(word('jey'))
       await userEvent.keyboard('{Enter}')
+
+      expect(correctionCalls()).toEqual([])
+      expect(legalCalls()).toEqual([])
+    })
+
+    it('sends no legal spelling when a word is removed', async () => {
+      await open()
       await userEvent.click(word('jey'))
       await userEvent.clear(editor()!)
       await userEvent.keyboard('{Enter}')
 
-      expect(correctionCalls()).toEqual([])
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
       expect(legalCalls()).toEqual([])
     })
 

@@ -463,7 +463,11 @@ it is, with the reason above it.
 **Correcting a word.** Click any word, wrong or not, and it turns into a text
 field in place, with the word selected. Type the new word and press **Enter**
 to confirm; **Escape**, or clicking elsewhere, cancels. Nothing is sent if the
-word is unchanged or empty, and spaces around it are removed. The frontend asks
+word is unchanged, and spaces around it are removed. An empty field removes the
+token (a stray `$`): it is sent as an empty text, which the backend puts in its place (and if
+the token was between two spaces, one of them goes too, so that no two are left
+together); no Correction is recorded for it.
+The frontend asks
 the backend to correct the word (`POST .../corrections`, above), sending the
 word's offsets and the new text, and never changes the XML itself. When the
 backend answers, the page is shown with its new text, and the spelling is

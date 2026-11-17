@@ -519,13 +519,13 @@ def replace_text_range(xml: str, start: int, end: int, before: str, after: str) 
     The text to replace must not contain spaces or line breaks (it is a word,
     or a part of one); the new text must not be empty, start or end with a
     space, or contain line breaks or other control characters, and must differ
-    from the old one.
+    from the old one. The one exception is an empty text, which removes the
+    token (a stray "$"): if it is between two spaces, one of them is removed too,
+    so that there are not two together.
 
     Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
     offsets is not `before`, and CannotReplace for the other problems.
     """
-    if not after:
-        raise CannotReplace("The new text is empty")
     if after != after.strip():
         raise CannotReplace("The new text must not start or end with a space")
     if _CONTROL_CHARACTERS.search(after):
@@ -559,6 +559,15 @@ def replace_text_range(xml: str, start: int, end: int, before: str, after: str) 
 
     for position, (node, first, last) in enumerate(runs):
         content = node.content
+        # a token between two spaces is removed with one of them, so that no
+        # two spaces are left together
+        if (
+            not after
+            and first > 0
+            and content[first - 1] == " "
+            and content[last + 1 : last + 2] == " "
+        ):
+            last += 1
         new_content = (
             content[:first] + (after if position == 0 else "") + content[last + 1 :]
         )

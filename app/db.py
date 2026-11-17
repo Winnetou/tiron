@@ -209,8 +209,11 @@ class Database:
         replace: Callable[[str], str],
         before: str,
         after: str,
+        record: bool = True,
     ) -> Page | None:
-        """Correct the corrected content of a page and record the Correction.
+        """Correct the corrected content of a page and record the Correction
+        (unless `record` is False, for a change that is not a correction: a
+        removed token).
 
         `replace` is given the page's current corrected content (an empty string
         if it has none) and returns the new one, which is saved; the Correction
@@ -235,9 +238,10 @@ class Database:
                 "UPDATE pages SET corrected_content = %s WHERE id = %s RETURNING *",
                 (corrected_content, page.id),
             ).fetchone()
-            self.create_correction(
-                Correction(page_id=page.id, before=before, after=after)
-            )
+            if record:
+                self.create_correction(
+                    Correction(page_id=page.id, before=before, after=after)
+                )
         return Page.model_validate(updated)
 
     def update_page(

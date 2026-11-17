@@ -334,6 +334,21 @@ class TestApplyCorrection:
             'SELECT page_id, "before", "after" FROM corrections ORDER BY id'
         ).fetchall()
 
+    def test_saves_the_content_without_a_correction_when_not_recording(
+        self, db, stored
+    ):
+        updated = db.apply_correction(
+            stored.edition_id,
+            3,
+            lambda xml: xml.replace("old", "new"),
+            "old",
+            "",
+            record=False,
+        )
+
+        assert updated.corrected_content == "<TEI>new</TEI>"
+        assert self.corrections(db) == []
+
     def test_saves_the_new_content_and_records_the_correction(self, db, stored):
         updated = db.apply_correction(
             stored.edition_id, 3, lambda xml: xml.replace("old", "new"), "old", "new"

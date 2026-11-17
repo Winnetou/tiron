@@ -197,8 +197,9 @@ export default function App() {
         return
       }
       let legalError: string | null = null
-      // (a spelling is one word, so an edit into several words has none)
-      if (!word.correct && !/\s/.test(after)) {
+      // (a spelling is one word, so an edit into several words has none, and a
+      // removed token is not a spelling)
+      if (!word.correct && after !== '' && !/\s/.test(after)) {
         try {
           await addLegalSpelling(page.edition_id, after)
         } catch (error) {

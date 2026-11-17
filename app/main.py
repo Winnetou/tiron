@@ -383,9 +383,12 @@ def correct_word(
     404 if the page is not stored. 409 if the text at the offsets is not
     `before`, because the page has changed since. 422 if the page has no valid
     TEI XML, or the replacement is not acceptable: `before` must not contain
-    spaces or line breaks, and `after` must not be empty, start or end with a
-    space, contain a line break, or be the same as `before`. Returns the
-    updated page as a PageView.
+    spaces or line breaks, and `after` must not start or end with a
+    space, contain a line break, or be the same as `before`. The exception is
+    an empty `after`, which removes the token (a `$` in the middle of the text);
+    if it is between two spaces, one of them goes too, so that there are not two
+    together. No Correction is recorded for it: removing a token is not
+    correcting a word. Returns the updated page as a PageView.
     """
 
     def replace_in_xml(xml: str) -> str:
@@ -397,7 +400,13 @@ def correct_word(
 
     try:
         page = db.apply_correction(
-            edition_id, number, replace_in_xml, correction.before, correction.after
+            edition_id,
+            number,
+            replace_in_xml,
+            correction.before,
+            correction.after,
+            # removing a token is not a correction of a word: nothing is recorded
+            record=correction.after != "",
         )
     except TextChanged as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

@@ -1088,13 +1088,14 @@ class TestCorrectWord:
             "corrections": [],
         }
 
-        def apply(edition_id, number, replace, before, after):
+        def apply(edition_id, number, replace, before, after, record=True):
             page = state["page"]
             if (edition_id, number) != (page.edition_id, page.number):
                 return None
             new_xml = replace(page.corrected_content or "")  # may raise: nothing saved
             state["page"] = page.model_copy(update={"corrected_content": new_xml})
-            state["corrections"].append((before, after))
+            if record:
+                state["corrections"].append((before, after))
             return state["page"]
 
         monkeypatch.setattr(db, "apply_correction", mock.Mock(side_effect=apply))
@@ -1114,6 +1115,18 @@ class TestCorrectWord:
         assert (edition_id, number) == (stored["page"].edition_id, 4)
         assert (before, after) == ("dawnieyszych", "dawniejszych")
         assert callable(replace)
+
+    def test_removes_a_token_without_recording_a_correction(self, stored):
+        stored["page"] = stored["page"].model_copy(
+            update={"corrected_content": str(text_to_tei_xml("Ala $ ma"))}
+        )
+        body = {"start": 4, "end": 5, "before": "$", "after": ""}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 200
+        assert tei_xml_to_text(stored["page"].corrected_content) == "Ala ma"
+        assert stored["corrections"] == []  # not a correction of a word
 
     def test_the_text_afterwards_is_the_old_text_with_the_word_replaced(self, stored):
         self.post(stored, self.body("dawnieyszych", "dawniejszych"))
@@ -1221,7 +1234,6 @@ class TestCorrectWord:
     @pytest.mark.parametrize(
         "change",
         [
-            {"after": ""},
             {"before": ""},
             {"after": None},
             {"end": 0},

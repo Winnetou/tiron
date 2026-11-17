@@ -845,10 +845,34 @@ class TestReplaceTextRangeErrors:
         with pytest.raises(CannotReplace, match="spaces or line breaks"):
             replace_text_range(xml, start, end, before, "Ola")
 
+    def test_a_token_is_removed_with_one_of_the_spaces_around_it(self):
+        xml = generated("Ala $ ma kota")
+        start, end = where(tei_xml_to_text(xml), "$")
+
+        changed = replace_text_range(xml, start, end, "$", "")
+
+        assert "<p>Ala ma kota</p>" in changed  # not "Ala  ma kota"
+        assert tei_xml_to_text(changed) == "Ala ma kota"
+
+    def test_a_token_glued_to_a_word_is_removed_alone(self):
+        xml = generated("Ala (|}ma kota")
+        start, end = where(tei_xml_to_text(xml), "(|}")
+
+        changed = replace_text_range(xml, start, end, "(|}", "")
+
+        assert tei_xml_to_text(changed) == "Ala ma kota"
+
+    def test_a_removed_token_keeps_the_line_break_next_to_it(self):
+        xml = generated("Ala ma\n$\nkota")
+        start, end = where(tei_xml_to_text(xml), "$")
+
+        changed = replace_text_range(xml, start, end, "$", "")
+
+        assert tei_xml_to_text(changed) == "Ala ma\n\nkota"
+
     @pytest.mark.parametrize(
         ("after", "message"),
         [
-            ("", "empty"),
             (" jej", "start or end with a space"),
             ("jej ", "start or end with a space"),
             ("je\nj", "one line"),
@@ -875,7 +899,7 @@ class TestReplaceTextRangeErrors:
         xml = generated("a jey b")
 
         with pytest.raises(CannotReplace):
-            replace_text_range(xml, 2, 5, "jey", "")
+            replace_text_range(xml, 2, 5, "jey", " jej")
 
         assert replace(xml, "jey", "jej") == xml.replace("jey", "jej")
 
