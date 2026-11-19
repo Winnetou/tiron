@@ -13,13 +13,13 @@ build:
 run: build
 	docker run --rm --init --name $(IMAGE) -p $(PORT):8000 --env-file $(ENV_FILE) $(IMAGE)
 
-# Run the frontend dev server (http://localhost:5173), proxying API calls to
-# the backend started by `make run`.
+# Run the frontend dev server on the host (http://localhost:5173), proxying API
+# calls to the backend started by `make run`. `make up` runs it in a container.
 frontend:
 	cd frontend && npm install && BACKEND_URL=$(BACKEND_URL) npm run dev
 
-# The backend and a PostgreSQL database with a volume, together (see
-# docker-compose.yml). `down` stops them and keeps the data in the volume.
+# The backend, a PostgreSQL database with a volume, and the frontend, together
+# (see docker-compose.yml). `down` stops them and keeps the data in the volume.
 up:
 	docker compose up --build
 

@@ -1,12 +1,14 @@
 Simple app to correct OCR outputs from polona.pl
 
-To run everything, edit .env with db creds
- Then run `make run` in one terminal and `make frontend` in another.
+To run everything, edit .env with db creds, then run `make up`: the backend, the
+database and the frontend start together, and the frontend is at
+http://localhost:5173. (Or run `make run` in one terminal and `make frontend` in
+another, to run the backend alone in a container and the frontend on the host.)
 
 ## Running with Docker Compose
 
 `docker compose up --build` (or `make up`) starts the backend together with its
-own PostgreSQL 17 database (`docker-compose.yml`):
+own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
 
 - **`db`** keeps its data in the named volume `db-data`, so it survives
   `docker compose down`, rebuilding the image, and removing the containers. Only
@@ -26,8 +28,17 @@ own PostgreSQL 17 database (`docker-compose.yml`):
   answers, which takes about 40 s with a warm disk cache and a few minutes on a
   cold start, so `docker compose ps` shows it as "starting" for that long, then
   "healthy".
-- The frontend is not in the compose file: run `make frontend` (its dev server
-  proxies to the backend on port 8000).
+- **`frontend`** is built from `frontend/Dockerfile` (Node 22) and runs the Vite
+  dev server on port 5173, published on 5173 or `FRONTEND_PORT` if you set it in
+  `.env`. The dev server proxies the backend's routes to `http://backend:8000`
+  inside the compose network (`BACKEND_URL`), and an address a browser asks for
+  as a page (`/editions/{uuid}/pages/{n}`) gets the app. `frontend/` is mounted
+  into the container, so an edit of the sources shows in the browser at once
+  (the container's own `node_modules` are kept: the dependencies are installed
+  in the image, so after changing `package.json` run `docker compose up --build`).
+  It only waits for the backend to be started, not healthy, so for the first
+  minutes the main page shows an error until the backend has loaded its models.
+  `make frontend` still runs the dev server on the host instead.
 - A new database is empty. Pages can only be opened for editions in the
   `collection` table, so add one first, for example:
 
