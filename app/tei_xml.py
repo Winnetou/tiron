@@ -633,6 +633,63 @@ def replace_text_range(xml: str, start: int, end: int, before: str, after: str) 
     return _serialise(root, xml)
 
 
+class CannotInsert(ValueError):
+    """The text cannot be inserted into the XML; the message says why."""
+
+
+def insert_text_at(xml: str, position: int, token: str) -> str:
+    """Insert `token`, a piece of text that the OCR missed, at `position` of the
+    text of a TEI document, and return the changed XML.
+
+    `position` is an offset into what tei_xml_to_text returns for the same XML,
+    between two characters (0 is before the first, and the length of the text
+    after the last). The token goes into the text node of the neighbouring
+    character, so the markup around stays as it is (a token put after the last
+    word of a <persName> goes into it). It is a token of its own: a space is put
+    before it unless there is a space or a line break there already, and after
+    it unless the text goes on with one, so that "Alama" with a token "X" in
+    the middle becomes "Ala X ma".
+
+    The token may be several words ("LIST SZÓSTY"), separated by spaces (a run of
+    spaces is one, as in the text that is extracted). It must not be empty, start
+    or end with a space, or contain line breaks, tabs or other control or space
+    characters. Raises InvalidTei if the XML is not TEI, CannotInsert if the
+    token is not acceptable or the position is not in the text, or is where no
+    text node can take it (the empty line between two paragraphs).
+    """
+    if not token or token != token.strip():
+        raise CannotInsert("The token must not be empty or start or end with a space")
+    if _CONTROL_CHARACTERS.search(token) or any(
+        c.isspace() and c != " " for c in token
+    ):
+        raise CannotInsert(
+            "The token must be on one line, without control characters or "
+            "spaces other than the plain space"
+        )
+    token = re.sub(" +", " ", token)  # the extracted text has a run as one space
+    root = _parse_tei(xml)
+    extracted, sources = _extract(_text_element(root))
+    if not 0 <= position <= len(extracted):
+        raise CannotInsert(f"There is no place {position} in the text")
+
+    before = extracted[position - 1] if position > 0 else None
+    after = extracted[position] if position < len(extracted) else None
+    lead = "" if before is None or before.isspace() else " "
+    trail = "" if after is None or after.isspace() else " "
+    if position > 0 and sources[position - 1] is not None:
+        # right after the character before
+        node, index = sources[position - 1]  # type: ignore[misc]
+        where = index + 1
+    elif position < len(extracted) and sources[position] is not None:
+        # right before the character after (at the start of a line or text)
+        node, index = sources[position]  # type: ignore[misc]
+        where = index
+    else:
+        raise CannotInsert("There is no place for text between two paragraphs")
+    node.content = node.content[:where] + lead + token + trail + node.content[where:]
+    return _serialise(root, xml)
+
+
 # The sections of a page that can be marked, by the name the API gives them: the
 # element they become and its attributes. A running header or footer and a
 # printed page number are forme work (<fw>) in TEI, and a note is a <note> (a

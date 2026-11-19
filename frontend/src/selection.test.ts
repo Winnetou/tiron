@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { selectionInText } from './selection'
+import { caretInText, selectionInText } from './selection'
 
 let box: HTMLPreElement | null = null
 
@@ -223,5 +223,55 @@ describe('selectionInText', () => {
 
       expect(selectionInText(pre, range, 'Ala ma kota')).toBeNull()
     })
+  })
+})
+
+describe('caretInText', () => {
+  it('is the offset of a point in the text', () => {
+    const pre = show('Ala ma kota')
+
+    expect(caretInText(pre, pre.firstChild!, 0, 'Ala ma kota')).toBe(0)
+    expect(caretInText(pre, pre.firstChild!, 4, 'Ala ma kota')).toBe(4)
+    expect(caretInText(pre, pre.firstChild!, 11, 'Ala ma kota')).toBe(11)
+  })
+
+  it('counts code points, not UTF-16 units', () => {
+    const pre = show('😀 Ala')
+
+    expect(caretInText(pre, pre.firstChild!, 3, '😀 Ala')).toBe(2)
+  })
+
+  it('counts across elements', () => {
+    const pre = document.createElement('pre')
+    pre.innerHTML = 'Ala <mark>ma</mark> kota'
+    document.body.append(pre)
+    box = pre
+
+    expect(caretInText(pre, pre.querySelector('mark')!.firstChild!, 1, 'Ala ma kota')).toBe(5)
+    expect(caretInText(pre, pre.lastChild!, 1, 'Ala ma kota')).toBe(7)
+  })
+
+  it('does not count the text of a dialog', () => {
+    const pre = document.createElement('pre')
+    pre.innerHTML = 'Ala <mark>ma<div role="dialog">XYZ</div></mark> kota'
+    document.body.append(pre)
+    box = pre
+
+    expect(caretInText(pre, pre.lastChild!, 1, 'Ala ma kota')).toBe(7)
+  })
+
+  it('is null in a dialog, outside the container, or when the text has changed', () => {
+    const pre = document.createElement('pre')
+    pre.innerHTML = 'Ala <mark>ma<div role="dialog">XYZ</div></mark>'
+    document.body.append(pre)
+    box = pre
+    const outside = document.createElement('p')
+    outside.textContent = 'x'
+    document.body.append(outside)
+
+    expect(caretInText(pre, pre.querySelector('div')!.firstChild!, 1, 'Ala ma')).toBeNull()
+    expect(caretInText(pre, outside.firstChild!, 0, 'Ala ma')).toBeNull()
+    expect(caretInText(pre, pre.firstChild!, 0, 'Another')).toBeNull()
+    outside.remove()
   })
 })

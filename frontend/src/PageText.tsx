@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react'
 import {
   ENTITY_LABELS,
   entityKey,
@@ -6,7 +12,7 @@ import {
   type Decision,
   type Entity,
 } from './entities'
-import { selectionInText } from './selection'
+import { caretAt, caretInText, selectionInText } from './selection'
 import { buildSegments, type Segment, type Word } from './segments'
 import type { TextSelection } from './sections'
 
@@ -14,6 +20,15 @@ const NOT_NER = 'Not NER'
 
 /** About how wide the dialog of a new entity is, to keep it inside the box. */
 const POPUP_WIDTH = 300
+
+/** The dialog to add a token: where it is, in the box, and for which text. */
+interface TokenPending {
+  /** The place in the text, between two characters, in code points. */
+  position: number
+  forText: string
+  left: number
+  placement: { top: number } | { bottom: number }
+}
 
 /** The dialog of a selection: where it is, in the box, and for which text. */
 interface Pending {
@@ -230,6 +245,13 @@ interface Props {
    * does nothing.
    */
   onCreateEntity?: (selection: TextSelection, label: string) => void
+  /**
+   * The user double-clicked a place of the text and typed a token that the OCR
+   * missed: it goes there (`position` is between two characters, in code
+   * points). Without it (outside the correction view) a double click does
+   * nothing.
+   */
+  onAddToken?: (position: number, token: string) => void
 }
 
 /**
@@ -249,6 +271,7 @@ export default function PageText({
   onCorrectWord,
   onLegalSpelling,
   onCreateEntity,
+  onAddToken,
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -257,14 +280,22 @@ export default function PageText({
   const [label, setLabel] = useState('')
   const active = pending && pending.forText === text ? pending : null
 
+  // The place where a token is being added, and what was typed for it.
+  const [tokenAt, setTokenAt] = useState<TokenPending | null>(null)
+  const [token, setToken] = useState('')
+  const addingAt = tokenAt && tokenAt.forText === text ? tokenAt : null
+
   function clear() {
     setPending(null)
     setLabel('')
+    setTokenAt(null)
+    setToken('')
   }
 
-  // Escape closes the dialog wherever the keyboard focus is.
+  // Escape closes the dialogs wherever the keyboard focus is.
+  const open = active !== null || addingAt !== null
   useEffect(() => {
-    if (!active) return
+    if (!open) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         clear()
@@ -273,7 +304,42 @@ export default function PageText({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [active])
+  }, [open])
+
+  /**
+   * A double click on a place of the text (not on a word, which is for editing
+   * it): the dialog to add a token there appears next to the click.
+   */
+  function doubleClicked(event: MouseEvent<HTMLElement>) {
+    if (!onAddToken || !wrap.current || !box.current) return
+    if ((event.target as Element).closest('.word, [role="dialog"]')) return
+    const caret = caretAt(event.clientX, event.clientY)
+    const position = caret && caretInText(box.current, caret.node, caret.offset, text)
+    // the double click selected the word under it: that is not wanted
+    window.getSelection()?.removeAllRanges()
+    if (position === null || position === undefined) return clear()
+
+    const area = wrap.current.getBoundingClientRect()
+    const lower = event.clientY - area.top > area.height / 2
+    setPending(null)
+    setTokenAt({
+      position,
+      forText: text,
+      left: Math.max(0, Math.min(event.clientX - area.left, area.width - POPUP_WIDTH)),
+      placement: lower
+        ? { bottom: Math.max(0, area.bottom - event.clientY + 6) }
+        : { top: event.clientY - area.top + 6 },
+    })
+    setToken('')
+  }
+
+  function add() {
+    // several words are fine: a run of spaces is one
+    const typed = token.trim().replace(/\s+/g, ' ')
+    if (!addingAt || !onAddToken || typed === '') return
+    onAddToken(addingAt.position, typed)
+    clear()
+  }
 
   /** Called when a selection may have been made: show the dialog for it. */
   function read() {
@@ -394,18 +460,50 @@ export default function PageText({
       tabIndex={0}
       onMouseUp={onCreateEntity ? read : undefined}
       onKeyUp={onCreateEntity ? read : undefined}
+      onDoubleClick={onAddToken ? doubleClicked : undefined}
     >
       {items}
     </pre>
   )
-  if (!onCreateEntity) return pre
+  if (!onCreateEntity && !onAddToken) return pre
 
   return (
     <div className="structure-wrap" ref={wrap}>
       <p className="structure-hint">
-        Select some text to mark it as a named entity the recognition missed.
+        {onCreateEntity
+          ? 'Select some text to mark it as a named entity the recognition missed.'
+          : 'Double-click a place in the text to add text that the OCR missed.'}
       </p>
       {pre}
+      {addingAt && (
+        <div
+          role="dialog"
+          aria-label="Add a text token"
+          className={`structure-popup ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
+          style={{ left: addingAt.left, ...addingAt.placement }}
+        >
+          <input
+            aria-label="Text to add"
+            placeholder="Text"
+            size={20}
+            maxLength={200}
+            autoFocus
+            spellCheck={false}
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !busy) add()
+            }}
+          />
+          <button
+            type="button"
+            onClick={add}
+            disabled={token.trim() === '' || busy}
+          >
+            Add
+          </button>
+        </div>
+      )}
       {active && (
         <div
           role="dialog"

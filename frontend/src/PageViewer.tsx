@@ -45,6 +45,8 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /** The user double-clicked a place of the text and typed a token for it. */
+  onAddToken: (position: number, token: string) => void
   /** The user selected some text in the NER view and chose a label for it. */
   onCreateEntity: (selection: TextSelection, label: string) => void
   /** Mark the selected text of the page as a section of it. */
@@ -87,6 +89,7 @@ export default function PageViewer({
   onLegalSpelling,
   onMarkSection,
   onCreateEntity,
+  onAddToken,
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
@@ -245,6 +248,8 @@ export default function PageViewer({
             onLegalSpelling={onLegalSpelling}
             // in the NER view a selection can be made an entity of its own
             onCreateEntity={view === 'ner' ? onCreateEntity : undefined}
+            // in the correction view a double click adds a token the OCR missed
+            onAddToken={view === 'correction' ? onAddToken : undefined}
           />
         )}
         {view === 'text' && (

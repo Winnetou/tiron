@@ -328,6 +328,24 @@ correction:
   before are no longer valid: check the spelling again (the frontend does).
 - This replaces the earlier `POST /corrections` stub (which returned 501).
 
+### Adding a token that the OCR missed
+
+`POST /editions/{edition_id}/pages/{number}/tokens` with `{"position": 25, "text":
+"jest"}` puts a token at `position` of the text that `POST /tei/text` gives for the
+page (an offset between two characters, counted the way Python does: 0 is before the
+first character, and the length of the text is after the last). The backend finds
+the place in the XML and puts the token into the text node there, so the markup
+around it stays (a token after the last word of a `<persName>` goes into it). The
+token is a token of its own: a space is put before it unless there is a space or a
+line break there already, and after it unless the text goes on with one, so a token
+`X` put in the middle of `Alama` makes `Ala X ma`. It may be several words, like `LIST SZÓSTY` (a run of spaces
+counts as one). It must not be empty, start or end with a space, or contain line
+breaks, tabs or other control characters, and the position must be in the text, and not on the empty line between two paragraphs (422 for those, and when the
+page has no valid TEI XML; 404 if the page is not stored). The new XML is saved as
+the page's `xml_content_corrected`, in one transaction with the page locked. No
+Correction is recorded: adding a token is not correcting a word. The raw OCR text is
+not touched. The response is the updated `PageView`.
+
 ### Legal spellings
 
 Old print has spellings that the dictionary does not know and that are not
@@ -503,6 +521,14 @@ and after each confirmation, the frontend asks `POST /tei/entities` for the XML 
 the page, next to the recognition. Every marked entity is shown, whoever marked it,
 and where one overlaps a recognized entity, the marked one wins. They are not shown
 in the correction view.
+
+In the correction view a double click on a place in the text (not on a word, which is
+edited with a click) opens a small box next to it, with a field and an Add button, to
+add text that the OCR did not recognize as text (a token, or several words). The frontend finds the place
+between two characters that was clicked and sends it with the token to
+`POST .../tokens`; the page is then shown again with its new text and its spelling
+checked again. Escape closes the box. The text view, the XML view and the NER view
+ignore a double click.
 
 In the NER view the user can also mark an entity that the recognition missed:
 select some of the text, as in the Structure view, and a dialog appears next to

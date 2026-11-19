@@ -176,6 +176,16 @@ class WordCorrection(BaseModel):
         return self
 
 
+class NewToken(BaseModel):
+    """A text token that the OCR missed, to be added at `position` of the text of
+    a page (an offset between two characters). It may be several words."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    position: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=200)
+
+
 class NewLegalSpelling(BaseModel):
     """A spelling to be made legal in an edition (the edition is in the path)."""
 

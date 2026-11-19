@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   addLegalSpelling,
+  addToken,
   correctWord,
   getPage,
   markSection,
@@ -368,6 +369,9 @@ export default function App() {
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
+        onAddToken={(position, token) =>
+          run(addToken(page.edition_id, page.number, position, token))
+        }
         onCreateEntity={(selection, label) =>
           createEntity(page, selection, label)
         }

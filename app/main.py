@@ -16,6 +16,7 @@ from app.models import (
     NerRequest,
     NerResult,
     NewLegalSpelling,
+    NewToken,
     PageUpdate,
     PageView,
     SectionMark,
@@ -32,10 +33,12 @@ from app.ontology import Edition, LegalSpelling, Page, Work
 from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
 from app.spelling import SpellcheckUnavailable, check_words, get_checker
 from app.tei_xml import (
+    CannotInsert,
     CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
+    insert_text_at,
     mark_section,
     replace_text_range,
     tag_text_range,
@@ -523,6 +526,61 @@ def correct_word(
         edition_id,
         correction.start,
         correction.end,
+    )
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/pages/{number}/tokens", response_model=PageView)
+def add_token(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], token: NewToken
+) -> PageView:
+    """Add a text token that the OCR missed to a stored page: `text` is put at
+    `position` of the page's text, in the page's TEI XML.
+
+    The body is `{"position": 25, "text": "jest"}`. `position` is an offset
+    between two characters of the text that `POST /tei/text` gives for this page
+    (0 is before the first character, the length of the text is after the last).
+    The backend finds the place in the XML and puts the text into the text node
+    there, so the markup around it stays; the frontend never has to read the XML.
+    The token is a token of its own: a space is put before it unless there is a
+    space or a line break there, and after it unless the text goes on with one.
+    It may be several words, like `LIST SZÓSTY`, separated by spaces (a run of
+    spaces counts as one).
+
+    The new XML is saved as the page's corrected content. No Correction is
+    recorded: adding a token is not correcting a word. The text of the page
+    changes, so the offsets of its entities and words from before are no longer
+    valid.
+
+    404 if the page is not stored. 422 if the page has no valid TEI XML, or the
+    token is not acceptable: it must not be empty, start or end with a space, or
+    contain line breaks, tabs or other control characters, and the position must
+    be in the text, and not on the empty line between two paragraphs. Returns the
+    updated page as a PageView.
+    """
+
+    def insert_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to add a token to")
+        return insert_text_at(xml, token.position, token.text)
+
+    try:
+        page = db.apply_correction(
+            edition_id,
+            number,
+            insert_in_xml,
+            "",
+            token.text,
+            record=False,
+        )
+    except (InvalidTei, CannotInsert) as exc:
+        logger.warning("Token not added on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Token added on page %s of %s at %s", number, edition_id, token.position
     )
     return PageView.from_page(page)
 
