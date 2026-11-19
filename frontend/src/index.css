@@ -162,7 +162,7 @@ button {
 }
 
 /* XML view: the content in the same type as the text view, and the markup
-   (tags, comments, the declaration) smaller, on grey. */
+   (tags, comments, the declaration) smaller, on yellow. */
 .xml-view {
   /* more room for the small markup */
   line-height: 1.9;
@@ -171,8 +171,8 @@ button {
 .xml-markup {
   padding: 0.05em 0.25em;
   border-radius: 0.2rem;
-  background: #e3e3e3;
-  color: #555;
+  background: #fff4b8;
+  color: #5c4500;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
 }
