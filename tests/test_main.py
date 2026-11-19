@@ -631,7 +631,7 @@ class TestModelLoadedAtStartup:
         monkeypatch.setattr(ner.spacy, "load", missing)
 
         with (
-            caplog.at_level(logging.WARNING, logger="uvicorn.error"),
+            caplog.at_level(logging.WARNING, logger="app.main"),
             TestClient(app) as started,
         ):
             response = started.post("/ner", json={"text": "Ala"})
@@ -952,7 +952,7 @@ class TestDictionaryLoadedAtStartup:
         monkeypatch.setattr(spelling.phunspell, "Phunspell", missing)
 
         with (
-            caplog.at_level(logging.WARNING, logger="uvicorn.error"),
+            caplog.at_level(logging.WARNING, logger="app.main"),
             TestClient(app) as started,
         ):
             response = started.post("/spellcheck", json={"text": "Ala"})

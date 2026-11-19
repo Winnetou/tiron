@@ -25,3 +25,8 @@ up:
 
 down:
 	docker compose down
+into_db:
+	docker exec -it  tiron-db-1 psql -Uu tiron
+	
+into_shell:
+	docker exec -it tiron-backend-1  /bin/bash

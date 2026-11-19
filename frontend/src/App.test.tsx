@@ -559,7 +559,7 @@ describe('named entity recognition', () => {
     expect(pageText().querySelector('mark')).not.toHaveAttribute('title')
   })
 
-  it('highlights in red', async () => {
+  it('highlights in yellow, in a rounded border', async () => {
     await openWithText('Adam Mickiewicz', [entity('Adam Mickiewicz', 0)])
 
     await userEvent.click(nerButton())
@@ -569,15 +569,15 @@ describe('named entity recognition', () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    const [r, g, b] = getComputedStyle(mark).color.match(/\d+/g)!.map(Number)
-    expect(r).toBeGreaterThan(150)
-    expect(g).toBeLessThan(50)
-    expect(b).toBeLessThan(50)
-    const [br, bg, bb] = getComputedStyle(mark).backgroundColor.match(/\d+/g)!.map(Number)
-    expect(br).toBeGreaterThan(bg) // a red-tinted background
-    expect(br).toBeGreaterThan(bb)
-    // ...and the text around it is not red
-    expect(getComputedStyle(pageText()).color).not.toBe(getComputedStyle(mark).color)
+    const style = getComputedStyle(mark)
+    const [r, g, b] = style.backgroundColor.match(/\d+/g)!.map(Number)
+    expect(r).toBeGreaterThan(200) // yellow: red and green high, blue low
+    expect(g).toBeGreaterThan(200)
+    expect(b).toBeLessThan(r - 30)
+    expect(style.borderStyle).toBe('solid')
+    expect(parseFloat(style.borderRadius)).toBeGreaterThan(0)
+    // ...and the text around it is not styled like it
+    expect(getComputedStyle(pageText()).color).not.toBe(style.color)
   })
 
   it('marks only the stretch the backend pointed at, not every equal word', async () => {
@@ -616,12 +616,13 @@ describe('named entity recognition', () => {
     await waitFor(() => expect(marks()).toEqual(['kota']))
   })
 
-  it('says how many entities were found', async () => {
+  it('shows no count of the entities', async () => {
     await openWithText('Jan i Ewa', [entity('Jan', 0), entity('Ewa', 6)])
 
     await userEvent.click(nerButton())
 
-    expect(await screen.findByText('2 entities')).toBeInTheDocument()
+    await waitFor(() => expect(marks()).toEqual(['Jan', 'Ewa']))
+    expect(screen.queryByText(/\d+ entities/)).toBeNull()
   })
 
   it('says when there are none', async () => {
@@ -629,7 +630,7 @@ describe('named entity recognition', () => {
 
     await userEvent.click(nerButton())
 
-    expect(await screen.findByText('No entities')).toBeInTheDocument()
+    await waitFor(() => expect(nerCalls()).toHaveLength(1))
     expect(marks()).toEqual([])
   })
 
@@ -696,9 +697,9 @@ describe('named entity recognition', () => {
     await userEvent.click(nerButton())
 
     await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
-    expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'XML' })).toHaveAttribute(
       'aria-pressed',
-      'true',
+      'false',
     )
   })
 
@@ -1074,7 +1075,6 @@ describe('confirming or rejecting an entity', () => {
       expect(pageText().textContent).toBe(TEXT)
       expect(mark('Adam Mickiewicz')).not.toHaveClass('confirmed')
       expect(mark('1840 roku')).not.toHaveClass('confirmed')
-      expect(screen.getByText('3 entities')).toBeInTheDocument()
     })
 
     it('asks the backend about the text again, which is the same', async () => {
@@ -1267,13 +1267,13 @@ describe('confirming or rejecting an entity', () => {
       expect(calls).toEqual([])
     })
 
-    it('counts the entities that are left', async () => {
+    it('leaves out the entity that was rejected', async () => {
       await recognized()
-      expect(screen.getByText('3 entities')).toBeInTheDocument()
+      expect(pageText().querySelectorAll('mark')).toHaveLength(3)
 
       await reject('Paryżu')
 
-      expect(screen.getByText('2 entities')).toBeInTheDocument()
+      expect(pageText().querySelectorAll('mark')).toHaveLength(2)
     })
 
     it('says there are none when all were rejected', async () => {
@@ -1283,7 +1283,6 @@ describe('confirming or rejecting an entity', () => {
       await reject('Adam Mickiewicz')
       await reject('1840 roku')
 
-      expect(screen.getByText('No entities')).toBeInTheDocument()
       expect(pageText().querySelectorAll('mark')).toHaveLength(0)
     })
 
@@ -2297,16 +2296,16 @@ describe('spell check', () => {
     expect(pageText().textContent).toBe(TEXT)
   })
 
-  it('counts the misspelled words', async () => {
+  it('shows no count of the misspelled words', async () => {
     await open()
 
-    expect(screen.getByText('2 misspelled')).toBeInTheDocument()
+    expect(screen.queryByText(/\d+ misspelled/)).toBeNull()
+    expect(screen.queryByText('No misspelled words')).toBeNull()
   })
 
   it('says when all words are correct', async () => {
     await open({ ...spellOptions(), spell: (text) => wordsOf(text, []) })
 
-    expect(screen.getByText('No misspelled words')).toBeInTheDocument()
     expect(misspelled()).toEqual([])
   })
 
@@ -2599,7 +2598,6 @@ describe('correcting a word', () => {
           ),
         ).toEqual(['tey']),
       )
-      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
     })
 
     it('shows the new word in the XML, which the backend changed', async () => {
@@ -2773,83 +2771,34 @@ describe('correcting a word', () => {
       )
     }
 
-    it('words inside an entity are words, and the entity is still marked', async () => {
+    it('the NER view does not show the spelling: no word is marked as misspelled', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
 
       const mark = pageText().querySelector('mark.entity')!
       expect(mark.textContent).toBe('Jan Kowalski')
-      expect(Array.from(mark.querySelectorAll('.word')).map((w) => w.textContent)).toEqual([
-        'Jan',
-        'Kowalski',
-      ])
-      expect(mark.querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
+      expect(pageText().querySelectorAll('.word')).toHaveLength(0)
+      expect(pageText().querySelectorAll('.misspelled')).toHaveLength(0)
       expect(pageText().textContent).toBe(ETEXT)
     })
 
-    it('a word inside an entity can be corrected', async () => {
+    it('the text view shows the spelling, and not the entities', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
 
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('Kowalsky{Enter}')
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
 
-      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
-      expect(correctionCalls()[0].body).toMatchObject({
-        before: 'Kowalski',
-        after: 'Kowalsky',
-        start: ETEXT.indexOf('Kowalski'),
-      })
-    })
-
-    it('shows no entity dialog over a word that is being edited', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-      expect(screen.queryByRole('dialog')).toBeInTheDocument()
-
-      await userEvent.click(word('Kowalski'))
-
-      expect(editor()).toBeInTheDocument()
-      expect(screen.queryByRole('dialog')).toBeNull()
-    })
-
-    it('the dialog is back for the entity once the editing is over', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('{Escape}')
-      await userEvent.unhover(pageText().querySelector('mark.entity')!)
-
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-    })
-
-    it('an entity that starts in the middle of a word cuts the word in two, and either part edits all of it', async () => {
-      // the entity is "Kowal", the word "Kowalski"
-      await recognized([entity('Kowal', 'persName')].map((e) => ({
-        ...e,
-        start: ETEXT.indexOf('Kowalski'),
-        end: ETEXT.indexOf('Kowalski') + 5,
-      })))
-      const pieces = [word('Kowal'), word('ski')]
-      expect(pieces[0].closest('mark')).not.toBeNull() // the part in the entity
-      expect(pieces[1].closest('mark')).toBeNull() // and the part after it
-
-      await userEvent.click(pieces[1])
-
-      expect(editor()).toHaveValue('Kowalski') // the whole word
-      // the word is the field, and (it is misspelled) its button
-      expect(pageText().textContent).toBe(
-        ETEXT.replace('Kowalski', 'Legal spelling'),
-      )
-    })
-
-    it('after a correction the entities of the old text are not shown for the new one', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-
-      await userEvent.click(word('Jan'))
-      await userEvent.keyboard('Janek{Enter}')
-
-      await waitFor(() => expect(pageText().textContent).toContain('Janek'))
       expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+      expect(pageText().querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
+    })
+
+    it('the entities come back when the NER view is shown again', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+      await userEvent.click(nerButton())
+
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('mark.entity')).toHaveLength(1),
+      )
     })
   })
 })
@@ -2988,14 +2937,14 @@ describe('legal spellings', () => {
 
     it('closes the field and shows the new count', async () => {
       await open()
-      expect(screen.getByText('3 misspelled')).toBeInTheDocument()
+      expect(misspelled()).toHaveLength(3)
       await userEvent.click(word('jey'))
 
       await userEvent.click(legalButton()!)
 
       await waitFor(() => expect(editor()).toBeNull())
       // "jey" and its capital form "Jey" are both legal now
-      expect(screen.getByText('1 misspelled')).toBeInTheDocument()
+      expect(misspelled()).toHaveLength(1)
     })
 
     it('makes the same spelling legal everywhere in the text, capital forms too', async () => {
