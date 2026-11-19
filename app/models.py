@@ -3,9 +3,23 @@
 from typing import Literal
 from uuid import UUID
 
+from fastapi import Query
+from fastapi_pagination import Page as PaginatedPage
+from fastapi_pagination.customization import CustomizedPage, UseParamsFields
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ontology import Page, Spelling
+
+COLLECTION_PAGE_SIZE = 100
+
+# A page of the collection: the ids of its editions, 100 on a page (the
+# default, and the most that can be asked for with `size`).
+CollectionPage = CustomizedPage[
+    PaginatedPage[UUID],
+    UseParamsFields(
+        size=Query(COLLECTION_PAGE_SIZE, ge=1, le=COLLECTION_PAGE_SIZE),
+    ),
+]
 
 
 class PageView(BaseModel):

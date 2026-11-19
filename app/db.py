@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
+from fastapi_pagination.ext.psycopg import paginate
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
@@ -356,6 +357,17 @@ class Database:
         return {row["spelling"] for row in rows}
 
     # Collection
+
+    def list_collection(self) -> Any:
+        """A page of the ids of the editions in the collection, in the order of
+        the ids (so the pages do not change between requests). Which page, and
+        how long, is up to the request that is being served: fastapi-pagination
+        reads it from there."""
+        return paginate(
+            self.conn,
+            "SELECT id FROM collection ORDER BY id",
+            transformer=lambda rows: [row["id"] for row in rows],
+        )
 
     def check_edition_in_collection(self, edition_id: UUID) -> bool:
         row = self.conn.execute(

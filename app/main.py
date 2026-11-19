@@ -7,9 +7,11 @@ from uuid import UUID
 
 import psycopg.errors
 from fastapi import FastAPI, HTTPException, Path, Response, status
+from fastapi_pagination import add_pagination
 
 from app.db import Database
 from app.models import (
+    CollectionPage,
     EntityTag,
     NerRequest,
     NerResult,
@@ -82,6 +84,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="tiron", lifespan=lifespan)
+
+
+@app.get("/editions", response_model=CollectionPage)
+def list_editions() -> CollectionPage:
+    """The main page: the ids of the editions in the collection, 100 on a page.
+
+    Paginated with fastapi-pagination: `?page=1` (the first, the default) and
+    `?size=` (at most 100, which is also the default). The response is
+    `{"items": [uuid, ...], "total": ..., "page": ..., "size": ..., "pages": ...}`.
+    The ids come in the order of the ids, so a page is the same every time.
+    A page past the last one has no items. Each id is an edition whose pages are
+    at `GET /editions/{id}/pages/{number}`.
+    """
+    return db.list_collection()
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
@@ -522,3 +538,7 @@ def add_legal_spelling(
         edition_id,
     )
     return legal
+
+
+# After all the routes: it adds the page and size parameters to the paginated ones.
+add_pagination(app)

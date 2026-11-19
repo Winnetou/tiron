@@ -44,6 +44,21 @@ The app shows a scan of a page next to its text, so the OCR can be corrected.
 Scans and OCR text come from [polona.pl](https://polona.pl); the app fetches
 each page once and keeps it in PostgreSQL.
 
+### The main page: the editions of the collection
+
+`GET /editions` lists the editions in the `collection` table, as the ids of the
+editions (Polona object UUIDs), 100 on a page. It is paginated with
+[fastapi-pagination](https://uriyyo-fastapi-pagination.netlify.app/):
+
+- `?page=` is the page, from 1 (the default);
+- `?size=` is how many ids are on a page: 100 by default, and 100 at most (more
+  is 422).
+
+The response is `{"items": ["<uuid>", ...], "total": 187597, "page": 1,
+"size": 100, "pages": 1876}`. The ids are in the order of the ids, so a page is
+the same on every request. A page past the last one has no items. Each id is an
+edition whose first page is at `GET /editions/{id}/pages/0`.
+
 ### Requesting a page
 
 `GET /editions/{edition_id}/pages/{number}`
