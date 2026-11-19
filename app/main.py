@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -42,7 +43,7 @@ from app.tei_xml import (
 
 db = Database()
 
-logger = logging.getLogger("uvicorn.error")  # shown with uvicorn's own output
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -56,19 +57,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     it: it logs a warning, and the endpoint that needs it answers 503.
     """
     logger.info("Loading the spaCy model %s ...", MODEL_NAME)
+    started = time.perf_counter()
     try:
         get_nlp()
     except NerModelUnavailable as error:
         logger.warning("%s: /ner will answer 503", error)
     else:
-        logger.info("The spaCy model %s is loaded", MODEL_NAME)
+        logger.info(
+            "The spaCy model %s is loaded (%.1f s)",
+            MODEL_NAME,
+            time.perf_counter() - started,
+        )
     logger.info("Loading the spelling dictionary ...")
+    started = time.perf_counter()
     try:
         get_checker()
     except SpellcheckUnavailable as error:
         logger.warning("%s: /spellcheck will answer 503", error)
     else:
-        logger.info("The spelling dictionary is loaded")
+        logger.info(
+            "The spelling dictionary is loaded (%.1f s)", time.perf_counter() - started
+        )
     yield
 
 
@@ -98,10 +107,15 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
     page has one, otherwise the raw OCR text.
     """
     if not db.check_edition_in_collection(edition_id):
+        logger.warning("Edition %s is not in the collection", edition_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
     stored = db.get_page_by_number(edition_id, number)
     if stored is not None:
+        logger.debug(
+            "Page %s of edition %s is served from the database", number, edition_id
+        )
         return PageView.from_page(stored)
+    logger.info("Fetching page %s of edition %s from Polona", number, edition_id)
     try:
         polona_page = fetch_page(edition_id, number)
         if db.get_edition(edition_id) is None:
@@ -117,6 +131,9 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
                 ),
             )
     except PolonaError as exc:
+        logger.warning(
+            "Polona failed for page %s of edition %s: %s", number, edition_id, exc
+        )
         if exc.not_found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found") from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
@@ -130,6 +147,7 @@ def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
             scan_uri=polona_page["scan_uri"],
         )
     )
+    logger.info("Page %s of edition %s is saved", number, edition_id)
     return PageView.from_page(page)
 
 
@@ -147,9 +165,14 @@ def update_page(
 
     404 if the page is not stored. Returns the updated page as a PageView.
     """
-    page = db.update_page(edition_id, number, **update.model_dump(exclude_unset=True))
+    changes = update.model_dump(exclude_unset=True)
+    page = db.update_page(edition_id, number, **changes)
     if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Page %s of edition %s updated: %s", number, edition_id, ", ".join(changes)
+    )
     return PageView.from_page(page)
 
 
@@ -192,11 +215,25 @@ def tag_entity(
             entity.text,
         )
     except TextChanged as exc:
+        logger.warning(
+            "Entity not tagged on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except (InvalidTei, CannotTag) as exc:
+        logger.warning(
+            "Entity not tagged on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if xml != page.corrected_content:
         page = db.update_page(edition_id, number, corrected_content=xml) or page
+    logger.info(
+        "Entity %s tagged on page %s of %s (%s-%s)",
+        entity.label,
+        number,
+        edition_id,
+        entity.start,
+        entity.end,
+    )
     return PageView.from_page(page)
 
 
@@ -257,11 +294,25 @@ def mark_page_section(
             mark.n,
         )
     except TextChanged as exc:
+        logger.warning(
+            "Section not marked on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except (InvalidTei, CannotTag) as exc:
+        logger.warning(
+            "Section not marked on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if xml != page.corrected_content:
         page = db.update_page(edition_id, number, corrected_content=xml) or page
+    logger.info(
+        "Section %s marked on page %s of %s (%s-%s)",
+        mark.section,
+        number,
+        edition_id,
+        mark.start,
+        mark.end,
+    )
     return PageView.from_page(page)
 
 
@@ -325,6 +376,7 @@ def recognize_entities(request: NerRequest) -> NerResult:
     try:
         return NerResult(entities=find_entities(request.text))
     except NerModelUnavailable as exc:
+        logger.error("NER requested, but the model is not available: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
@@ -357,6 +409,9 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
         legal = db.get_legal_spellings(request.edition_id) if request.edition_id else ()
         return SpellcheckResult(words=check_words(request.text, legal))
     except SpellcheckUnavailable as exc:
+        logger.error(
+            "Spellcheck requested, but the dictionary is not available: %s", exc
+        )
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
@@ -409,11 +464,26 @@ def correct_word(
             record=correction.after != "",
         )
     except TextChanged as exc:
+        logger.warning(
+            "Word not corrected on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except (InvalidTei, CannotReplace) as exc:
+        logger.warning(
+            "Word not corrected on page %s of %s: %s", number, edition_id, exc
+        )
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "%s on page %s of %s (%s-%s)",
+        "Correction recorded" if correction.after else "Token removed",
+        number,
+        edition_id,
+        correction.start,
+        correction.end,
+    )
     return PageView.from_page(page)
 
 
@@ -444,4 +514,9 @@ def add_legal_spelling(
     except psycopg.errors.ForeignKeyViolation as exc:  # removed in the meantime
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found") from exc
     response.status_code = status.HTTP_201_CREATED if added else status.HTTP_200_OK
+    logger.info(
+        "Legal spelling %s for edition %s",
+        "added" if added else "already known",
+        edition_id,
+    )
     return legal
