@@ -1,11 +1,14 @@
 """Named entity recognition with spaCy and its large Polish model."""
 
+import logging
 import threading
 
 import spacy
 from spacy.language import Language
 
 from app.models import Entity
+
+logger = logging.getLogger(__name__)
 
 MODEL_NAME = "pl_core_news_lg"
 
@@ -32,6 +35,9 @@ def get_nlp() -> Language:
             try:
                 _nlp = spacy.load(MODEL_NAME)
             except OSError as error:
+                logger.error(
+                    "The spaCy model %s could not be loaded: %s", MODEL_NAME, error
+                )
                 raise NerModelUnavailable(
                     f"The spaCy model {MODEL_NAME} is not installed"
                 ) from error
@@ -48,7 +54,7 @@ def find_entities(text: str) -> list[Entity]:
     Raises NerModelUnavailable if the model is not installed.
     """
     nlp = get_nlp()
-    return [
+    entities = [
         Entity(
             text=entity.text,
             label=entity.label_,
@@ -57,3 +63,5 @@ def find_entities(text: str) -> list[Entity]:
         )
         for entity in nlp(text).ents
     ]
+    logger.debug("%d entities in %d characters", len(entities), len(text))
+    return entities

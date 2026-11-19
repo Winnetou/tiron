@@ -1,6 +1,7 @@
 """Connector to polona.pl, the source of the scans and OCR output."""
 
 import json
+import logging
 import re
 import statistics
 import urllib.error
@@ -26,6 +27,9 @@ class PolonaError(Exception):
     def __init__(self, message: str, *, not_found: bool = False) -> None:
         super().__init__(message)
         self.not_found = not_found
+
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -64,6 +68,7 @@ class EditionMetadata(TypedDict):
 
 
 def _fetch(url: str) -> bytes:
+    logger.debug("GET %s", url)
     request = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
         return response.read()
@@ -138,10 +143,13 @@ def alto_to_text(xml_bytes: bytes) -> str:
     # running head) are joined left to right. A new OCR text block (main text,
     # footnote...) starts after a blank line.
     lines.sort(key=lambda line: (line["y"], line["x"]))
-    median_height = statistics.median(line["h"] for line in lines) or 1
+    default_median_height = 1
+    actual_median_height = statistics.median(line["h"] for line in lines)
+    median_height = actual_median_height or default_median_height
     rows: list[list[dict]] = []
     for line in lines:
-        if rows and abs(line["y"] - rows[-1][0]["y"]) < median_height * 0.5:
+        treshold = median_height * 0.5
+        if rows and abs(line["y"] - rows[-1][0]["y"]) < treshold:
             rows[-1].append(line)
         else:
             rows.append([line])

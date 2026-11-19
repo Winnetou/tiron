@@ -1,5 +1,6 @@
 """Spell checking with phunspell and the Polish Hunspell dictionary."""
 
+import logging
 import re
 import threading
 from collections.abc import Collection
@@ -7,6 +8,8 @@ from collections.abc import Collection
 import phunspell
 
 from app.models import Word
+
+logger = logging.getLogger(__name__)
 
 LANGUAGE = "pl_PL"
 
@@ -40,6 +43,9 @@ def get_checker() -> phunspell.Phunspell:
             try:
                 _checker = phunspell.Phunspell(LANGUAGE)
             except phunspell.phunspell.PhunspellError as error:
+                logger.error(
+                    "The %s dictionary could not be loaded: %s", LANGUAGE, error
+                )
                 raise SpellcheckUnavailable(
                     f"The {LANGUAGE} dictionary is not available"
                 ) from error
@@ -92,4 +98,5 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
                 correct=verdicts[word],
             )
         )
+    logger.debug("%d words in %d characters", len(words), len(text))
     return words

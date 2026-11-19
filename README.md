@@ -546,10 +546,26 @@ stub.
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.
 
+### Logging
+
+Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.ner`,
+...), and `setup_logging()` in [app/logs.py](app/logs.py) puts one handler on
+the `app` logger, writing to stderr, so these records show next to uvicorn's
+own. The level is `INFO`, or the one in the `LOG_LEVEL` environment variable
+(`DEBUG`, `INFO`, `WARNING`, `ERROR`; see `.env.example`; `docker compose`
+passes it on). `INFO` has the start-up (how long the model and the dictionary
+took to load), the pages fetched from Polona, and each change made to a page
+(a correction, a removed token, a tagged entity, a marked section, the ready
+flag, a legal spelling). `WARNING` has what the backend refused (a page that
+changed, XML that does not allow the change, Polona failures) and `ERROR` the
+model or dictionary that is not available. `DEBUG` adds the requests to Polona
+and the sizes of the spelling and NER results. The text of the pages is never
+logged: only ids, offsets and counts.
+
 ### When Polona fails
 
 `app/polona_connector.py` turns every failure into one exception,
-`PolonaError`, and `get_page` maps it to an HTTP error. Nothing is saved when
+`PolonaError`, and `idempotent_fetch_page` maps it to an HTTP error. Nothing is saved when
 Polona fails.
 
 | Situation | Response |

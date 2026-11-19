@@ -26,7 +26,7 @@ services:
 
   backend:
     build: .
-    restart: unless-stopped
+    restart: always
     depends_on:
       db:
         condition: service_healthy
@@ -37,6 +37,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tiron}
       POSTGRES_USER: ${POSTGRES_USER:-tiron}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes: 
+      - ./app:/app/app
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     healthcheck:

@@ -7,6 +7,7 @@ interface Tool {
 
 const NER_LABEL = 'Named entity recognition'
 const STRUCTURE_LABEL = 'Structure'
+const CORRECTION_LABEL = 'Correction'
 
 // Simple 24x24 stroke icons (no icon dependency).
 function Icon({ children }: { children: ReactNode }) {
@@ -29,22 +30,22 @@ function Icon({ children }: { children: ReactNode }) {
 
 const TOOLS: Tool[] = [
   {
-    label: 'Structure',
-    // outline: headings and indented lines
-    icon: (
-      <Icon>
-        <path d="M4 6h16M8 12h12M8 18h12" />
-        <path d="M4 12h.01M4 18h.01" />
-      </Icon>
-    ),
-  },
-  {
-    label: 'Correction',
+    label: CORRECTION_LABEL,
     // pencil
     icon: (
       <Icon>
         <path d="M12 20h9" />
         <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+      </Icon>
+    ),
+  },
+  {
+    label: STRUCTURE_LABEL,
+    // outline: headings and indented lines
+    icon: (
+      <Icon>
+        <path d="M4 6h16M8 12h12M8 18h12" />
+        <path d="M4 12h.01M4 18h.01" />
       </Icon>
     ),
   },
@@ -60,34 +61,39 @@ const TOOLS: Tool[] = [
   },
 ]
 
+export type SidebarView = 'correction' | 'structure' | 'ner'
+
 interface Props {
-  /** Send the text of the page to be recognized for named entities. */
+  /** The view that is shown: its button is the active one. */
+  view: SidebarView
+  /** Switch to the correction or the structure view. */
+  onShow: (view: 'correction' | 'structure') => void
+  /** Send the text of the page to be recognized for named entities, and show them. */
   onRecognizeEntities: () => void
   /** False when there is no text to recognize entities in. */
   canRecognize: boolean
   recognizing: boolean
-  /** Whether the structure view is the one shown. */
-  structureActive: boolean
-  /** Switch to the structure view, or back to the text if it is shown. */
-  onToggleStructure: () => void
 }
 
 /**
- * Vertical tool bar on the right. Structure (a view to mark the sections of a
- * page) and named entity recognition work; the other button is a stub.
+ * Vertical tool bar on the right: the views of the page, the active one
+ * pressed. Correction (the spelling), Structure (to mark the sections of the
+ * page) and Named entity recognition. The Text and XML buttons below are stubs.
  */
 export default function Sidebar({
+  view,
+  onShow,
   onRecognizeEntities,
   canRecognize,
   recognizing,
-  structureActive,
-  onToggleStructure,
 }: Props) {
   return (
     <aside className="sidebar" aria-label="Tools">
       {TOOLS.map(({ label, icon }) => {
         const isNer = label === NER_LABEL
-        const isStructure = label === STRUCTURE_LABEL
+        const target = label === STRUCTURE_LABEL ? 'structure' : 'correction'
+        const active =
+          view === (isNer ? 'ner' : target)
         return (
           <button
             key={label}
@@ -95,21 +101,22 @@ export default function Sidebar({
             className="sidebar-button"
             aria-label={label}
             data-tooltip={label}
-            onClick={
-              isNer
-                ? onRecognizeEntities
-                : isStructure
-                  ? onToggleStructure
-                  : undefined
-            }
+            onClick={isNer ? onRecognizeEntities : () => onShow(target)}
             disabled={isNer && (!canRecognize || recognizing)}
             aria-busy={isNer && recognizing ? true : undefined}
-            aria-pressed={isStructure ? structureActive : undefined}
+            aria-pressed={active}
           >
             {icon}
           </button>
         )
       })}
+      <div className="view-switch" role="group" aria-label="Show">
+        {(['text', 'xml'] as const).map((choice) => (
+          <button key={choice} type="button" disabled>
+            {choice === 'text' ? 'Text' : 'XML'}
+          </button>
+        ))}
+      </div>
     </aside>
   )
 }
