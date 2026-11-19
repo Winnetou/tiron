@@ -430,6 +430,16 @@ if it is not what is at those offsets the page has changed, and the answer is
 
 ### What the frontend shows
 
+While the scan of a page is loading (or has not started), a spinner with "Loading the
+scan …" is shown in the left half, so that the user knows to wait. It goes when the
+image has loaded, and comes back for the scan of the next page. If the image cannot
+be loaded, a message says so.
+
+The two halves scroll together: scrolling the scan (the left half) scrolls the text
+(the right half), and scrolling the text scrolls the scan, by the same part of the
+way: half way down one is half way down the other. It works in every view of the
+text.
+
 The main page (`/`) lists the editions of the collection as links, 100 on a page
 (`GET /editions`), with Previous and Next to move between the pages of the list
 (`/?page=2`, ...). There is no field to type a uuid in. Each link goes to the

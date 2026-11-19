@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState, type UIEvent } from 'react'
 import type { Page } from './api'
 import type { Decision, Entity } from './entities'
 import PageText from './PageText'
@@ -94,15 +94,53 @@ export default function PageViewer({
   // Every page opens in the correction view: moving to another page goes back
   // to it, wherever the user was.
   const [view, setView] = useState<View>('correction')
+  // The scans that have loaded, or failed to: until then (or for another page's
+  // scan) a spinner is shown. Kept by address, so a new page starts loading.
+  const [scan, setScan] = useState<{ src: string; failed: boolean } | null>(null)
+  const scanDone = page.scan_uri !== null && scan?.src === page.scan_uri
+  const scanLoading = page.scan_uri !== null && !scanDone
+  const scanFailed = scanDone && scan.failed
   const [viewedPage, setViewedPage] = useState(page.number)
   if (viewedPage !== page.number) {
     setViewedPage(page.number)
     setView('correction')
   }
 
+  // The scan and the text scroll together: scrolling one moves the other by the
+  // same part of the way.
+  const scanHalf = useRef<HTMLElement>(null)
+  const textHalf = useRef<HTMLElement>(null)
+  // The box that was just moved by the other one: its scroll event is the echo
+  // of that, not the user, so it must not move the other back.
+  const moved = useRef<HTMLElement | null>(null)
+  function follow(from: HTMLElement, to: HTMLElement | null | undefined) {
+    if (moved.current === from) {
+      moved.current = null
+      return
+    }
+    if (!to) return
+    const fromRange = from.scrollHeight - from.clientHeight
+    const toRange = to.scrollHeight - to.clientHeight
+    if (fromRange <= 0 || toRange <= 0) return
+    const before = to.scrollTop
+    moved.current = to
+    to.scrollTop = (from.scrollTop / fromRange) * toRange
+    // no scroll event follows when it did not move: nothing to ignore then
+    if (to.scrollTop === before) moved.current = null
+  }
+  const followScan = (event: UIEvent<HTMLElement>) =>
+    follow(
+      event.currentTarget,
+      textHalf.current?.querySelector<HTMLElement>('.page-box'),
+    )
+  const followText = (event: UIEvent<HTMLElement>) => {
+    const box = event.target as HTMLElement
+    if (box.classList?.contains('page-box')) follow(box, scanHalf.current)
+  }
+
   return (
     <div className="viewer">
-      <section className="viewer-half">
+      <section className="viewer-half" ref={scanHalf} onScroll={followScan}>
         <div className="zoom-controls">
           <button
             type="button"
@@ -122,15 +160,36 @@ export default function PageViewer({
             +
           </button>
         </div>
+        {scanLoading && (
+          <div
+            className="scan-loading"
+            role="progressbar"
+            aria-label="Loading the scan"
+          >
+            <span className="spinner" aria-hidden="true" />
+            Loading the scan …
+          </div>
+        )}
+        {scanFailed && <p role="alert">The scan could not be loaded.</p>}
         {page.scan_uri && (
           <img
+            // (a new scan is a new image: it must not show the old one meanwhile)
+            key={page.scan_uri}
             src={page.scan_uri}
             alt={`Scan of page ${page.number}`}
             style={{ width: `${zoom}%` }}
+            hidden={scanFailed}
+            onLoad={() => setScan({ src: page.scan_uri!, failed: false })}
+            onError={() => setScan({ src: page.scan_uri!, failed: true })}
           />
         )}
       </section>
-      <section className="viewer-half text-half">
+      <section
+        className="viewer-half text-half"
+        ref={textHalf}
+        // (scroll events do not bubble: the capture phase sees the text box's)
+        onScrollCapture={followText}
+      >
         <nav className="page-nav">
           <button
             type="button"
