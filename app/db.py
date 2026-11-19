@@ -15,7 +15,8 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
-from fastapi_pagination.ext.psycopg import paginate
+from fastapi_pagination import create_page
+from fastapi_pagination.api import resolve_params
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
@@ -362,12 +363,20 @@ class Database:
         """A page of the ids of the editions in the collection, in the order of
         the ids (so the pages do not change between requests). Which page, and
         how long, is up to the request that is being served: fastapi-pagination
-        reads it from there."""
-        return paginate(
-            self.conn,
-            "SELECT id FROM collection ORDER BY id",
-            transformer=lambda rows: [row["id"] for row in rows],
-        )
+        reads it from there.
+
+        The two queries are run here, not by fastapi-pagination's psycopg
+        helper: that one switches the row factory of the connection while it
+        counts, and the connection is shared by the requests that run at the
+        same time, so two of them could leave it switched."""
+        params = resolve_params()
+        raw = params.to_raw_params().as_limit_offset()
+        rows = self.conn.execute(
+            "SELECT id FROM collection ORDER BY id LIMIT %s OFFSET %s",
+            (raw.limit, raw.offset),
+        ).fetchall()
+        total = self.conn.execute("SELECT count(*) AS n FROM collection").fetchone()
+        return create_page([row["id"] for row in rows], total=total["n"], params=params)
 
     def check_edition_in_collection(self, edition_id: UUID) -> bool:
         row = self.conn.execute(
