@@ -242,6 +242,25 @@ export async function addLegalSpelling(
  * the correction (before -> after), and returns the updated page. Like for
  * entities, the frontend only gives the word's offsets and the new text.
  */
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/tokens: the backend puts a text
+ * token that the OCR missed at `position` of the page's text (between two
+ * characters), in the XML, and returns the updated page. No correction is
+ * recorded for it.
+ */
+export function addToken(
+  editionId: string,
+  number: number,
+  position: number,
+  text: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ position, text }),
+  })
+}
+
 export function correctWord(
   editionId: string,
   number: number,

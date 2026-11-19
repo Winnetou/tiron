@@ -49,6 +49,15 @@ const entitiesOf = (xml: string): Entity[] => {
   return entities.sort((a, b) => a.start - b.start)
 }
 
+/** What the backend does for POST .../tokens, for a text without markup. */
+const insertToken = (xml: string, position: number, token: string) => {
+  const text = [...textOf(xml)]
+  const lead = position === 0 || /\s/.test(text[position - 1]) ? '' : ' '
+  const trail = position >= text.length || /\s/.test(text[position]) ? '' : ' '
+  text.splice(position, 0, lead + token + trail)
+  return xmlOf(text.join(''))
+}
+
 const PAGE: Page = {
   id: 'a8ae3c6d-c4cf-4d11-82d0-112582bb355f',
   edition_id: UUID,
@@ -94,6 +103,8 @@ interface Options {
   editions?: (page: number) => { items: string[]; pages: number } | Error
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
   marked?: (xml: string) => Entity[] | Error
+  /** Answer of POST .../tokens; defaults to putting the token in the text. */
+  token?: (body: { position: number; text: string }, page: Page) => Partial<Page> | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -216,10 +227,12 @@ function fakeBackend(options: Options = {}) {
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
     const sectioning = url.match(/\/pages\/(\d+)\/sections$/)
+    const adding = url.match(/\/pages\/(\d+)\/tokens$/)
     const number = Number(
       tagging?.[1] ??
         correcting?.[1] ??
         sectioning?.[1] ??
+        adding?.[1] ??
         url.split('/').pop(),
     )
     const page = pageFor(number)
@@ -230,6 +243,16 @@ function fakeBackend(options: Options = {}) {
         ? options.correct(body, current)
         : { content: current.content.replace(body.before, body.after) }
       if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    if (adding) {
+      const current = pages.get(number) ?? page
+      const changes = options.token
+        ? options.token(body, current)
+        : { content: insertToken(current.content, body.position, body.text) }
+      if (changes instanceof Error) return failure(422, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
       return reply(true, 200, updated)
@@ -3192,6 +3215,224 @@ describe('scrolling the scan and the text together', () => {
     pageText().scrollTop = 300
 
     expect(scanHalf().scrollTop).toBe(0)
+  })
+})
+
+describe('adding a token the OCR missed', () => {
+  const TEXT = 'Ala ma kota\nnoc'
+  const dialog = () => screen.queryByRole('dialog', { name: 'Add a text token' })
+  const field = () => screen.getByRole('textbox', { name: 'Text to add' })
+  const addButton = () => within(dialog()!).getByRole('button', { name: 'Add' })
+  const tokenCalls = () => calls.filter((c) => c.url.endsWith('/tokens'))
+
+  /** The browser's answer to "where is the cursor if I click here". */
+  function caretAtOffset(offset: number, node?: Text) {
+    const target = node ?? (pageText().firstChild as Text)
+    Object.defineProperty(document, 'caretPositionFromPoint', {
+      value: () => ({ offsetNode: target, offset }),
+      configurable: true,
+    })
+  }
+  const doubleClick = (element: Element = pageText()) =>
+    fireEvent.doubleClick(element, { clientX: 20, clientY: 10 })
+
+  async function open(extra: Options = {}) {
+    await openPage({ page: () => ({ content: xmlOf(TEXT) }), ...extra })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+
+  afterEach(() => {
+    // (jsdom has none of its own)
+    delete (document as { caretPositionFromPoint?: unknown }).caretPositionFromPoint
+  })
+
+  it('offers a box to add a token when a place in the text is double-clicked', async () => {
+    await open()
+    caretAtOffset(4)
+
+    doubleClick()
+
+    expect(dialog()).toBeInTheDocument()
+    expect(field()).toHaveFocus()
+    expect(addButton()).toBeDisabled()
+  })
+
+  it('shows a hint for it', async () => {
+    await open()
+
+    expect(screen.getByText(/Double-click a place in the text/)).toBeInTheDocument()
+  })
+
+  it('sends the place and the token to the backend', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+
+    await userEvent.type(field(), 'XX')
+    await userEvent.click(addButton())
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].method).toBe('POST')
+    expect(tokenCalls()[0].url).toBe(`/editions/${UUID}/pages/0/tokens`)
+    expect(tokenCalls()[0].body).toEqual({ position: 4, text: 'XX' })
+  })
+
+  it('shows the text that the backend returns, and closes the box', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+
+    await userEvent.type(field(), 'XX')
+    await userEvent.click(addButton())
+
+    await waitFor(() => expect(pageText().textContent).toBe('Ala XX ma kota\nnoc'))
+    expect(dialog()).toBeNull()
+  })
+
+  it('also adds with Enter', async () => {
+    await open()
+    caretAtOffset(11)
+    doubleClick()
+
+    await userEvent.type(field(), 'XX{Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({ position: 11, text: 'XX' })
+  })
+
+  it('counts the place in code points, as the backend does, after emoji', async () => {
+    await openPage({ page: () => ({ content: xmlOf('😀 Ala ma') }) })
+    await waitFor(() => expect(pageText().textContent).toBe('😀 Ala ma'))
+    caretAtOffset(7) // "😀 Ala " is 7 UTF-16 units, 6 code points
+    doubleClick()
+
+    await userEvent.type(field(), 'X{Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({ position: 6, text: 'X' })
+  })
+
+  it('accepts several words, like "LIST SZÓSTY"', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+
+    await userEvent.type(field(), 'LIST SZÓSTY')
+    expect(addButton()).toBeEnabled()
+    await userEvent.click(addButton())
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({ position: 4, text: 'LIST SZÓSTY' })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('Ala LIST SZÓSTY ma kota\nnoc'),
+    )
+  })
+
+  it('sends the words with single spaces, and without spaces at the ends', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+
+    await userEvent.type(field(), '  LIST   SZÓSTY  {Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({ position: 4, text: 'LIST SZÓSTY' })
+  })
+
+  it('does not accept nothing, or only spaces', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+
+    expect(addButton()).toBeDisabled()
+    await userEvent.type(field(), '   {Enter}')
+    expect(addButton()).toBeDisabled()
+
+    expect(tokenCalls()).toHaveLength(0)
+  })
+
+  it('closes with Escape, and sends nothing', async () => {
+    await open()
+    caretAtOffset(4)
+    doubleClick()
+    await userEvent.type(field(), 'XX')
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(dialog()).toBeNull()
+    expect(tokenCalls()).toHaveLength(0)
+  })
+
+  it('shows the backend error and leaves the text as it was', async () => {
+    await open({ token: () => new Error('There is no place for text there') })
+    caretAtOffset(4)
+    doubleClick()
+
+    await userEvent.type(field(), 'XX{Enter}')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('no place for text')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('does nothing when the browser cannot say where the click was', async () => {
+    await open()
+
+    doubleClick()
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('does nothing on a word: a word is edited, not added to', async () => {
+    await open({
+      spell: (text) => wordsOf(text, ['ma']),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    caretAtOffset(1)
+
+    doubleClick(screen.getAllByText('ma', { selector: '.word' })[0])
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('works on a place between the words of a text that is split into words', async () => {
+    await open({
+      spell: (text) => wordsOf(text, []),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    // the space after "Ala": a text node of its own, between two words
+    const gap = Array.from(pageText().childNodes).find(
+      (node) => node.nodeType === Node.TEXT_NODE && node.textContent === ' ',
+    ) as Text
+    caretAtOffset(1, gap)
+
+    doubleClick()
+
+    expect(dialog()).toBeInTheDocument()
+  })
+
+  it('is not offered in the NER view', async () => {
+    await open()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Named entity recognition' }),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Named entity recognition' })).toBeEnabled(),
+    )
+    caretAtOffset(4)
+
+    doubleClick()
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('is not offered in the text view', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+    caretAtOffset(4)
+
+    doubleClick()
+
+    expect(dialog()).toBeNull()
   })
 })
 

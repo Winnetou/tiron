@@ -6,10 +6,12 @@ import pytest
 
 from app.tei_xml import (
     TEI_NAMESPACE,
+    CannotInsert,
     CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
+    insert_text_at,
     mark_section,
     replace_text_range,
     tag_text_range,
@@ -1418,6 +1420,92 @@ def test_random_sections_keep_the_text_and_a_valid_structure(seed):
         if section != "toc":
             assert tei_xml_to_text(result) == extracted  # the text is the same
         xml = result
+
+
+class TestInsertTextAt:
+    TEXT = "Ala ma kota\nnoc"
+
+    def insert(self, position, token="XX", text=TEXT):
+        return tei_xml_to_text(insert_text_at(generated(text), position, token))
+
+    @pytest.mark.parametrize(
+        ("position", "expected"),
+        [
+            (0, "XX Ala ma kota\nnoc"),  # the start of the text
+            (4, "Ala XX ma kota\nnoc"),  # between words: one space on each side
+            (3, "Ala XX ma kota\nnoc"),  # right after a word
+            (11, "Ala ma kota XX\nnoc"),  # the end of a line
+            (12, "Ala ma kota\nXX noc"),  # the start of the next line
+            (15, "Ala ma kota\nnoc XX"),  # the end of the text
+            (1, "A XX la ma kota\nnoc"),  # in a word: it is cut in two
+        ],
+    )
+    def test_puts_the_token_at_the_place_as_a_token_of_its_own(
+        self, position, expected
+    ):
+        assert self.insert(position) == expected
+
+    def test_the_text_before_and_after_is_the_same(self):
+        text = tei_xml_to_text(insert_text_at(generated(self.TEXT), 4, "XX"))
+
+        assert text.replace(" XX", "", 1) == self.TEXT
+
+    def test_the_markup_around_stays(self):
+        xml = tag_text_range(
+            generated("Jan Kowalski tu"), 0, 12, "persName", "Jan Kowalski"
+        )
+
+        result = insert_text_at(xml, 4, "X")
+
+        assert "<persName>Jan X Kowalski</persName>" in result
+
+    def test_a_token_after_the_last_word_of_an_entity_goes_into_it(self):
+        xml = tag_text_range(
+            generated("Jan Kowalski tu"), 0, 12, "persName", "Jan Kowalski"
+        )
+
+        result = insert_text_at(xml, 12, "X")
+
+        assert "<persName>Jan Kowalski X</persName>" in result
+
+    def test_after_a_line_break_in_the_xml(self):
+        xml = generated("Ala\nma")
+
+        assert tei_xml_to_text(insert_text_at(xml, 4, "X")) == "Ala\nX ma"
+
+    def test_counts_code_points_after_emoji(self):
+        text = "😀 Ala ma"
+
+        assert self.insert(6, text=text) == "😀 Ala XX ma"
+
+    def test_not_on_the_empty_line_between_paragraphs(self):
+        with pytest.raises(CannotInsert, match="between two paragraphs"):
+            self.insert(4, text="Ala\n\nma")
+
+    def test_the_start_of_the_next_paragraph_is_a_place(self):
+        assert self.insert(5, text="Ala\n\nma") == "Ala\n\nXX ma"
+
+    @pytest.mark.parametrize("position", [-1, 16, 100])
+    def test_a_position_outside_the_text(self, position):
+        with pytest.raises(CannotInsert, match="no place"):
+            self.insert(position)
+
+    def test_a_token_may_be_several_words(self):
+        assert self.insert(4, "LIST SZÓSTY") == "Ala LIST SZÓSTY ma kota\nnoc"
+
+    def test_a_run_of_spaces_in_a_token_is_one_space(self):
+        assert self.insert(4, "LIST   SZÓSTY") == "Ala LIST SZÓSTY ma kota\nnoc"
+
+    @pytest.mark.parametrize(
+        "token", ["", " ", " a", "a ", "a\nb", "a\tb", "a\x00", "a\u00a0b"]
+    )
+    def test_a_token_must_be_acceptable(self, token):
+        with pytest.raises(CannotInsert):
+            self.insert(4, token)
+
+    def test_rejects_xml_that_is_not_tei(self):
+        with pytest.raises(InvalidTei):
+            insert_text_at("<a/>", 0, "X")
 
 
 class TestEntitiesOfTheXml:
