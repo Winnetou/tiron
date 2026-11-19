@@ -3128,7 +3128,7 @@ describe('page view', () => {
       expect(textButton()).toHaveAttribute('aria-pressed', 'true')
     })
 
-    it('puts the markup of the XML in grey, smaller type', async () => {
+    it('puts the markup of the XML on yellow, in smaller type', async () => {
       await openText()
 
       await userEvent.click(xmlButton())

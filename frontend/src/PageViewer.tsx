@@ -61,7 +61,7 @@ interface Props {
  * itself, read-only: its text as extracted by the backend, in which the
  * spelling is corrected, or (NER view) the named entities, recognized by the
  * backend. The Text button shows the text as it is, the XML button the page's
- * XML (`xml_content_corrected`) with the markup on a grey background. The Structure button of the sidebar shows the text in a way that
+ * XML (`xml_content_corrected`) with the markup on a yellow background. The Structure button of the sidebar shows the text in a way that
  * the sections of the page can be marked in it.
  */
 export default function PageViewer({
