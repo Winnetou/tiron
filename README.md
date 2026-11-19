@@ -565,7 +565,7 @@ logged: only ids, offsets and counts.
 ### When Polona fails
 
 `app/polona_connector.py` turns every failure into one exception,
-`PolonaError`, and `get_page` maps it to an HTTP error. Nothing is saved when
+`PolonaError`, and `idempotent_fetch_page` maps it to an HTTP error. Nothing is saved when
 Polona fails.
 
 | Situation | Response |

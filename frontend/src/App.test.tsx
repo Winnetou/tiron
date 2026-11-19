@@ -367,139 +367,6 @@ describe('text from the TEI XML', () => {
   })
 })
 
-describe('switch between text and XML', () => {
-  const textButton = () => screen.getByRole('button', { name: 'Text' })
-  const xmlButton = () => screen.getByRole('button', { name: 'XML' })
-  const xmlBox = () => screen.getByRole('region', { name: 'Page XML' })
-
-  async function openText() {
-    await openPage()
-    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
-  }
-
-  it('starts on the text, with the switch showing it', async () => {
-    await openText()
-
-    expect(textButton()).toHaveAttribute('aria-pressed', 'true')
-    expect(xmlButton()).toHaveAttribute('aria-pressed', 'false')
-  })
-
-  it('shows the TEI XML content as it is when switched to XML', async () => {
-    await openText()
-
-    await userEvent.click(xmlButton())
-
-    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
-    expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
-    expect(textButton()).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
-    expect(screen.queryByRole('region', { name: 'Page XML' })).not.toBeNull()
-  })
-
-  it('switches back to the text', async () => {
-    await openText()
-    await userEvent.click(xmlButton())
-
-    await userEvent.click(textButton())
-
-    expect(pageText().textContent).toBe('text of page 0')
-    expect(screen.queryByRole('region', { name: 'Page XML' })).toBeNull()
-  })
-
-  it('makes no request: both views come from the same load', async () => {
-    await openText()
-    const before = calls.length
-
-    await userEvent.click(xmlButton())
-    await userEvent.click(textButton())
-
-    expect(calls).toHaveLength(before)
-  })
-
-  it('shows the XML read-only: it is not an input', async () => {
-    await openText()
-
-    await userEvent.click(xmlButton())
-    await userEvent.type(xmlBox(), 'x')
-
-    expect(screen.queryByRole('textbox', { name: 'Page XML' })).toBeNull()
-    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
-  })
-
-  it('puts the markup in grey, smaller type, and leaves the content alone', async () => {
-    await openText()
-
-    await userEvent.click(xmlButton())
-
-    const markup = Array.from(xmlBox().querySelectorAll('.xml-markup')).map(
-      (el) => el.textContent,
-    )
-    expect(markup).toEqual([
-      '<?xml version="1.0"?>',
-      '<TEI>',
-      '<teiHeader>',
-      '</teiHeader>',
-      '<text>',
-      '<p>',
-      '</p>',
-      '</text>',
-      '</TEI>',
-    ])
-    // the content is what is not markup
-    expect(xmlBox().textContent).toContain('HEADER')
-    expect(xmlBox().textContent).toContain('text of page 0')
-    for (const text of markup) expect(text).toMatch(/^</)
-    const spanTexts = Array.from(xmlBox().querySelectorAll('span')).map(
-      (el) => el.textContent,
-    )
-    expect(spanTexts.join('')).not.toContain('HEADER')
-    expect(spanTexts.join('')).not.toContain('text of page 0')
-
-    // markup: grey background and a smaller font than the content around it
-    const tag = xmlBox().querySelector('.xml-markup') as HTMLElement
-    const tagStyle = getComputedStyle(tag)
-    const [r, g, b] = tagStyle.backgroundColor.match(/\d+/g)!.map(Number)
-    expect(r).toBe(g)
-    expect(g).toBe(b)
-    expect(r).toBeLessThan(255) // not white
-    expect(r).toBeGreaterThan(150) // light grey, so the text stays readable
-    const contentSize = parseFloat(getComputedStyle(xmlBox()).fontSize)
-    expect(parseFloat(tagStyle.fontSize)).toBeLessThan(contentSize)
-  })
-
-  it('keeps the chosen view when moving to another page', async () => {
-    await openText()
-    await userEvent.click(xmlButton())
-
-    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
-
-    await waitFor(() =>
-      expect(xmlBox().textContent).toBe(xmlOf('text of page 1')),
-    )
-    expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
-  })
-
-  it('still shows the XML when the backend rejects it as TEI', async () => {
-    await openPage({ tei: () => new Error('The <TEI> element has no <text>') })
-    await screen.findByRole('alert')
-
-    await userEvent.click(xmlButton())
-
-    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
-    expect(screen.getByRole('alert')).toHaveTextContent('has no <text>')
-  })
-
-  it('stays on the XML when the page is marked ready', async () => {
-    await openText()
-    await userEvent.click(xmlButton())
-
-    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
-
-    await screen.findByRole('button', { name: 'Ready' })
-    expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
-  })
-})
-
 describe('named entity recognition', () => {
   const entity = (text: string, start: number, label = 'persName'): Entity => ({
     text,
@@ -689,18 +556,12 @@ describe('named entity recognition', () => {
     expect(nerButton()).toBeEnabled()
   })
 
-  it('switches to the text view, where the entities are shown', async () => {
+  it('shows the entities in the text', async () => {
     await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
-    await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
 
     await userEvent.click(nerButton())
 
     await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
-    expect(screen.getByRole('button', { name: 'XML' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    )
   })
 
   it('clears the highlights when another page is shown', async () => {
@@ -1006,33 +867,6 @@ describe('confirming or rejecting an entity', () => {
       })
     })
 
-    it('changes the XML: the entity is inside its element', async () => {
-      await recognized()
-      await hover('Paryżu')
-
-      await userEvent.click(within(dialog()!).getByRole('button', { name: 'Confirm' }))
-
-      await waitFor(() => expect(mark('Paryżu')).toHaveClass('confirmed'))
-      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toContain(
-        '<placeName>Paryżu</placeName>',
-      )
-    })
-
-    it('does not touch the XML in the browser: it shows what the backend returns', async () => {
-      await recognized({ tag: () => ({ content: xmlOf('what the backend says') }) })
-      await hover('Paryżu')
-
-      await userEvent.click(within(dialog()!).getByRole('button', { name: 'Confirm' }))
-
-      await userEvent.click(await screen.findByRole('button', { name: 'XML' }))
-      await waitFor(() =>
-        expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toBe(
-          xmlOf('what the backend says'),
-        ),
-      )
-    })
-
     it('sends the label that the entity has: persName, placeName, date', async () => {
       await recognized()
 
@@ -1159,18 +993,6 @@ describe('confirming or rejecting an entity', () => {
         text: 'Paryżu',
         label: 'orgName',
       })
-    })
-
-    it('puts that element in the XML', async () => {
-      await recognized()
-
-      await confirmWith('Adam Mickiewicz', 'geogName')
-
-      await waitFor(() => expect(mark('Adam Mickiewicz')).toHaveClass('confirmed'))
-      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      const xml = screen.getByRole('region', { name: 'Page XML' }).textContent
-      expect(xml).toContain('<geogName>Adam Mickiewicz</geogName>')
-      expect(xml).not.toContain('<persName>')
     })
 
     it.each(['persName', 'placeName', 'orgName', 'geogName', 'date', 'time'])(
@@ -1680,29 +1502,16 @@ describe('structure view', () => {
       expect(pageText()).toBeInTheDocument()
     })
 
-    it('goes back to the text when the button is pressed again', async () => {
+    it('goes back to the correction view with the Correction button', async () => {
       await openStructure()
 
-      await userEvent.click(structureButton())
+      await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
       expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
-      expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
-      expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+      expect(screen.getByRole('button', { name: 'Correction' })).toHaveAttribute(
         'aria-pressed',
         'true',
       )
-    })
-
-    it('is left with the Text or the XML button', async () => {
-      await openStructure()
-
-      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
-      expect(screen.getByRole('region', { name: 'Page XML' })).toBeInTheDocument()
-
-      await userEvent.click(structureButton())
-      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
       expect(screen.queryByText(/Select some text to mark it/)).toBeNull()
     })
 
@@ -2071,33 +1880,6 @@ describe('structure view', () => {
 
       await waitFor(() => expect(dialog()).toBeNull())
       expect(window.getSelection()!.isCollapsed).toBe(true)
-    })
-
-    it('shows the page with the XML that the backend returns', async () => {
-      await openStructure()
-
-      await mark('84 KATEDRA', 'Page header')
-
-      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
-      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      await waitFor(() =>
-        expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toContain(
-          '<header>84 KATEDRA</header>',
-        ),
-      )
-    })
-
-    it('does not touch the XML in the browser', async () => {
-      await openStructure({ section: () => ({ content: xmlOf('what the backend says') }) })
-
-      await mark('84 KATEDRA', 'Page header')
-
-      await userEvent.click(await screen.findByRole('button', { name: 'XML' }))
-      await waitFor(() =>
-        expect(screen.getByRole('region', { name: 'Page XML' }).textContent).toBe(
-          xmlOf('what the backend says'),
-        ),
-      )
     })
 
     it('tells what was marked', async () => {
@@ -2600,28 +2382,6 @@ describe('correcting a word', () => {
       )
     })
 
-    it('shows the new word in the XML, which the backend changed', async () => {
-      await open()
-
-      await correct('jey', 'jej')
-
-      await waitFor(() => expect(pageText().textContent).toContain('jej'))
-      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
-      const xml = screen.getByRole('region', { name: 'Page XML' }).textContent
-      expect(xml).toContain('jej')
-      expect(xml).not.toContain('jey')
-    })
-
-    it('does not touch the XML in the browser: it shows what the backend returns', async () => {
-      await open({ correct: () => ({ content: xmlOf('what the backend says') }) })
-
-      await correct('jey', 'jej')
-
-      await waitFor(() =>
-        expect(pageText().textContent).toBe('what the backend says'),
-      )
-    })
-
     it('closes the field after the correction', async () => {
       await open()
 
@@ -2781,10 +2541,10 @@ describe('correcting a word', () => {
       expect(pageText().textContent).toBe(ETEXT)
     })
 
-    it('the text view shows the spelling, and not the entities', async () => {
+    it('the correction view shows the spelling, and not the entities', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
 
-      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
       expect(pageText().querySelectorAll('mark')).toHaveLength(0)
       expect(pageText().querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
@@ -2792,7 +2552,7 @@ describe('correcting a word', () => {
 
     it('the entities come back when the NER view is shown again', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
       await userEvent.click(nerButton())
 
@@ -3270,11 +3030,13 @@ describe('page view', () => {
     await screen.findByRole('img')
 
     const sidebar = screen.getByRole('complementary', { name: 'Tools' })
-    const buttons = within(sidebar).getAllByRole('button')
+    const buttons = within(sidebar)
+      .getAllByRole('button')
+      .filter((b) => !b.closest('.view-switch'))
 
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
-      'Structure',
       'Correction',
+      'Structure',
       'Named entity recognition',
     ])
     for (const button of buttons) {
@@ -3287,6 +3049,55 @@ describe('page view', () => {
     expect(sidebar.previousElementSibling).toBe(
       document.querySelectorAll('.viewer-half')[1],
     )
+  })
+
+  describe('the active view', () => {
+    const pressed = () =>
+      ['Correction', 'Structure', 'Named entity recognition'].filter(
+        (name) =>
+          screen.getByRole('button', { name }).getAttribute('aria-pressed') === 'true',
+      )
+
+    it('is the correction view on entering the page, with the spelling checked', async () => {
+      await openPage({ spell: (text) => wordsOf(text, ['text']) })
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('.word.misspelled').length).toBeGreaterThan(0),
+      )
+
+      expect(pressed()).toEqual(['Correction'])
+    })
+
+    it('changes to Structure and to Named entity recognition, and back', async () => {
+      await openPage({ ner: () => [] })
+      await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      expect(pressed()).toEqual(['Structure'])
+
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Named entity recognition' }),
+      )
+      await waitFor(() => expect(pressed()).toEqual(['Named entity recognition']))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
+      expect(pressed()).toEqual(['Correction'])
+    })
+  })
+
+  it('has the Text and XML buttons in the sidebar, below the tools, and they are inactive', async () => {
+    await openPage()
+    await screen.findByRole('img')
+
+    const sidebar = screen.getByRole('complementary', { name: 'Tools' })
+    const group = within(sidebar).getByRole('group', { name: 'Show' })
+
+    expect(
+      within(group).getAllByRole('button').map((b) => b.textContent),
+    ).toEqual(['Text', 'XML'])
+    for (const button of within(group).getAllByRole('button')) {
+      expect(button).toBeDisabled()
+    }
+    expect(sidebar.lastElementChild).toBe(group)
   })
 
   it('zooms the scan in and out within limits', async () => {

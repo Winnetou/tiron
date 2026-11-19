@@ -85,7 +85,9 @@ app = FastAPI(title="tiron", lifespan=lifespan)
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
-def get_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
+def idempotent_fetch_page(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)]
+) -> PageView:
     """Return a page of an edition, ready to display.
 
     1. The edition must be in the collection, otherwise 404. This check comes

@@ -4,15 +4,14 @@ import type { Decision, Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
-import Sidebar from './Sidebar'
+import Sidebar, { type SidebarView } from './Sidebar'
 import StructureView from './StructureView'
-import XmlView from './XmlView'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
-type View = 'text' | 'xml' | 'structure' | 'ner'
+type View = SidebarView
 
 interface Props {
   page: Page
@@ -57,11 +56,10 @@ interface Props {
 
 /**
  * Left half: the scan, with zoom buttons.
- * Right half: previous/next page and "Mark as ready" buttons, a switch between
- * the text and the XML, and the page itself, read-only: its text (the default,
- * as extracted by the backend, with the named entities in red once they are
- * recognized) or the TEI XML it comes from, with the markup on a grey
- * background. The Structure button of the sidebar shows the text in a way that
+ * Right half: previous/next page and "Mark as ready" buttons, and the page
+ * itself, read-only: its text as extracted by the backend, in which the
+ * spelling is corrected, or (NER view) the named entities, recognized by the
+ * backend. The Structure button of the sidebar shows the text in a way that
  * the sections of the page can be marked in it.
  */
 export default function PageViewer({
@@ -89,7 +87,7 @@ export default function PageViewer({
   const [zoom, setZoom] = useState(MIN_ZOOM)
   const misspelled = (words ?? []).filter((word) => !word.correct).length
   // Kept while moving from page to page.
-  const [view, setView] = useState<View>('text')
+  const [view, setView] = useState<View>('correction')
 
   return (
     <div className="viewer">
@@ -149,18 +147,6 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
-          <div className="view-switch" role="group" aria-label="Show">
-            {(['text', 'xml'] as const).map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                aria-pressed={view === choice}
-                onClick={() => setView(choice)}
-              >
-                {choice === 'text' ? 'Text' : 'XML'}
-              </button>
-            ))}
-          </div>
         </div>
         {error && <p role="alert">{error}</p>}
         {spellError && (
@@ -174,12 +160,12 @@ export default function PageViewer({
         {textError && (
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
-        {/* The text view is where the spelling is corrected: the entities are not
+        {/* The correction view is where the spelling is corrected: the entities are not
             shown in it, and the NER view does not show the spelling. */}
-        {(view === 'text' || view === 'ner') && (
+        {(view === 'correction' || view === 'ner') && (
           <PageText
             text={text}
-            words={view === 'text' ? words : null}
+            words={view === 'correction' ? words : null}
             entities={view === 'ner' ? entities : null}
             decisions={decisions}
             busy={busy}
@@ -189,7 +175,6 @@ export default function PageViewer({
             onLegalSpelling={onLegalSpelling}
           />
         )}
-        {view === 'xml' && <XmlView xml={page.content} />}
         {view === 'structure' && (
           <StructureView
             text={text}
@@ -200,10 +185,8 @@ export default function PageViewer({
         )}
       </section>
       <Sidebar
-        structureActive={view === 'structure'}
-        onToggleStructure={() =>
-          setView((current) => (current === 'structure' ? 'text' : 'structure'))
-        }
+        view={view}
+        onShow={setView}
         canRecognize={text.trim() !== ''}
         recognizing={recognizing}
         onRecognizeEntities={() => {

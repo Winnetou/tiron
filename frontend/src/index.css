@@ -85,6 +85,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  align-items: center;
   padding: 0.5rem;
   border-left: 1px solid #ccc;
   background: #f7f7f7;
@@ -141,29 +142,33 @@ button {
 
 .view-switch {
   display: flex;
-  margin-left: auto;
+  flex-direction: column;
+  align-items: stretch;
+  width: 2.5rem; /* as wide as the tool buttons */
+  margin-top: 0.5rem; /* below the three tools */
+  padding-top: 0.75rem;
+  border-top: 1px solid #ccc;
 }
 
 .view-switch button {
+  padding: 0.5rem 0;
   border-radius: 0;
+  font-size: 0.8rem;
 }
 
 .view-switch button:first-child {
-  border-radius: 0.25rem 0 0 0.25rem;
+  border-radius: 0.25rem 0.25rem 0 0;
 }
 
 .view-switch button:last-child {
-  border-radius: 0 0.25rem 0.25rem 0;
-  margin-left: -1px;
+  border-radius: 0 0 0.25rem 0.25rem;
 }
 
-.view-switch button[aria-pressed='true'] {
-  background: #333;
-  color: #fff;
+/* the bar between Text and XML */
+.view-switch button + button {
+  border-top: 2px solid #333;
 }
 
-/* XML view: the content in the same type as the text view, and the markup
-   (tags, comments, the declaration) smaller, on grey. */
 /* The box the page is shown in, for the text and for the XML. */
 .page-box {
   flex: 1;
@@ -185,20 +190,6 @@ button {
   font-variant-ligatures: none; /* show characters as OCR'd */
 }
 
-.xml-view {
-  /* more room for the small markup */
-  line-height: 1.9;
-}
-
-.xml-markup {
-  padding: 0.05em 0.25em;
-  border-radius: 0.2rem;
-  background: #e3e3e3;
-  color: #555;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
-}
-
 /* Named entities in the text: yellow, in a rounded border, until confirmed. */
 .entity {
   padding: 0 0.2em;
@@ -207,10 +198,6 @@ button {
   background: #fff4b8;
   color: #5c4500;
   font-weight: 600;
-}
-
-.view-switch {
-  margin-left: auto;
 }
 
 /* Shown while a recognition request is running. */
