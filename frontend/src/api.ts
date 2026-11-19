@@ -28,12 +28,22 @@ export class ApiError extends Error {
   }
 }
 
-/** Page number from the URL's ?page= parameter; the default if absent/invalid. */
-export function pageNumberFromUrl(search: string): number {
-  const value = new URLSearchParams(search).get('page')
-  return value !== null && /^\d+$/.test(value)
-    ? Number(value)
-    : DEFAULT_PAGE_NUMBER
+/**
+ * The path of a page: on the backend, and on the frontend too, so the address
+ * of a page in the browser names its edition and its number, as the endpoint does.
+ */
+export const pageUrl = (editionId: string, number: number) =>
+  `/editions/${editionId}/pages/${number}`
+
+/**
+ * The edition and the page number in a path like /editions/{uuid}/pages/{number}
+ * (the one `pageUrl` makes); null for any other path.
+ */
+export function pageFromPath(
+  pathname: string,
+): { editionId: string; number: number } | null {
+  const match = /^\/editions\/([^/]+)\/pages\/(\d+)\/?$/.exec(pathname)
+  return match ? { editionId: match[1], number: Number(match[2]) } : null
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -50,9 +60,6 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return response.json()
 }
-
-const pageUrl = (editionId: string, number: number) =>
-  `/editions/${editionId}/pages/${number}`
 
 /** Calls GET /editions/{editionId}/pages/{number}. */
 export function getPage(

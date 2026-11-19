@@ -231,12 +231,23 @@ function fakeBackend(options: Options = {}) {
   return fetchMock
 }
 
-async function openPage(options?: Options, search = '') {
-  window.history.pushState({}, '', `/${search}`)
+/**
+ * Open a page. With a page `number` the browser is at that page's address
+ * (/editions/{uuid}/pages/{number}), which opens it by itself; without, at the
+ * start, where the edition's uuid is typed in.
+ */
+async function openPage(options?: Options, number?: number) {
+  window.history.pushState(
+    {},
+    '',
+    number === undefined ? '/' : `/editions/${UUID}/pages/${number}`,
+  )
   const fetchMock = fakeBackend(options)
   render(<App />)
-  await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-  await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+  if (number === undefined) {
+    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+  }
   return fetchMock
 }
 
@@ -272,11 +283,36 @@ describe('first screen', () => {
     expect(fetchMock).toHaveBeenCalledWith(`/editions/${UUID}/pages/0`)
   })
 
-  it('uses the ?page= URL parameter as the page number', async () => {
-    await openPage({}, '?page=2')
+  it('opens the page that the address names, without asking for the uuid', async () => {
+    await openPage({}, 2)
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 2'))
     expect(calledUrls()[0]).toBe(`GET /editions/${UUID}/pages/2`)
+    expect(screen.queryByLabelText('Edition UUID')).toBeNull()
+    expect(calledUrls().filter((u) => u.startsWith('GET'))).toHaveLength(1)
+  })
+
+  it('puts the edition and the page in the address once a page is open', async () => {
+    await openPage()
+
+    await screen.findByRole('region', { name: 'Page text' })
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/0`)
+  })
+
+  it('fills in the uuid of the address when the page cannot be loaded', async () => {
+    window.history.pushState({}, '', `/editions/${UUID}/pages/4`)
+    fakeBackend({ page: () => new Error('Page not found') })
+    render(<App />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.getByLabelText('Edition UUID')).toHaveValue(UUID)
+  })
+
+  it('ignores an address that is not a page', async () => {
+    window.history.pushState({}, '', '/editions/not-a-uuid/pages/x')
+    render(<App />)
+
+    expect(screen.getByLabelText('Edition UUID')).toHaveValue('')
   })
 
   it('shows the backend error detail when the page cannot be loaded', async () => {
@@ -3155,7 +3191,7 @@ describe('page view', () => {
     it.each([['Next page'], ['Previous page']])(
       'the view goes back to Correction on %s',
       async (button) => {
-        await openPage({ page: (n) => ({ content: xmlOf(`text of page ${n}`) }) }, '?page=1')
+        await openPage({ page: (n) => ({ content: xmlOf(`text of page ${n}`) }) }, 1)
         await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
         await userEvent.click(xmlButton())
 
@@ -3231,7 +3267,7 @@ describe('page view', () => {
 })
 
 describe('page navigation', () => {
-  const open = (number: number) => openPage({}, `?page=${number}`)
+  const open = (number: number) => openPage({}, number)
 
   it('disables previous page on page 0', async () => {
     await open(0)
@@ -3255,7 +3291,7 @@ describe('page navigation', () => {
       'POST /spellcheck',
     ])
     expect(calls[1].body).toEqual({ xml: xmlOf('text of page 1') })
-    expect(window.location.search).toBe('?page=1')
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/1`)
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled()
   })
 
@@ -3266,7 +3302,7 @@ describe('page navigation', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
-    expect(window.location.search).toBe('?page=1')
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/1`)
   })
 
   it('stays on the page and shows an error when there is no next page', async () => {
@@ -3277,7 +3313,7 @@ describe('page navigation', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
     expect(pageText().textContent).toBe('text of page 3')
-    expect(window.location.search).toBe('?page=3')
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/3`)
   })
 })
 
