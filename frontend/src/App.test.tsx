@@ -696,9 +696,9 @@ describe('named entity recognition', () => {
     await userEvent.click(nerButton())
 
     await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
-    expect(screen.getByRole('button', { name: 'Text' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'XML' })).toHaveAttribute(
       'aria-pressed',
-      'true',
+      'false',
     )
   })
 
@@ -2773,83 +2773,34 @@ describe('correcting a word', () => {
       )
     }
 
-    it('words inside an entity are words, and the entity is still marked', async () => {
+    it('the NER view does not show the spelling: no word is marked as misspelled', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
 
       const mark = pageText().querySelector('mark.entity')!
       expect(mark.textContent).toBe('Jan Kowalski')
-      expect(Array.from(mark.querySelectorAll('.word')).map((w) => w.textContent)).toEqual([
-        'Jan',
-        'Kowalski',
-      ])
-      expect(mark.querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
+      expect(pageText().querySelectorAll('.word')).toHaveLength(0)
+      expect(pageText().querySelectorAll('.misspelled')).toHaveLength(0)
       expect(pageText().textContent).toBe(ETEXT)
     })
 
-    it('a word inside an entity can be corrected', async () => {
+    it('the text view shows the spelling, and not the entities', async () => {
       await recognized([entity('Jan Kowalski', 'persName')])
 
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('Kowalsky{Enter}')
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
 
-      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
-      expect(correctionCalls()[0].body).toMatchObject({
-        before: 'Kowalski',
-        after: 'Kowalsky',
-        start: ETEXT.indexOf('Kowalski'),
-      })
-    })
-
-    it('shows no entity dialog over a word that is being edited', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-      expect(screen.queryByRole('dialog')).toBeInTheDocument()
-
-      await userEvent.click(word('Kowalski'))
-
-      expect(editor()).toBeInTheDocument()
-      expect(screen.queryByRole('dialog')).toBeNull()
-    })
-
-    it('the dialog is back for the entity once the editing is over', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-      await userEvent.click(word('Kowalski'))
-      await userEvent.keyboard('{Escape}')
-      await userEvent.unhover(pageText().querySelector('mark.entity')!)
-
-      await userEvent.hover(pageText().querySelector('mark.entity')!)
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-    })
-
-    it('an entity that starts in the middle of a word cuts the word in two, and either part edits all of it', async () => {
-      // the entity is "Kowal", the word "Kowalski"
-      await recognized([entity('Kowal', 'persName')].map((e) => ({
-        ...e,
-        start: ETEXT.indexOf('Kowalski'),
-        end: ETEXT.indexOf('Kowalski') + 5,
-      })))
-      const pieces = [word('Kowal'), word('ski')]
-      expect(pieces[0].closest('mark')).not.toBeNull() // the part in the entity
-      expect(pieces[1].closest('mark')).toBeNull() // and the part after it
-
-      await userEvent.click(pieces[1])
-
-      expect(editor()).toHaveValue('Kowalski') // the whole word
-      // the word is the field, and (it is misspelled) its button
-      expect(pageText().textContent).toBe(
-        ETEXT.replace('Kowalski', 'Legal spelling'),
-      )
-    })
-
-    it('after a correction the entities of the old text are not shown for the new one', async () => {
-      await recognized([entity('Jan Kowalski', 'persName')])
-
-      await userEvent.click(word('Jan'))
-      await userEvent.keyboard('Janek{Enter}')
-
-      await waitFor(() => expect(pageText().textContent).toContain('Janek'))
       expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+      expect(pageText().querySelector('.word.misspelled')?.textContent).toBe('Kowalski')
+    })
+
+    it('the entities come back when the NER view is shown again', async () => {
+      await recognized([entity('Jan Kowalski', 'persName')])
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+      await userEvent.click(nerButton())
+
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('mark.entity')).toHaveLength(1),
+      )
     })
   })
 })

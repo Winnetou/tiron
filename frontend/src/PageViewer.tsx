@@ -12,7 +12,7 @@ const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
 
-type View = 'text' | 'xml' | 'structure'
+type View = 'text' | 'xml' | 'structure' | 'ner'
 
 interface Props {
   page: Page
@@ -190,11 +190,13 @@ export default function PageViewer({
         {textError && (
           <p role="alert">The text of this page cannot be shown: {textError}</p>
         )}
-        {view === 'text' && (
+        {/* The text view is where the spelling is corrected: the entities are not
+            shown in it, and the NER view does not show the spelling. */}
+        {(view === 'text' || view === 'ner') && (
           <PageText
             text={text}
-            words={words}
-            entities={entities}
+            words={view === 'text' ? words : undefined}
+            entities={view === 'ner' ? entities : undefined}
             decisions={decisions}
             busy={busy}
             onConfirm={onConfirmEntity}
@@ -221,7 +223,7 @@ export default function PageViewer({
         canRecognize={text.trim() !== ''}
         recognizing={recognizing}
         onRecognizeEntities={() => {
-          setView('text') // the entities are shown in the text
+          setView('ner')
           onRecognizeEntities()
         }}
       />
