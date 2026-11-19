@@ -1,10 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
+  DEFAULT_PAGE_NUMBER,
   addLegalSpelling,
   correctWord,
   getPage,
   markSection,
-  pageNumberFromUrl,
+  pageFromPath,
+  pageUrl,
   recognizeEntities,
   spellcheck,
   tagEntity,
@@ -80,7 +82,9 @@ async function withText(page: Page): Promise<PageWithText> {
 }
 
 export default function App() {
-  const [uuid, setUuid] = useState('')
+  // An address that names a page (/editions/{uuid}/pages/{number}) opens it.
+  const fromPath = pageFromPath(window.location.pathname)
+  const [uuid, setUuid] = useState(fromPath?.editionId ?? '')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -103,20 +107,35 @@ export default function App() {
   const trimmed = uuid.trim()
   const valid = UUID_PATTERN.test(trimmed)
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    if (!valid) return
+  /** Open a page of an edition, and put its edition and number in the address. */
+  async function open(editionId: string, number: number) {
     setStatus({ kind: 'loading' })
     try {
-      const page = await getPage(
-        trimmed,
-        pageNumberFromUrl(window.location.search),
-      )
+      const page = await getPage(editionId, number)
+      window.history.replaceState(null, '', pageUrl(editionId, number))
       setStatus({ kind: 'done', ...(await withText(page)) })
     } catch (error) {
       setStatus({ kind: 'error', message: errorMessage(error) })
     }
   }
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (!valid) return
+    // the number of the address, if it is a page of this edition
+    const number =
+      fromPath?.editionId === trimmed ? fromPath.number : DEFAULT_PAGE_NUMBER
+    void open(trimmed, number)
+  }
+
+  // Opened with the address of a page: show that page right away.
+  const opened = useRef(false)
+  useEffect(() => {
+    if (opened.current || !fromPath || !UUID_PATTERN.test(fromPath.editionId)) return
+    opened.current = true
+    void open(fromPath.editionId, fromPath.number)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** Run a request for the open page, showing the page it returns. */
   async function run(request: Promise<Page>, onSuccess?: (page: Page) => void) {
@@ -137,9 +156,7 @@ export default function App() {
   /** Show another page of the same edition and reflect it in the URL. */
   function goToPage(editionId: string, number: number) {
     return run(getPage(editionId, number), () => {
-      const url = new URL(window.location.href)
-      url.searchParams.set('page', String(number))
-      window.history.replaceState(null, '', url)
+      window.history.replaceState(null, '', pageUrl(editionId, number))
     })
   }
 
