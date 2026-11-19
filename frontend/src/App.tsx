@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  DEFAULT_PAGE_NUMBER,
   addLegalSpelling,
   correctWord,
   getPage,
@@ -14,6 +13,7 @@ import {
   updatePage,
   type Page,
 } from './api'
+import EditionList from './EditionList'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
 import type { Word } from './segments'
@@ -84,8 +84,10 @@ async function withText(page: Page): Promise<PageWithText> {
 export default function App() {
   // An address that names a page (/editions/{uuid}/pages/{number}) opens it.
   const fromPath = pageFromPath(window.location.pathname)
-  const [uuid, setUuid] = useState(fromPath?.editionId ?? '')
-  const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const opens = fromPath !== null && UUID_PATTERN.test(fromPath.editionId)
+  const [status, setStatus] = useState<Status>(
+    opens ? { kind: 'loading' } : { kind: 'idle' },
+  )
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   // The entities found in a text, with the text they belong to, so that they
@@ -104,9 +106,6 @@ export default function App() {
     byKey: Record<string, Decision>
   }>({ text: '', byKey: {} })
 
-  const trimmed = uuid.trim()
-  const valid = UUID_PATTERN.test(trimmed)
-
   /** Open a page of an edition, and put its edition and number in the address. */
   async function open(editionId: string, number: number) {
     setStatus({ kind: 'loading' })
@@ -119,19 +118,10 @@ export default function App() {
     }
   }
 
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    if (!valid) return
-    // the number of the address, if it is a page of this edition
-    const number =
-      fromPath?.editionId === trimmed ? fromPath.number : DEFAULT_PAGE_NUMBER
-    void open(trimmed, number)
-  }
-
   // Opened with the address of a page: show that page right away.
   const opened = useRef(false)
   useEffect(() => {
-    if (opened.current || !fromPath || !UUID_PATTERN.test(fromPath.editionId)) return
+    if (opened.current || !fromPath || !opens) return
     opened.current = true
     void open(fromPath.editionId, fromPath.number)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -318,23 +308,26 @@ export default function App() {
     )
   }
 
+  if (status.kind === 'loading') {
+    return (
+      <main>
+        <p role="status">Loading the page …</p>
+      </main>
+    )
+  }
+
+  if (status.kind === 'error') {
+    return (
+      <main>
+        <p role="alert">{status.message}</p>
+        <a href="/">Back to the editions</a>
+      </main>
+    )
+  }
+
   return (
-    <main>
-      <form onSubmit={handleSubmit}>
-        <label htmlFor="uuid">Edition UUID</label>
-        <input
-          id="uuid"
-          value={uuid}
-          onChange={(event) => setUuid(event.target.value)}
-          placeholder="00000000-0000-0000-0000-000000000000"
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button type="submit" disabled={!valid || status.kind === 'loading'}>
-          Open
-        </button>
-      </form>
-      {status.kind === 'error' && <p role="alert">{status.message}</p>}
+    <main className="main-page">
+      <EditionList />
     </main>
   )
 }

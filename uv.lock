@@ -327,6 +327,20 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi-pagination"
+version = "0.16.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/50/8938abf7faee7e93e6aeede7c737ca2b5537bb3b6405467b344562f03db2/fastapi_pagination-0.16.3.tar.gz", hash = "sha256:881bc0c2f389346afbff8ea6359f511cda6afbc71ad07baff1c60617fa54dd8b", size = 670086, upload-time = "2026-11-12T18:26:03.438Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/d8/720bb00256b1e3c26bd365ed3a2b2ce37dbc65d67c297ad2caded18e4947/fastapi_pagination-0.16.3-py3-none-any.whl", hash = "sha256:4db172f797a4adca1e662612a02c11409418bea18d86dc62fe595f8b0e5a599f", size = 56086, upload-time = "2026-11-12T18:26:02.207Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "4.2.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1214,6 +1228,7 @@ dependencies = [
     { name = "autocorrect" },
     { name = "delb" },
     { name = "fastapi" },
+    { name = "fastapi-pagination" },
     { name = "phunspell" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -1234,6 +1249,7 @@ requires-dist = [
     { name = "autocorrect", specifier = ">=2.6.1" },
     { name = "delb", specifier = ">=0.6.1" },
     { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "fastapi-pagination", specifier = ">=0.16.3" },
     { name = "phunspell", specifier = ">=0.1.6" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.8" },
     { name = "pydantic", specifier = ">=2.14.3" },

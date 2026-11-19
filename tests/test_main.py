@@ -6,6 +6,7 @@ import psycopg.errors
 import pytest
 import spacy
 from fastapi.testclient import TestClient
+from fastapi_pagination import paginate
 
 import app.main as app_main
 import app.ner as ner
@@ -116,6 +117,54 @@ def test_get_page_polona_errors(in_collection, polona, error, expected_status):
 )
 def test_get_page_invalid_args(path):
     assert client.get(path).status_code == 422
+
+
+class TestListEditions:
+    @pytest.fixture
+    def collection(self, monkeypatch):
+        ids = [uuid4() for _ in range(250)]
+        monkeypatch.setattr(db, "list_collection", lambda: paginate(ids))
+        return ids
+
+    def test_the_first_page_has_100_ids(self, collection):
+        body = client.get("/editions").json()
+
+        assert body["items"] == [str(i) for i in collection[:100]]
+        assert (body["total"], body["page"], body["size"], body["pages"]) == (
+            250,
+            1,
+            100,
+            3,
+        )
+
+    def test_the_next_pages(self, collection):
+        second = client.get("/editions?page=2").json()
+        last = client.get("/editions?page=3").json()
+
+        assert second["items"] == [str(i) for i in collection[100:200]]
+        assert last["items"] == [str(i) for i in collection[200:]]
+
+    def test_a_page_past_the_last_is_empty(self, collection):
+        body = client.get("/editions?page=4").json()
+
+        assert body["items"] == []
+
+    def test_a_page_cannot_be_longer_than_100(self, collection):
+        assert client.get("/editions?size=101").status_code == 422
+        assert len(client.get("/editions?size=10").json()["items"]) == 10
+
+    def test_a_page_number_below_1_is_rejected(self, collection):
+        assert client.get("/editions?page=0").status_code == 422
+
+    def test_an_empty_collection(self, monkeypatch):
+        monkeypatch.setattr(db, "list_collection", lambda: paginate([]))
+
+        body = client.get("/editions").json()
+
+        assert (body["items"], body["total"]) == ([], 0)
+
+    def test_does_not_touch_the_pages_route(self, collection):
+        assert client.get(f"/editions/{uuid4()}/pages/x").status_code == 422
 
 
 def test_old_page_route_removed():

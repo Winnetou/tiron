@@ -5,10 +5,12 @@ disposable database (tables are dropped and recreated).
 """
 
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from fastapi_pagination import Page as PaginatedPage
+from fastapi_pagination import Params, set_page, set_params
 
 from app.db import Database, get_conninfo
 from app.ontology import Correction, Edition, LegalSpelling, Page, Work
@@ -669,3 +671,16 @@ class TestLegalSpellingsThroughTheEndpoint:
 
         assert response.status_code == 422
         assert self.stored(db) == []
+
+
+def test_list_collection_pages_the_ids_in_order(db):
+    ids = sorted(uuid4() for _ in range(5))
+    for edition_id in ids:
+        db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (edition_id,))
+    set_page(PaginatedPage[UUID])
+
+    with set_params(Params(page=2, size=2)):
+        page = db.list_collection()
+
+    assert page.items == ids[2:4]
+    assert (page.total, page.page, page.size) == (5, 2, 2)

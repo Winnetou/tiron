@@ -61,6 +61,22 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json()
 }
 
+/** A page of the collection: GET /editions, 100 edition ids on a page. */
+export interface EditionsPage {
+  items: string[]
+  total: number | null
+  /** The number of this page, from 1. */
+  page: number | null
+  size: number | null
+  /** How many pages the collection has. */
+  pages: number | null
+}
+
+/** Calls GET /editions?page=: the ids of the editions of the collection. */
+export function getEditions(page: number = 1): Promise<EditionsPage> {
+  return request<EditionsPage>(`/editions?page=${page}`)
+}
+
 /** Calls GET /editions/{editionId}/pages/{number}. */
 export function getPage(
   editionId: string,

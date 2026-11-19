@@ -9,16 +9,31 @@ main {
   place-items: center;
 }
 
-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  width: min(28rem, 90vw);
+/* The main page: the list of editions, from the top of the page. */
+main.main-page {
+  display: block;
+  padding: 1rem;
+  box-sizing: border-box;
 }
 
-input {
-  font: inherit;
-  padding: 0.5rem;
+.editions {
+  max-width: 30rem;
+  margin: 0 auto;
+}
+
+.editions ul {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.8;
+}
+
+.editions-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 button {

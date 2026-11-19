@@ -64,6 +64,8 @@ interface Options {
   page?: (number: number) => Partial<Page> | Error
   /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
   tei?: (xml: string) => { text: string } | Error
+  /** Answer of GET /editions?page=N; defaults to 250 editions. */
+  editions?: (page: number) => { items: string[]; pages: number } | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -126,6 +128,15 @@ function fakeBackend(options: Options = {}) {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, url, body })
+    if (url.startsWith('/editions?page=')) {
+      const page = Number(url.split('=')[1])
+      const answer = options.editions
+        ? options.editions(page)
+        : { items: editionIds(page), pages: 3 }
+      return answer instanceof Error
+        ? failure(500, answer)
+        : reply(true, 200, { total: 250, page, size: 100, ...answer })
+    }
     if (url === '/spellcheck') {
       const answer = options.spell ? options.spell(body.text) : []
       // like the backend: the legal spellings of the edition count as correct,
@@ -231,23 +242,29 @@ function fakeBackend(options: Options = {}) {
   return fetchMock
 }
 
+/** The ids of the editions on a page of the list: 100 on a page, the first is UUID. */
+const editionIds = (page: number) =>
+  Array.from({ length: page === 3 ? 50 : 100 }, (_, i) => {
+    const n = (page - 1) * 100 + i
+    return n === 0 ? UUID : `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  })
+
 /**
- * Open a page. With a page `number` the browser is at that page's address
- * (/editions/{uuid}/pages/{number}), which opens it by itself; without, at the
- * start, where the edition's uuid is typed in.
+ * Open a page: the browser is at the page's address
+ * (/editions/{uuid}/pages/{number}), which opens it by itself.
  */
-async function openPage(options?: Options, number?: number) {
-  window.history.pushState(
-    {},
-    '',
-    number === undefined ? '/' : `/editions/${UUID}/pages/${number}`,
-  )
+async function openPage(options?: Options, number = 0) {
+  window.history.pushState({}, '', `/editions/${UUID}/pages/${number}`)
   const fetchMock = fakeBackend(options)
   render(<App />)
-  if (number === undefined) {
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-  }
+  return fetchMock
+}
+
+/** Open the main page, at `search` (for example "?page=2"). */
+function openMainPage(options?: Options, search = '') {
+  window.history.pushState({}, '', `/${search}`)
+  const fetchMock = fakeBackend(options)
+  render(<App />)
   return fetchMock
 }
 
@@ -259,80 +276,117 @@ afterEach(() => {
   window.history.pushState({}, '', '/')
 })
 
-describe('first screen', () => {
-  it('asks for a uuid and nothing else', () => {
-    render(<App />)
-
-    expect(screen.getByLabelText('Edition UUID')).toBeInTheDocument()
-    expect(screen.getAllByRole('textbox')).toHaveLength(1)
-    expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled()
-  })
-
-  it('keeps the button disabled for an invalid uuid', async () => {
-    render(<App />)
-
-    await userEvent.type(screen.getByLabelText('Edition UUID'), 'not-a-uuid')
-
-    expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled()
-  })
-
-  it('requests page 0 of the edition on submit', async () => {
+describe('the page address', () => {
+  it('requests page 0 of the edition', async () => {
     const fetchMock = await openPage()
 
     await screen.findByRole('region', { name: 'Page text' })
     expect(fetchMock).toHaveBeenCalledWith(`/editions/${UUID}/pages/0`)
   })
 
-  it('opens the page that the address names, without asking for the uuid', async () => {
+  it('opens the page that the address names', async () => {
     await openPage({}, 2)
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 2'))
     expect(calledUrls()[0]).toBe(`GET /editions/${UUID}/pages/2`)
-    expect(screen.queryByLabelText('Edition UUID')).toBeNull()
     expect(calledUrls().filter((u) => u.startsWith('GET'))).toHaveLength(1)
-  })
-
-  it('puts the edition and the page in the address once a page is open', async () => {
-    await openPage()
-
-    await screen.findByRole('region', { name: 'Page text' })
-    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/0`)
-  })
-
-  it('fills in the uuid of the address when the page cannot be loaded', async () => {
-    window.history.pushState({}, '', `/editions/${UUID}/pages/4`)
-    fakeBackend({ page: () => new Error('Page not found') })
-    render(<App />)
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
-    expect(screen.getByLabelText('Edition UUID')).toHaveValue(UUID)
-  })
-
-  it('ignores an address that is not a page', async () => {
-    window.history.pushState({}, '', '/editions/not-a-uuid/pages/x')
-    render(<App />)
-
-    expect(screen.getByLabelText('Edition UUID')).toHaveValue('')
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/2`)
   })
 
   it('shows the backend error detail when the page cannot be loaded', async () => {
     await openPage({ page: () => new Error('Edition not found') })
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Edition not found',
-    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
     expect(calledUrls()).toEqual([`GET /editions/${UUID}/pages/0`]) // no TEI call
   })
 
+  it('links back to the main page when the page cannot be loaded', async () => {
+    await openPage({ page: () => new Error('Page not found') })
+
+    await screen.findByRole('alert')
+    expect(screen.getByRole('link', { name: 'Back to the editions' })).toHaveAttribute(
+      'href',
+      '/',
+    )
+  })
+
   it('shows an error when the request fails', async () => {
-    window.history.pushState({}, '', '/')
+    window.history.pushState({}, '', `/editions/${UUID}/pages/0`)
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
     render(<App />)
 
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
-
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+  })
+
+  it('shows the main page for an address that is not a page', async () => {
+    window.history.pushState({}, '', '/editions/not-a-uuid/pages/3')
+    fakeBackend()
+    render(<App />)
+
+    expect(await screen.findByRole('navigation', { name: 'Editions' })).toBeInTheDocument()
+  })
+})
+
+describe('the main page', () => {
+  const links = () =>
+    within(screen.getByRole('navigation', { name: 'Editions' })).getAllByRole('link')
+
+  it('has no field for a uuid', async () => {
+    openMainPage()
+
+    await screen.findByRole('navigation', { name: 'Editions' })
+    expect(screen.queryByLabelText('Edition UUID')).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('shows the first 100 editions as links', async () => {
+    openMainPage()
+
+    await screen.findByRole('navigation', { name: 'Editions' })
+    expect(calledUrls()).toEqual(['GET /editions?page=1'])
+    expect(links()).toHaveLength(100)
+    expect(links().map((a) => a.textContent)).toEqual(editionIds(1))
+  })
+
+  it('links each edition to its first page', async () => {
+    openMainPage()
+
+    await screen.findByRole('navigation', { name: 'Editions' })
+    expect(links()[0]).toHaveAttribute('href', `/editions/${UUID}/pages/0`)
+    expect(links()[1]).toHaveAttribute('href', `/editions/${editionIds(1)[1]}/pages/0`)
+  })
+
+  it('moves between the pages of the list', async () => {
+    openMainPage()
+    await screen.findByRole('navigation', { name: 'Editions' })
+    expect(screen.getByText('Page 1 of 3')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(screen.getByText('Page 2 of 3')).toBeInTheDocument())
+    expect(links().map((a) => a.textContent)).toEqual(editionIds(2))
+    expect(window.location.search).toBe('?page=2')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Previous' }))
+
+    await waitFor(() => expect(screen.getByText('Page 1 of 3')).toBeInTheDocument())
+    expect(window.location.search).toBe('')
+  })
+
+  it('opens on the page that the address names', async () => {
+    openMainPage({}, '?page=3')
+
+    await screen.findByText('Page 3 of 3')
+    expect(calledUrls()).toEqual(['GET /editions?page=3'])
+    expect(links()).toHaveLength(50)
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  })
+
+  it('shows the backend error', async () => {
+    openMainPage({ editions: () => new Error('Database down') })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Database down')
   })
 })
 
@@ -384,9 +438,8 @@ describe('text from the TEI XML', () => {
       if (url === '/tei/text') throw new Error('Network down')
       return reply(true, 200, PAGE)
     })
+    window.history.pushState({}, '', `/editions/${UUID}/pages/0`)
     render(<App />)
-    await userEvent.type(screen.getByLabelText('Edition UUID'), UUID)
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
     expect(pageText().textContent).toBe('')
