@@ -5,6 +5,21 @@ database and the frontend start together, and the frontend is at
 http://localhost:5173. (Or run `make run` in one terminal and `make frontend` in
 another, to run the backend alone in a container and the frontend on the host.)
 
+## Tests on GitHub
+
+`.github/workflows/tests.yml` runs on every pull request to `main` (and on every
+push to it):
+
+- **Backend tests**: `uv sync --locked`, `ruff check`, `ruff format --check`, and
+  `pytest` with a PostgreSQL 17 service, so the tests of the database layer run
+  too (they empty the tables of that throwaway database, so never set
+  `INTEGRATION_DB=1` against a database that has data).
+- **Frontend tests**: Node 22, `npm ci`, `tsc -b`, `oxlint` and `vitest`.
+
+A failing run only blocks a merge if the checks are required: in the repository's
+Settings, Branches, protect `main` and require the status checks **Backend tests**
+and **Frontend tests** (and that branches are up to date before merging).
+
 ## Running with Docker Compose
 
 `docker compose up --build` (or `make up`) starts the backend together with its
