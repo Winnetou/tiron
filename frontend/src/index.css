@@ -199,12 +199,13 @@ button {
   font-size: 0.8rem;
 }
 
-/* Named entities in the text: highlighted in red. */
+/* Named entities in the text: yellow, in a rounded border, until confirmed. */
 .entity {
-  padding: 0 0.1em;
-  border-radius: 0.2rem;
-  background: #fde0e0;
-  color: #c00000;
+  padding: 0 0.2em;
+  border: 1px solid #d9a800;
+  border-radius: 0.4rem;
+  background: #fff4b8;
+  color: #5c4500;
   font-weight: 600;
 }
 
@@ -241,6 +242,7 @@ button {
 
 /* An entity that was confirmed, so it is marked in the XML: green. */
 .entity.confirmed {
+  border-color: #1b6b2a;
   background: #ddf2df;
   color: #1b6b2a;
 }

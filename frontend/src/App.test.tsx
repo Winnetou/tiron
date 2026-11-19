@@ -559,7 +559,7 @@ describe('named entity recognition', () => {
     expect(pageText().querySelector('mark')).not.toHaveAttribute('title')
   })
 
-  it('highlights in red', async () => {
+  it('highlights in yellow, in a rounded border', async () => {
     await openWithText('Adam Mickiewicz', [entity('Adam Mickiewicz', 0)])
 
     await userEvent.click(nerButton())
@@ -569,15 +569,15 @@ describe('named entity recognition', () => {
       expect(found).not.toBeNull()
       return found as HTMLElement
     })
-    const [r, g, b] = getComputedStyle(mark).color.match(/\d+/g)!.map(Number)
-    expect(r).toBeGreaterThan(150)
-    expect(g).toBeLessThan(50)
-    expect(b).toBeLessThan(50)
-    const [br, bg, bb] = getComputedStyle(mark).backgroundColor.match(/\d+/g)!.map(Number)
-    expect(br).toBeGreaterThan(bg) // a red-tinted background
-    expect(br).toBeGreaterThan(bb)
-    // ...and the text around it is not red
-    expect(getComputedStyle(pageText()).color).not.toBe(getComputedStyle(mark).color)
+    const style = getComputedStyle(mark)
+    const [r, g, b] = style.backgroundColor.match(/\d+/g)!.map(Number)
+    expect(r).toBeGreaterThan(200) // yellow: red and green high, blue low
+    expect(g).toBeGreaterThan(200)
+    expect(b).toBeLessThan(r - 30)
+    expect(style.borderStyle).toBe('solid')
+    expect(parseFloat(style.borderRadius)).toBeGreaterThan(0)
+    // ...and the text around it is not styled like it
+    expect(getComputedStyle(pageText()).color).not.toBe(style.color)
   })
 
   it('marks only the stretch the backend pointed at, not every equal word', async () => {
