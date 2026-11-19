@@ -23,8 +23,8 @@ class Page(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     edition_id: UUID
     number: int = Field(ge=0)
-    raw_content: str
-    corrected_content: str | None = None
+    raw_ocr_content: str
+    xml_content_corrected: str | None = None
     scan_uri: str | None = None
     ready: bool = False
 

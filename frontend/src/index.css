@@ -156,6 +156,27 @@ button {
   font-size: 0.8rem;
 }
 
+.view-switch button[aria-pressed='true'] {
+  background: #333;
+  color: #fff;
+}
+
+/* XML view: the content in the same type as the text view, and the markup
+   (tags, comments, the declaration) smaller, on grey. */
+.xml-view {
+  /* more room for the small markup */
+  line-height: 1.9;
+}
+
+.xml-markup {
+  padding: 0.05em 0.25em;
+  border-radius: 0.2rem;
+  background: #e3e3e3;
+  color: #555;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
 .view-switch button:first-child {
   border-radius: 0.25rem 0.25rem 0 0;
 }

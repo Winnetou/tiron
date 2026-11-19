@@ -56,7 +56,7 @@ def polona(monkeypatch):
     fetch = mock.Mock(
         return_value={
             "scan_uri": "https://polona.pl/iiif/3/x/full/max/0/default.jpg",
-            "raw_content": "Ala ma kota",
+            "raw_ocr_content": "Ala ma kota",
         }
     )
     monkeypatch.setattr("app.main.fetch_page", fetch)
@@ -81,8 +81,8 @@ def test_get_page_returns_polona_content(in_collection, polona):
     assert body["edition_id"] == str(edition_id)
     assert body["number"] == 0
     assert body["content"] == str(text_to_tei_xml("Ala ma kota"))  # TEI, not raw
-    assert "raw_content" not in body
-    assert "corrected_content" not in body
+    assert "raw_ocr_content" not in body
+    assert "xml_content_corrected" not in body
     assert body["ready"] is False
     assert body["scan_uri"].endswith("default.jpg")
     polona.assert_called_once_with(edition_id, 0)
@@ -173,8 +173,8 @@ def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(
     stored = Page(
         edition_id=edition_id,
         number=4,
-        raw_content="stored",
-        corrected_content="corrected earlier",
+        raw_ocr_content="stored",
+        xml_content_corrected="corrected earlier",
         ready=True,
     )
     db.save_fetched_page.side_effect = None
@@ -185,7 +185,7 @@ def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(
     (saved,) = db.save_fetched_page.call_args.args
     assert saved.edition_id == edition_id
     assert saved.number == 4
-    assert saved.raw_content == "Ala ma kota"
+    assert saved.raw_ocr_content == "Ala ma kota"
     assert saved.scan_uri.endswith("default.jpg")
     body = response.json()
     assert body["id"] == str(stored.id)
@@ -206,8 +206,8 @@ def test_get_page_returns_stored_page_without_calling_polona(in_collection, polo
     stored = Page(
         edition_id=edition_id,
         number=7,
-        raw_content="from the database",
-        corrected_content="fixed",
+        raw_ocr_content="from the database",
+        xml_content_corrected="fixed",
         scan_uri="https://polona.pl/stored.jpg",
         ready=True,
     )
@@ -249,27 +249,19 @@ def test_get_page_fetches_from_polona_when_not_stored(in_collection, polona):
     polona.assert_called_once_with(edition_id, 7)
 
 
-@pytest.mark.parametrize(
-    ("raw", "corrected", "expected"),
-    [
-        ("raw text", "corrected text", "corrected text"),
-        ("raw text", None, "raw text"),
-        ("raw text", "", "raw text"),
-    ],
-)
-def test_page_view_content(raw, corrected, expected):
+def test_page_view_content_is_the_xml_never_the_raw_ocr():
     page = Page(
         edition_id=uuid4(),
         number=1,
-        raw_content=raw,
-        corrected_content=corrected,
+        raw_ocr_content="raw text",
+        xml_content_corrected="<TEI/>",
         scan_uri="https://polona.pl/s.jpg",
         ready=True,
     )
 
     view = PageView.from_page(page)
 
-    assert view.content == expected
+    assert view.content == "<TEI/>"
     assert (view.id, view.edition_id, view.number) == (
         page.id,
         page.edition_id,
@@ -285,25 +277,25 @@ class TestUpdatePage:
             side_effect=lambda edition_id, number, **changes: Page(
                 edition_id=edition_id,
                 number=number,
-                raw_content="raw text",
+                raw_ocr_content="raw text",
                 scan_uri="https://polona.pl/s.jpg",
-                **changes,
+                **{"xml_content_corrected": "<TEI/>", **changes},
             )
         )
         monkeypatch.setattr(db, "update_page", mock_update)
         return mock_update
 
-    def test_updates_corrected_content_and_ready(self, update):
+    def test_updates_xml_content_corrected_and_ready(self, update):
         edition_id = uuid4()
 
         response = client.patch(
             f"/editions/{edition_id}/pages/3",
-            json={"corrected_content": "fixed text", "ready": True},
+            json={"xml_content_corrected": "fixed text", "ready": True},
         )
 
         assert response.status_code == 200
         update.assert_called_once_with(
-            edition_id, 3, corrected_content="fixed text", ready=True
+            edition_id, 3, xml_content_corrected="fixed text", ready=True
         )
         body = response.json()
         assert body["content"] == "fixed text"
@@ -314,37 +306,30 @@ class TestUpdatePage:
         edition_id = uuid4()
 
         client.patch(f"/editions/{edition_id}/pages/3", json={"ready": True})
-        client.patch(f"/editions/{edition_id}/pages/3", json={"corrected_content": "x"})
+        client.patch(
+            f"/editions/{edition_id}/pages/3", json={"xml_content_corrected": "x"}
+        )
 
         assert update.call_args_list == [
             mock.call(edition_id, 3, ready=True),
-            mock.call(edition_id, 3, corrected_content="x"),
+            mock.call(edition_id, 3, xml_content_corrected="x"),
         ]
-
-    def test_null_corrected_content_clears_the_correction(self, update):
-        edition_id = uuid4()
-
-        response = client.patch(
-            f"/editions/{edition_id}/pages/3", json={"corrected_content": None}
-        )
-
-        assert response.status_code == 200
-        update.assert_called_once_with(edition_id, 3, corrected_content=None)
-        assert response.json()["content"] == "raw text"  # falls back to raw
 
     @pytest.mark.parametrize(
         "body",
         [
-            {"raw_content": "x"},
+            {"raw_ocr_content": "x"},
             {"scan_uri": "https://evil.example/s.jpg"},
             {"number": 9},
             {"id": str(uuid4())},
             {"edition_id": str(uuid4())},
-            {"ready": True, "raw_content": "x"},  # valid + forbidden field
+            {"ready": True, "raw_ocr_content": "x"},  # valid + forbidden field
             {},  # nothing to update
             {"ready": None},  # ready cannot be null
             {"ready": "maybe"},
-            {"corrected_content": 5},
+            {"xml_content_corrected": 5},
+            {"xml_content_corrected": None},  # a page always keeps its XML
+            {"xml_content_corrected": ""},
         ],
     )
     def test_rejects_anything_else(self, update, body):
@@ -394,18 +379,20 @@ def test_get_page_saves_raw_text_and_its_tei_xml(in_collection, polona):
     edition_id = uuid4()
     polona.return_value = {
         "scan_uri": "https://polona.pl/s.jpg",
-        "raw_content": "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys.",
+        "raw_ocr_content": "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys.",
     }
 
     client.get(f"/editions/{edition_id}/pages/5")
 
     (saved,) = db.save_fetched_page.call_args.args
-    assert saved.raw_content == "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys."
-    assert saved.corrected_content == str(text_to_tei_xml(saved.raw_content))
-    assert saved.corrected_content.startswith("<?xml")
-    assert '<TEI xmlns="http://www.tei-c.org/ns/1.0">' in saved.corrected_content
-    assert "<p>84 KATEDRA</p>" in saved.corrected_content
-    assert "kamie<lb/>niami &lt;10&gt; &amp; tys." in saved.corrected_content
+    assert (
+        saved.raw_ocr_content == "84 KATEDRA\n\ncle przekazał kamie\nniami <10> & tys."
+    )
+    assert saved.xml_content_corrected == str(text_to_tei_xml(saved.raw_ocr_content))
+    assert saved.xml_content_corrected.startswith("<?xml")
+    assert '<TEI xmlns="http://www.tei-c.org/ns/1.0">' in saved.xml_content_corrected
+    assert "<p>84 KATEDRA</p>" in saved.xml_content_corrected
+    assert "kamie<lb/>niami &lt;10&gt; &amp; tys." in saved.xml_content_corrected
     assert saved.scan_uri == "https://polona.pl/s.jpg"
     assert not saved.ready
 
@@ -426,7 +413,7 @@ def test_get_page_passes_the_raw_text_to_the_converter(
     assert seen == ["Ala ma kota"]
     assert response.json()["content"] == "<converted/>"
     (saved,) = db.save_fetched_page.call_args.args
-    assert (saved.raw_content, saved.corrected_content) == (
+    assert (saved.raw_ocr_content, saved.xml_content_corrected) == (
         "Ala ma kota",
         "<converted/>",
     )
@@ -434,7 +421,10 @@ def test_get_page_passes_the_raw_text_to_the_converter(
 
 def test_get_page_does_not_convert_a_stored_page(in_collection, polona, monkeypatch):
     db.get_page_by_number.return_value = Page(
-        edition_id=uuid4(), number=5, raw_content="stored raw"
+        edition_id=uuid4(),
+        number=5,
+        raw_ocr_content="stored raw",
+        xml_content_corrected="<TEI/>",
     )
     converter = mock.Mock()
     monkeypatch.setattr("app.main.text_to_tei_xml", converter)
@@ -679,8 +669,8 @@ class TestTagEntity:
             "page": Page(
                 edition_id=uuid4(),
                 number=4,
-                raw_content=self.TEXT,
-                corrected_content=self.XML,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
                 scan_uri="https://polona.pl/s.jpg",
             )
         }
@@ -710,8 +700,8 @@ class TestTagEntity:
         db.update_page.assert_called_once()
         args, kwargs = db.update_page.call_args
         assert args == (page.edition_id, 4)
-        assert list(kwargs) == ["corrected_content"]  # nothing else is touched
-        assert "<persName>Adam Mickiewicz</persName>" in kwargs["corrected_content"]
+        assert list(kwargs) == ["xml_content_corrected"]  # nothing else is touched
+        assert "<persName>Adam Mickiewicz</persName>" in kwargs["xml_content_corrected"]
 
     def test_the_response_is_the_updated_page_view(self, stored):
         page = stored["page"]
@@ -745,7 +735,7 @@ class TestTagEntity:
         for body in bodies:
             assert client.post(self.url(page.edition_id), json=body).status_code == 200
 
-        xml = stored["page"].corrected_content
+        xml = stored["page"].xml_content_corrected
         assert tei_xml_to_text(xml) == self.TEXT
         for entity, label in entities:
             assert f"<{label}>{entity}</{label}>" in xml
@@ -790,7 +780,7 @@ class TestTagEntity:
         db.update_page.assert_not_called()
 
     @pytest.mark.parametrize(
-        ("corrected_content", "message"),
+        ("xml_content_corrected", "message"),
         [
             (None, "no TEI XML"),
             ("", "no TEI XML"),
@@ -798,9 +788,9 @@ class TestTagEntity:
             ("<a/>", "root element must be <TEI>"),
         ],
     )
-    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+    def test_a_page_without_valid_tei_xml(self, stored, xml_content_corrected, message):
         stored["page"] = stored["page"].model_copy(
-            update={"corrected_content": corrected_content}
+            update={"xml_content_corrected": xml_content_corrected}
         )
 
         response = client.post(
@@ -815,7 +805,7 @@ class TestTagEntity:
         # "Paryżu.\nPotem" spans a line break: fine; paragraphs are what fails
         text = "one two\n\nthree four"
         stored["page"] = stored["page"].model_copy(
-            update={"corrected_content": str(text_to_tei_xml(text))}
+            update={"xml_content_corrected": str(text_to_tei_xml(text))}
         )
         body = {"start": 4, "end": 14, "text": "two\n\nthree", "label": "persName"}
 
@@ -850,8 +840,8 @@ class TestTagEntity:
             {"text": ""},
             {"text": None},
             {"start": "a"},
-            {"raw_content": "x"},  # not a field of this request
-            {"corrected_content": "<TEI/>"},
+            {"raw_ocr_content": "x"},  # not a field of this request
+            {"xml_content_corrected": "<TEI/>"},
         ],
     )
     def test_bad_requests_are_rejected_before_anything_happens(self, stored, change):
@@ -1082,8 +1072,8 @@ class TestCorrectWord:
             "page": Page(
                 edition_id=uuid4(),
                 number=4,
-                raw_content=self.TEXT,
-                corrected_content=self.XML,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
             ),
             "corrections": [],
         }
@@ -1092,8 +1082,10 @@ class TestCorrectWord:
             page = state["page"]
             if (edition_id, number) != (page.edition_id, page.number):
                 return None
-            new_xml = replace(page.corrected_content or "")  # may raise: nothing saved
-            state["page"] = page.model_copy(update={"corrected_content": new_xml})
+            new_xml = replace(
+                page.xml_content_corrected or ""
+            )  # may raise: nothing saved
+            state["page"] = page.model_copy(update={"xml_content_corrected": new_xml})
             if record:
                 state["corrections"].append((before, after))
             return state["page"]
@@ -1118,20 +1110,20 @@ class TestCorrectWord:
 
     def test_removes_a_token_without_recording_a_correction(self, stored):
         stored["page"] = stored["page"].model_copy(
-            update={"corrected_content": str(text_to_tei_xml("Ala $ ma"))}
+            update={"xml_content_corrected": str(text_to_tei_xml("Ala $ ma"))}
         )
         body = {"start": 4, "end": 5, "before": "$", "after": ""}
 
         response = self.post(stored, body)
 
         assert response.status_code == 200
-        assert tei_xml_to_text(stored["page"].corrected_content) == "Ala ma"
+        assert tei_xml_to_text(stored["page"].xml_content_corrected) == "Ala ma"
         assert stored["corrections"] == []  # not a correction of a word
 
     def test_the_text_afterwards_is_the_old_text_with_the_word_replaced(self, stored):
         self.post(stored, self.body("dawnieyszych", "dawniejszych"))
 
-        xml = stored["page"].corrected_content
+        xml = stored["page"].xml_content_corrected
         assert tei_xml_to_text(xml) == self.TEXT.replace("dawnieyszych", "dawniejszych")
 
     def test_the_response_is_the_updated_page_view(self, stored):
@@ -1149,14 +1141,14 @@ class TestCorrectWord:
 
     def test_only_the_word_at_the_offsets_is_replaced(self, stored):
         self.post(stored, self.body("jey", "jej"))
-        xml = stored["page"].corrected_content
+        xml = stored["page"].xml_content_corrected
 
         assert "To jej tey" in tei_xml_to_text(xml)
 
     def test_keeps_the_entities_that_are_marked_in_the_xml(self, stored):
         stored["page"] = stored["page"].model_copy(
             update={
-                "corrected_content": self.XML.replace(
+                "xml_content_corrected": self.XML.replace(
                     "kościół", "<placeName>kościół</placeName>"
                 )
             }
@@ -1164,7 +1156,7 @@ class TestCorrectWord:
 
         self.post(stored, self.body("kościół", "kościoł"))
 
-        assert "<placeName>kościoł</placeName>" in stored["page"].corrected_content
+        assert "<placeName>kościoł</placeName>" in stored["page"].xml_content_corrected
 
     def test_page_not_stored(self, stored):
         response = client.post(self.url(), json=self.body("jey", "jej"))
@@ -1181,7 +1173,7 @@ class TestCorrectWord:
         assert response.status_code == 409
         assert "page has changed" in response.json()["detail"]
         assert stored["corrections"] == []
-        assert stored["page"].corrected_content == self.XML
+        assert stored["page"].xml_content_corrected == self.XML
 
     def test_offsets_outside_the_text(self, stored):
         body = {"start": 900, "end": 903, "before": "jey", "after": "jej"}
@@ -1189,7 +1181,7 @@ class TestCorrectWord:
         assert self.post(stored, body).status_code == 409
 
     @pytest.mark.parametrize(
-        ("corrected_content", "message"),
+        ("xml_content_corrected", "message"),
         [
             (None, "no TEI XML"),
             ("", "no TEI XML"),
@@ -1197,9 +1189,9 @@ class TestCorrectWord:
             ("<a/>", "root element must be <TEI>"),
         ],
     )
-    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+    def test_a_page_without_valid_tei_xml(self, stored, xml_content_corrected, message):
         stored["page"] = stored["page"].model_copy(
-            update={"corrected_content": corrected_content}
+            update={"xml_content_corrected": xml_content_corrected}
         )
 
         response = self.post(stored, self.body("jey", "jej"))
@@ -1223,7 +1215,7 @@ class TestCorrectWord:
         assert response.status_code == 422
         assert message in response.json()["detail"]
         assert stored["corrections"] == []
-        assert stored["page"].corrected_content == self.XML
+        assert stored["page"].xml_content_corrected == self.XML
 
     def test_the_old_text_cannot_have_spaces(self, stored):
         response = self.post(stored, self.body("To jey", "Tojey"))
@@ -1240,8 +1232,8 @@ class TestCorrectWord:
             {"start": 5, "end": 5},
             {"start": -1},
             {"start": "a"},
-            {"raw_content": "x"},  # not a field of this request
-            {"corrected_content": "<TEI/>"},
+            {"raw_ocr_content": "x"},  # not a field of this request
+            {"xml_content_corrected": "<TEI/>"},
         ],
     )
     def test_bad_requests_are_rejected_before_anything_happens(self, stored, change):
@@ -1545,8 +1537,8 @@ class TestMarkPageSection:
             "page": Page(
                 edition_id=uuid4(),
                 number=4,
-                raw_content=self.TEXT,
-                corrected_content=self.XML,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
                 scan_uri="https://polona.pl/s.jpg",
             )
         }
@@ -1578,24 +1570,24 @@ class TestMarkPageSection:
         response = self.post(stored, self.body(selection, section))
 
         assert response.status_code == 200
-        assert markup in stored["page"].corrected_content
-        assert tei_xml_to_text(stored["page"].corrected_content) == self.TEXT
+        assert markup in stored["page"].xml_content_corrected
+        assert tei_xml_to_text(stored["page"].xml_content_corrected) == self.TEXT
 
     def test_a_note_with_its_number(self, stored):
         response = self.post(stored, self.body("I. Alfa", "note", n="1"))
 
         assert response.status_code == 200
-        assert '<note n="1">I. Alfa</note>' in stored["page"].corrected_content
+        assert '<note n="1">I. Alfa</note>' in stored["page"].xml_content_corrected
 
     def test_a_note_without_a_number(self, stored):
         self.post(stored, self.body("I. Alfa", "note"))
 
-        assert "<note>I. Alfa</note>" in stored["page"].corrected_content
+        assert "<note>I. Alfa</note>" in stored["page"].xml_content_corrected
 
     def test_the_number_is_trimmed(self, stored):
         self.post(stored, self.body("I. Alfa", "note", n=" 2 "))
 
-        assert '<note n="2">' in stored["page"].corrected_content
+        assert '<note n="2">' in stored["page"].xml_content_corrected
 
     @pytest.mark.parametrize("n", ["", "   ", "x" * 21])
     def test_a_bad_number_is_refused(self, stored, n):
@@ -1617,7 +1609,7 @@ class TestMarkPageSection:
         response = self.post(stored, self.body("I. Alfa\nII. Beta", "note_group"))
 
         assert response.status_code == 200
-        xml = stored["page"].corrected_content
+        xml = stored["page"].xml_content_corrected
         assert '<noteGrp><note n="1">I. Alfa</note>' in xml
         assert tei_xml_to_text(xml) == self.TEXT
 
@@ -1632,11 +1624,13 @@ class TestMarkPageSection:
         response = self.post(stored, self.body("I. Alfa\nII. Beta", "toc"))
 
         assert response.status_code == 200
-        xml = stored["page"].corrected_content
+        xml = stored["page"].xml_content_corrected
         assert '<div type="toc"><p><lb/>I. Alfa<lb/>II. Beta</p></div>' in xml
         assert "<div><p><lb/>koniec</p><p>stopka 85</p></div>" in xml
 
-    def test_saves_the_new_xml_as_the_corrected_content_and_nothing_else(self, stored):
+    def test_saves_the_new_xml_as_the_xml_content_corrected_and_nothing_else(
+        self, stored
+    ):
         page = stored["page"]
 
         self.post(stored, self.body("84 KATEDRA", "header"))
@@ -1644,7 +1638,7 @@ class TestMarkPageSection:
         db.update_page.assert_called_once()
         args, kwargs = db.update_page.call_args
         assert args == (page.edition_id, 4)
-        assert list(kwargs) == ["corrected_content"]
+        assert list(kwargs) == ["xml_content_corrected"]
 
     def test_the_response_is_the_updated_page_view(self, stored):
         body = self.post(stored, self.body("84 KATEDRA", "header")).json()
@@ -1704,7 +1698,7 @@ class TestMarkPageSection:
         db.update_page.assert_not_called()
 
     @pytest.mark.parametrize(
-        ("corrected_content", "message"),
+        ("xml_content_corrected", "message"),
         [
             (None, "no TEI XML"),
             ("", "no TEI XML"),
@@ -1712,9 +1706,9 @@ class TestMarkPageSection:
             ("<a/>", "root element must be <TEI>"),
         ],
     )
-    def test_a_page_without_valid_tei_xml(self, stored, corrected_content, message):
+    def test_a_page_without_valid_tei_xml(self, stored, xml_content_corrected, message):
         stored["page"] = stored["page"].model_copy(
-            update={"corrected_content": corrected_content}
+            update={"xml_content_corrected": xml_content_corrected}
         )
 
         response = self.post(stored, self.body("84 KATEDRA", "header"))
@@ -1737,7 +1731,7 @@ class TestMarkPageSection:
             {"start": -1},
             {"text": ""},
             {"text": None},
-            {"raw_content": "x"},  # not a field of this request
+            {"raw_ocr_content": "x"},  # not a field of this request
             {"label": "persName"},  # an entity field
         ],
     )

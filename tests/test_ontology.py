@@ -59,28 +59,31 @@ def test_edition_work_id_required():
 def test_page_fields():
     edition = Edition(work_id=WORK_ID, place="Warszawa", year=1890)
 
-    page = Page(edition_id=edition.id, number=1, raw_content="Ala ma kota")
+    page = Page(edition_id=edition.id, number=1, raw_ocr_content="Ala ma kota")
 
     assert isinstance(page.id, UUID)
     assert page.edition_id == edition.id
     assert page.number == 1
-    assert page.raw_content == "Ala ma kota"
-    assert page.corrected_content is None
+    assert page.raw_ocr_content == "Ala ma kota"
+    assert page.xml_content_corrected is None
     assert page.scan_uri is None
     assert page.ready is False
 
 
-def test_page_with_corrected_content():
+def test_page_with_xml_content_corrected():
     page = Page(
-        edition_id=uuid4(), number=2, raw_content="Aia ma kota", corrected_content="Ala"
+        edition_id=uuid4(),
+        number=2,
+        raw_ocr_content="Aia ma kota",
+        xml_content_corrected="Ala",
     )
 
-    assert page.corrected_content == "Ala"
+    assert page.xml_content_corrected == "Ala"
 
 
-@pytest.mark.parametrize("missing", ["edition_id", "number", "raw_content"])
+@pytest.mark.parametrize("missing", ["edition_id", "number", "raw_ocr_content"])
 def test_page_required_fields(missing):
-    data = {"edition_id": uuid4(), "number": 1, "raw_content": "x"}
+    data = {"edition_id": uuid4(), "number": 1, "raw_ocr_content": "x"}
     del data[missing]
 
     with pytest.raises(ValidationError):
@@ -88,12 +91,12 @@ def test_page_required_fields(missing):
 
 
 def test_page_number_can_be_zero():
-    assert Page(edition_id=uuid4(), number=0, raw_content="x").number == 0
+    assert Page(edition_id=uuid4(), number=0, raw_ocr_content="x").number == 0
 
 
 def test_page_number_cannot_be_negative():
     with pytest.raises(ValidationError):
-        Page(edition_id=uuid4(), number=-1, raw_content="x")
+        Page(edition_id=uuid4(), number=-1, raw_ocr_content="x")
 
 
 def test_correction_fields():
@@ -158,15 +161,15 @@ def test_edition_place_and_year_are_optional():
 
 
 def test_page_ready_defaults_to_false_and_can_be_set():
-    assert Page(edition_id=uuid4(), number=1, raw_content="x").ready is False
-    assert Page(edition_id=uuid4(), number=1, raw_content="x", ready=True).ready
+    assert Page(edition_id=uuid4(), number=1, raw_ocr_content="x").ready is False
+    assert Page(edition_id=uuid4(), number=1, raw_ocr_content="x", ready=True).ready
 
 
 def test_page_scan_uri():
     uri = "https://polona.pl/iiif/3/x/full/max/0/default.jpg"
 
     assert (
-        Page(edition_id=uuid4(), number=1, raw_content="x", scan_uri=uri).scan_uri
+        Page(edition_id=uuid4(), number=1, raw_ocr_content="x", scan_uri=uri).scan_uri
         == uri
     )
 

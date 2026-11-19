@@ -20,14 +20,14 @@ class PageView(BaseModel):
 
     @classmethod
     def from_page(cls, page: Page) -> PageView:
-        """`content` is the corrected content if there is any, else the raw one."""
+        """`content` is the page's TEI XML. The raw OCR text is never served."""
         return cls(
             id=page.id,
             edition_id=page.edition_id,
             number=page.number,
             scan_uri=page.scan_uri,
             ready=page.ready,
-            content=page.corrected_content or page.raw_content,
+            content=page.xml_content_corrected,
         )
 
 
@@ -37,15 +37,19 @@ class PageUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    corrected_content: str | None = None
+    xml_content_corrected: str | None = None
     ready: bool | None = None
 
     @model_validator(mode="after")
     def check_fields(self) -> PageUpdate:
         if not self.model_fields_set:
-            raise ValueError("Give corrected_content and/or ready")
+            raise ValueError("Give xml_content_corrected and/or ready")
         if "ready" in self.model_fields_set and self.ready is None:
             raise ValueError("ready cannot be null")
+        if "xml_content_corrected" in self.model_fields_set and (
+            not self.xml_content_corrected
+        ):
+            raise ValueError("xml_content_corrected cannot be null or empty")
         return self
 
 

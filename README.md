@@ -54,8 +54,8 @@ each page once and keeps it in PostgreSQL.
   parameter (`number=99` is "Skan 100" in the Polona viewer).
 
 The response is a `PageView`: `id`, `edition_id`, `number`, `scan_uri`,
-`ready` and `content`. `content` is the corrected text if the page has one,
-otherwise the raw OCR text.
+`ready` and `content`. `content` is the page's TEI XML (`xml_content_corrected`); the
+raw OCR text is never served.
 
 ### Where the page comes from
 
@@ -100,28 +100,28 @@ belongs to an edition:
 
 ### Saving, and corrections
 
-A fetched page is saved with `raw_content` (the OCR text from Polona) and
-`scan_uri`. The OCR text is also converted to TEI XML (`app/tei_xml.py`:
-paragraphs at blank lines, `<lb/>` at line breaks) and saved as
-`corrected_content`. This is the text the user edits, so the original OCR text
-in `raw_content` is never overwritten. Because every fetched page starts with
-a `corrected_content`, `content` in the response is that TEI XML until a
-correction replaces it. If a page is ever fetched again, only the fetched data
-(`raw_content`, `scan_uri`) is refreshed, and its corrected content, `ready`
-flag and `id` are kept.
+A fetched page is saved with `raw_ocr_content` (the OCR text as fetched from
+Polona) and `scan_uri`. `raw_ocr_content` is written once, when the page is
+first fetched, and never changes after that. The OCR text is also converted to
+TEI XML (`app/tei_xml.py`: paragraphs at blank lines, `<lb/>` at line breaks)
+and saved as `xml_content_corrected`. This is the XML the user edits. Because
+every fetched page starts with an `xml_content_corrected`, `content` in the
+response is that TEI XML until a correction replaces it. If a page is ever
+fetched again, only `scan_uri` is refreshed; `raw_ocr_content`,
+`xml_content_corrected`, `ready` and `id` are kept.
 
 When the user corrects a word (see "Correcting a word" below), the word is
-changed in `corrected_content`, and the correction (`before` -> `after`) is also
+changed in `xml_content_corrected`, and the correction (`before` -> `after`) is also
 recorded in the `corrections` table, for the page.
 
 ### Editing a page
 
 `PATCH /editions/{edition_id}/pages/{number}` with a JSON body.
 
-Only two things can be edited: `corrected_content` and `ready`. Fields left out
-are not touched, and `"corrected_content": null` removes the correction, so
-`content` falls back to the raw text. Any other field in the body (for example
-`raw_content` or `scan_uri`) is rejected with 422, and so is an empty body.
+Only two things can be edited: `xml_content_corrected` and `ready`. Fields left out
+are not touched. A page always keeps its XML, so `xml_content_corrected` cannot
+be null or an empty string. Any other field in the body (for example
+`raw_ocr_content` or `scan_uri`) is rejected with 422, and so is an empty body.
 
 The page must already be stored: open it with `GET` first. `PATCH` never
 fetches from Polona, and answers 404 if the page is not stored. It does not
@@ -180,7 +180,7 @@ stored.
 
 `POST /editions/{edition_id}/pages/{number}/entities` puts a named entity in
 the TEI XML of a stored page inside an element named after its label, and saves
-the changed XML as the page's `corrected_content`. The body is what `POST /ner`
+the changed XML as the page's `xml_content_corrected`. The body is what `POST /ner`
 found:
 
 ```json
@@ -273,7 +273,7 @@ correction:
   not what is at those offsets, the page has changed since, and the answer is
   409.
 - **The correction is recorded.** The new XML is saved as the page's
-  `corrected_content`, and the `Correction` (`before`, `after`) is stored for the
+  `xml_content_corrected`, and the `Correction` (`before`, `after`) is stored for the
   page, in **one transaction with the page's row locked**: both happen or
   neither does, and two corrections of the same page cannot overwrite each
   other. The response is the updated page, like `GET`.
@@ -334,7 +334,7 @@ as written in the XML, e.g. `<note n="1">` and `</note>`. Entities and the plain
 
 `POST /editions/{edition_id}/pages/{number}/sections` marks a stretch of the
 text of a stored page as a section of the page, in its TEI XML, and saves the
-changed XML as the page's `corrected_content`:
+changed XML as the page's `xml_content_corrected`:
 
 ```json
 {"start": 0, "end": 10, "text": "84 KATEDRA", "section": "header"}

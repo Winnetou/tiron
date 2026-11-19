@@ -55,14 +55,14 @@ def test_edition_requires_existing_work(db):
 
 
 def test_page_roundtrip(db, edition):
-    page = db.create_page(Page(edition_id=edition.id, number=1, raw_content="Aia"))
+    page = db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="Aia"))
 
     assert db.get_page(page.id) == page
     assert db.get_page(uuid4()) is None
 
 
 def test_correction_roundtrip(db, edition):
-    page = db.create_page(Page(edition_id=edition.id, number=1, raw_content="Aia"))
+    page = db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="Aia"))
 
     correction = db.create_correction(
         Correction(page_id=page.id, before="Aia", after="Ala")
@@ -151,24 +151,24 @@ def test_unknown_author_or_title_never_matches(db):
 
 
 def test_page_edition_and_number_are_unique_together(db, edition):
-    db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
+    db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="a"))
 
     with pytest.raises(psycopg.errors.UniqueViolation):
-        db.create_page(Page(edition_id=edition.id, number=1, raw_content="b"))
+        db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="b"))
 
 
 def test_same_page_number_allowed_in_different_editions(db, edition):
     work = Work(author="Other")
     other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
 
-    db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
-    db.create_page(Page(edition_id=other.id, number=1, raw_content="b"))
+    db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="a"))
+    db.create_page(Page(edition_id=other.id, number=1, raw_ocr_content="b"))
 
 
 def test_page_ready_defaults_to_false_and_roundtrips(db, edition):
-    page = db.create_page(Page(edition_id=edition.id, number=1, raw_content="a"))
+    page = db.create_page(Page(edition_id=edition.id, number=1, raw_ocr_content="a"))
     ready = db.create_page(
-        Page(edition_id=edition.id, number=2, raw_content="b", ready=True)
+        Page(edition_id=edition.id, number=2, raw_ocr_content="b", ready=True)
     )
 
     assert db.get_page(page.id).ready is False
@@ -178,16 +178,16 @@ def test_page_ready_defaults_to_false_and_roundtrips(db, edition):
 def test_page_scan_uri_roundtrips(db, edition):
     uri = "https://polona.pl/iiif/3/x/full/max/0/default.jpg"
     page = db.create_page(
-        Page(edition_id=edition.id, number=1, raw_content="a", scan_uri=uri)
+        Page(edition_id=edition.id, number=1, raw_ocr_content="a", scan_uri=uri)
     )
-    without = db.create_page(Page(edition_id=edition.id, number=2, raw_content="b"))
+    without = db.create_page(Page(edition_id=edition.id, number=2, raw_ocr_content="b"))
 
     assert db.get_page(page.id).scan_uri == uri
     assert db.get_page(without.id).scan_uri is None
 
 
 def test_save_fetched_page_inserts(db, edition):
-    page = Page(edition_id=edition.id, number=3, raw_content="raw", scan_uri="u")
+    page = Page(edition_id=edition.id, number=3, raw_ocr_content="raw", scan_uri="u")
 
     stored = db.save_fetched_page(page)
 
@@ -195,24 +195,24 @@ def test_save_fetched_page_inserts(db, edition):
     assert db.get_page(page.id) == page
 
 
-def test_save_fetched_page_refreshes_fetched_data_but_keeps_work(db, edition):
+def test_save_fetched_page_refreshes_only_the_scan_and_keeps_the_rest(db, edition):
     first = db.save_fetched_page(
-        Page(edition_id=edition.id, number=3, raw_content="raw", scan_uri="u1")
+        Page(edition_id=edition.id, number=3, raw_ocr_content="raw", scan_uri="u1")
     )
     # a user's work on the page
     db.conn.execute(
-        "UPDATE pages SET corrected_content = 'fixed', ready = true WHERE id = %s",
+        "UPDATE pages SET xml_content_corrected = 'fixed', ready = true WHERE id = %s",
         (first.id,),
     )
 
     stored = db.save_fetched_page(
-        Page(edition_id=edition.id, number=3, raw_content="raw v2", scan_uri="u2")
+        Page(edition_id=edition.id, number=3, raw_ocr_content="raw v2", scan_uri="u2")
     )
 
     assert stored.id == first.id
-    assert stored.raw_content == "raw v2"
+    assert stored.raw_ocr_content == "raw"  # written once, never changes
     assert stored.scan_uri == "u2"
-    assert stored.corrected_content == "fixed"
+    assert stored.xml_content_corrected == "fixed"
     assert stored.ready is True
     count = db.conn.execute("SELECT count(*) AS n FROM pages").fetchone()["n"]
     assert count == 1
@@ -220,16 +220,16 @@ def test_save_fetched_page_refreshes_fetched_data_but_keeps_work(db, edition):
 
 def test_save_fetched_page_requires_existing_edition(db):
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
-        db.save_fetched_page(Page(edition_id=uuid4(), number=0, raw_content="x"))
+        db.save_fetched_page(Page(edition_id=uuid4(), number=0, raw_ocr_content="x"))
 
 
 def test_get_page_by_number(db, edition):
     page = db.create_page(
-        Page(edition_id=edition.id, number=5, raw_content="a", scan_uri="u")
+        Page(edition_id=edition.id, number=5, raw_ocr_content="a", scan_uri="u")
     )
     work = Work(author="Other")
     other = db.upsert_edition(work, Edition(work_id=work.id, year=1900))
-    db.create_page(Page(edition_id=other.id, number=6, raw_content="b"))
+    db.create_page(Page(edition_id=other.id, number=6, raw_ocr_content="b"))
 
     assert db.get_page_by_number(edition.id, 5) == page
     assert db.get_page_by_number(edition.id, 6) is None  # number of another edition
@@ -242,8 +242,8 @@ def stored_page(db, edition):
         Page(
             edition_id=edition.id,
             number=7,
-            raw_content="raw text",
-            corrected_content="old fix",
+            raw_ocr_content="raw text",
+            xml_content_corrected="old fix",
             scan_uri="https://polona.pl/s.jpg",
         )
     )
@@ -251,10 +251,10 @@ def stored_page(db, edition):
 
 def test_update_page_changes_both_fields(db, stored_page):
     updated = db.update_page(
-        stored_page.edition_id, 7, corrected_content="new fix", ready=True
+        stored_page.edition_id, 7, xml_content_corrected="new fix", ready=True
     )
 
-    assert updated.corrected_content == "new fix"
+    assert updated.xml_content_corrected == "new fix"
     assert updated.ready is True
     assert db.get_page(stored_page.id) == updated
 
@@ -263,22 +263,22 @@ def test_update_page_leaves_everything_else_alone(db, stored_page):
     updated = db.update_page(stored_page.edition_id, 7, ready=True)
 
     assert updated == stored_page.model_copy(update={"ready": True})
-    assert updated.corrected_content == "old fix"  # not given: untouched
+    assert updated.xml_content_corrected == "old fix"  # not given: untouched
 
 
 def test_update_page_can_clear_the_correction(db, stored_page):
-    updated = db.update_page(stored_page.edition_id, 7, corrected_content=None)
+    updated = db.update_page(stored_page.edition_id, 7, xml_content_corrected=None)
 
-    assert updated.corrected_content is None
-    assert updated.raw_content == "raw text"
+    assert updated.xml_content_corrected is None
+    assert updated.raw_ocr_content == "raw text"
 
 
 def test_update_page_only_touches_that_page(db, stored_page):
     other = db.create_page(
-        Page(edition_id=stored_page.edition_id, number=8, raw_content="other")
+        Page(edition_id=stored_page.edition_id, number=8, raw_ocr_content="other")
     )
 
-    db.update_page(stored_page.edition_id, 7, corrected_content="x", ready=True)
+    db.update_page(stored_page.edition_id, 7, xml_content_corrected="x", ready=True)
 
     assert db.get_page(other.id) == other
 
@@ -293,7 +293,7 @@ def test_update_page_needs_something_to_update(db, stored_page):
         db.update_page(stored_page.edition_id, 7)
 
 
-@pytest.mark.parametrize("field", ["raw_content", "scan_uri", "number", "id"])
+@pytest.mark.parametrize("field", ["raw_ocr_content", "scan_uri", "number", "id"])
 def test_update_page_cannot_change_other_columns(db, stored_page, field):
     with pytest.raises(TypeError):
         db.update_page(stored_page.edition_id, 7, **{field: "x"})
@@ -304,15 +304,15 @@ def test_fetched_page_keeps_raw_text_and_tei_separately(db, edition):
     page = Page(
         edition_id=edition.id,
         number=5,
-        raw_content="raw ocr text",
-        corrected_content=tei,
+        raw_ocr_content="raw ocr text",
+        xml_content_corrected=tei,
         scan_uri="u",
     )
 
     stored = db.save_fetched_page(page)
 
-    assert stored.raw_content == "raw ocr text"
-    assert stored.corrected_content == tei
+    assert stored.raw_ocr_content == "raw ocr text"
+    assert stored.xml_content_corrected == tei
     assert db.get_page_by_number(edition.id, 5) == stored
 
 
@@ -323,8 +323,8 @@ class TestApplyCorrection:
             Page(
                 edition_id=edition.id,
                 number=3,
-                raw_content="raw",
-                corrected_content="<TEI>old</TEI>",
+                raw_ocr_content="raw",
+                xml_content_corrected="<TEI>old</TEI>",
                 scan_uri="u",
             )
         )
@@ -346,7 +346,7 @@ class TestApplyCorrection:
             record=False,
         )
 
-        assert updated.corrected_content == "<TEI>new</TEI>"
+        assert updated.xml_content_corrected == "<TEI>new</TEI>"
         assert self.corrections(db) == []
 
     def test_saves_the_new_content_and_records_the_correction(self, db, stored):
@@ -354,7 +354,7 @@ class TestApplyCorrection:
             stored.edition_id, 3, lambda xml: xml.replace("old", "new"), "old", "new"
         )
 
-        assert updated.corrected_content == "<TEI>new</TEI>"
+        assert updated.xml_content_corrected == "<TEI>new</TEI>"
         assert db.get_page(stored.id) == updated
         assert self.corrections(db) == [
             {"page_id": stored.id, "before": "old", "after": "new"}
@@ -363,7 +363,7 @@ class TestApplyCorrection:
     def test_changes_nothing_else_of_the_page(self, db, stored):
         updated = db.apply_correction(stored.edition_id, 3, lambda xml: "x", "a", "b")
 
-        assert updated == stored.model_copy(update={"corrected_content": "x"})
+        assert updated == stored.model_copy(update={"xml_content_corrected": "x"})
 
     def test_replace_gets_the_current_content(self, db, stored):
         seen = []
@@ -376,11 +376,15 @@ class TestApplyCorrection:
         db.apply_correction(stored.edition_id, 3, replace, "b", "c")
 
         assert seen == ["<TEI>old</TEI>", "<TEI>old</TEI>!"]
-        assert db.get_page(stored.id).corrected_content == "<TEI>old</TEI>!!"
+        assert db.get_page(stored.id).xml_content_corrected == "<TEI>old</TEI>!!"
         assert len(self.corrections(db)) == 2
 
-    def test_a_page_without_corrected_content_gets_an_empty_string(self, db, edition):
-        page = db.create_page(Page(edition_id=edition.id, number=8, raw_content="raw"))
+    def test_a_page_without_xml_content_corrected_gets_an_empty_string(
+        self, db, edition
+    ):
+        page = db.create_page(
+            Page(edition_id=edition.id, number=8, raw_ocr_content="raw")
+        )
         seen = []
 
         db.apply_correction(
@@ -388,7 +392,7 @@ class TestApplyCorrection:
         )
 
         assert seen == [""]
-        assert db.get_page(page.id).corrected_content == "new"
+        assert db.get_page(page.id).xml_content_corrected == "new"
 
     def test_no_such_page(self, db, stored):
         assert (
@@ -426,8 +430,8 @@ class TestApplyCorrection:
             Page(
                 edition_id=stored.edition_id,
                 number=4,
-                raw_content="r",
-                corrected_content="o",
+                raw_ocr_content="r",
+                xml_content_corrected="o",
             )
         )
 
@@ -456,7 +460,7 @@ class TestApplyCorrection:
             time.sleep(0.1)  # start while the first is holding the lock
             with second.transaction():
                 row = second.execute(
-                    "SELECT corrected_content FROM pages WHERE id = %s FOR UPDATE",
+                    "SELECT xml_content_corrected FROM pages WHERE id = %s FOR UPDATE",
                     (stored.id,),
                 ).fetchone()
                 order.append(f"second sees {row[0]!r}")
