@@ -61,13 +61,13 @@ const TOOLS: Tool[] = [
   },
 ]
 
-export type SidebarView = 'correction' | 'structure' | 'ner'
+export type SidebarView = 'correction' | 'structure' | 'ner' | 'text' | 'xml'
 
 interface Props {
   /** The view that is shown: its button is the active one. */
   view: SidebarView
-  /** Switch to the correction or the structure view. */
-  onShow: (view: 'correction' | 'structure') => void
+  /** Switch to another view (named entity recognition has its own handler). */
+  onShow: (view: Exclude<SidebarView, 'ner'>) => void
   /** Send the text of the page to be recognized for named entities, and show them. */
   onRecognizeEntities: () => void
   /** False when there is no text to recognize entities in. */
@@ -78,7 +78,8 @@ interface Props {
 /**
  * Vertical tool bar on the right: the views of the page, the active one
  * pressed. Correction (the spelling), Structure (to mark the sections of the
- * page) and Named entity recognition. The Text and XML buttons below are stubs.
+ * page) and Named entity recognition. Below them: Text (the text of the page,
+ * as the backend extracts it from the XML) and XML (the XML itself).
  */
 export default function Sidebar({
   view,
@@ -112,7 +113,12 @@ export default function Sidebar({
       })}
       <div className="view-switch" role="group" aria-label="Show">
         {(['text', 'xml'] as const).map((choice) => (
-          <button key={choice} type="button" disabled>
+          <button
+            key={choice}
+            type="button"
+            aria-pressed={view === choice}
+            onClick={() => onShow(choice)}
+          >
             {choice === 'text' ? 'Text' : 'XML'}
           </button>
         ))}

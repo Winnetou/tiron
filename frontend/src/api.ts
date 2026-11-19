@@ -12,8 +12,8 @@ export interface Page {
   scan_uri: string | null
   ready: boolean
   /**
-   * The corrected content if there is one, else the raw OCR text. For a page
-   * fetched from Polona this is TEI XML: don't show it, turn it into text with
+   * The page's TEI XML (the backend's xml_content_corrected). The raw OCR text
+   * never reaches the frontend. Don't show the XML: turn it into text with
    * teiToText.
    */
   content: string
@@ -64,7 +64,7 @@ export function getPage(
 
 /** The only things of a page that can be edited. */
 export interface PageChanges {
-  corrected_content?: string | null
+  xml_content_corrected?: string
   ready?: boolean
 }
 

@@ -98,15 +98,15 @@ def idempotent_fetch_page(
        yet, its metadata is fetched too and a Work and an Edition are created
        (the page needs its edition). The page is then saved and returned, so
        the next request is served from the database. It is saved with the
-       Polona text as `raw_content`, and that text converted to TEI XML as
-       `corrected_content`, which the user then edits.
+       Polona text as `raw_ocr_content`, and that text converted to TEI XML as
+       `xml_content_corrected`, which the user then edits.
 
     Polona failures are turned into HTTP errors: 404 if Polona has no such
     page, 502 if it could not be reached or answered unexpectedly. Nothing is
     saved in that case.
 
-    The response is a PageView: its `content` is the corrected text if the
-    page has one, otherwise the raw OCR text.
+    The response is a PageView: its `content` is the page's TEI XML
+    (`xml_content_corrected`). The raw OCR text is never served.
     """
     if not db.check_edition_in_collection(edition_id):
         logger.warning("Edition %s is not in the collection", edition_id)
@@ -139,13 +139,13 @@ def idempotent_fetch_page(
         if exc.not_found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found") from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    raw_content = polona_page["raw_content"]
+    raw_ocr_content = polona_page["raw_ocr_content"]
     page = db.save_fetched_page(
         Page(
             edition_id=edition_id,
             number=number,
-            raw_content=raw_content,
-            corrected_content=str(text_to_tei_xml(raw_content)),
+            raw_ocr_content=raw_ocr_content,
+            xml_content_corrected=str(text_to_tei_xml(raw_ocr_content)),
             scan_uri=polona_page["scan_uri"],
         )
     )
@@ -157,13 +157,13 @@ def idempotent_fetch_page(
 def update_page(
     edition_id: UUID, number: Annotated[int, Path(ge=0)], update: PageUpdate
 ) -> PageView:
-    """Edit a page: only `corrected_content` and `ready` can be changed.
+    """Edit a page: only `xml_content_corrected` and `ready` can be changed.
 
-    Fields left out of the request are not touched, and
-    `"corrected_content": null` (or an empty string) removes the correction, so
-    `content` falls back to the raw text. Any other field in the request, such
-    as `raw_content` or `scan_uri`, is rejected with 422. The page must already
-    be stored (open it with GET first); it is never fetched from Polona here.
+    Fields left out of the request are not touched. A page always keeps its
+    XML, so `"xml_content_corrected"` cannot be null or an empty string (422).
+    Any other field in the request, such as `raw_ocr_content` or `scan_uri`, is
+    rejected with 422 too. The page must already be stored (open it with GET first);
+    it is never fetched from Polona here.
 
     404 if the page is not stored. Returns the updated page as a PageView.
     """
@@ -203,14 +203,14 @@ def tag_entity(
     page = db.get_page_by_number(edition_id, number)
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
-    if not page.corrected_content:
+    if not page.xml_content_corrected:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "The page has no TEI XML to mark entities in",
         )
     try:
         xml = tag_text_range(
-            page.corrected_content,
+            page.xml_content_corrected,
             entity.start,
             entity.end,
             entity.label,
@@ -226,8 +226,8 @@ def tag_entity(
             "Entity not tagged on page %s of %s: %s", number, edition_id, exc
         )
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    if xml != page.corrected_content:
-        page = db.update_page(edition_id, number, corrected_content=xml) or page
+    if xml != page.xml_content_corrected:
+        page = db.update_page(edition_id, number, xml_content_corrected=xml) or page
     logger.info(
         "Entity %s tagged on page %s of %s (%s-%s)",
         entity.label,
@@ -281,14 +281,14 @@ def mark_page_section(
     page = db.get_page_by_number(edition_id, number)
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
-    if not page.corrected_content:
+    if not page.xml_content_corrected:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "The page has no TEI XML to mark sections in",
         )
     try:
         xml = mark_section(
-            page.corrected_content,
+            page.xml_content_corrected,
             mark.start,
             mark.end,
             mark.section,
@@ -305,8 +305,8 @@ def mark_page_section(
             "Section not marked on page %s of %s: %s", number, edition_id, exc
         )
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    if xml != page.corrected_content:
-        page = db.update_page(edition_id, number, corrected_content=xml) or page
+    if xml != page.xml_content_corrected:
+        page = db.update_page(edition_id, number, xml_content_corrected=xml) or page
     logger.info(
         "Section %s marked on page %s of %s (%s-%s)",
         mark.section,

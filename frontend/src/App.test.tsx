@@ -1157,8 +1157,14 @@ describe('confirming or rejecting an entity', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Previous page' }))
       await waitFor(() => expect(pageText().textContent).toBe(TEXT))
-      // no new recognition: what was found, and decided, for this text is back
-      expect(pageText().querySelectorAll('mark')).toHaveLength(3)
+      // the page opens in the correction view: no entities in it
+      expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+      calls.length = 0
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Named entity recognition' }),
+      )
+      await waitFor(() => expect(pageText().querySelectorAll('mark')).toHaveLength(3))
+      // what was found, and decided, for this text is back
       expect(mark('Paryżu')).toHaveClass('confirmed')
       expect(mark('Adam Mickiewicz')).not.toHaveClass('confirmed')
     })
@@ -1526,14 +1532,18 @@ describe('structure view', () => {
       expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
     })
 
-    it('is kept when moving to another page', async () => {
+    it('is left for the correction view when moving to another page', async () => {
       await open({ page: (n) => ({ content: xmlOf(n === 0 ? TEXT : 'Inny tekst') }) })
       await userEvent.click(structureButton())
 
       await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
 
       await waitFor(() => expect(pageText().textContent).toBe('Inny tekst'))
-      expect(structureButton()).toHaveAttribute('aria-pressed', 'true')
+      expect(structureButton()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('button', { name: 'Correction' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
     })
 
     it('only asks for the sections marked in the XML, which changes nothing', async () => {
@@ -3084,7 +3094,100 @@ describe('page view', () => {
     })
   })
 
-  it('has the Text and XML buttons in the sidebar, below the tools, and they are inactive', async () => {
+  describe('the Text and XML buttons', () => {
+    const textButton = () => screen.getByRole('button', { name: 'Text' })
+    const xmlButton = () => screen.getByRole('button', { name: 'XML' })
+    const xmlBox = () => screen.getByRole('region', { name: 'Page XML' })
+
+    async function openText() {
+      await openPage({ spell: (text) => wordsOf(text, ['text']) })
+      await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    }
+
+    it('XML shows the XML of the page as it is, and is the active view', async () => {
+      await openText()
+
+      await userEvent.click(xmlButton())
+
+      expect(xmlBox().textContent).toBe(xmlOf('text of page 0'))
+      expect(xmlButton()).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Correction' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      )
+    })
+
+    it('Text shows the text that the backend takes from the XML, with no spelling marks', async () => {
+      await openText()
+      expect(pageText().querySelector('.word.misspelled')).not.toBeNull()
+
+      await userEvent.click(textButton())
+
+      expect(pageText().textContent).toBe('text of page 0')
+      expect(pageText().querySelectorAll('.word, mark')).toHaveLength(0)
+      expect(textButton()).toHaveAttribute('aria-pressed', 'true')
+    })
+
+    it('puts the markup of the XML in grey, smaller type', async () => {
+      await openText()
+
+      await userEvent.click(xmlButton())
+
+      const tag = xmlBox().querySelector('.xml-markup') as HTMLElement
+      expect(tag.textContent).toBe('<?xml version="1.0"?>')
+      expect(parseFloat(getComputedStyle(tag).fontSize)).toBeLessThan(
+        parseFloat(getComputedStyle(xmlBox()).fontSize),
+      )
+    })
+
+    it('switch back and forth without any request', async () => {
+      await openText()
+      const before = calls.length
+
+      await userEvent.click(xmlButton())
+      await userEvent.click(textButton())
+      await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
+
+      expect(calls).toHaveLength(before)
+      expect(pageText().querySelector('.word.misspelled')).not.toBeNull()
+    })
+
+    it.each([['Next page'], ['Previous page']])(
+      'the view goes back to Correction on %s',
+      async (button) => {
+        await openPage({ page: (n) => ({ content: xmlOf(`text of page ${n}`) }) }, '?page=1')
+        await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+        await userEvent.click(xmlButton())
+
+        await userEvent.click(screen.getByRole('button', { name: button }))
+
+        await waitFor(() => expect(pageText().textContent).toMatch(/^text of page [02]$/))
+        expect(screen.getByRole('button', { name: 'Correction' })).toHaveAttribute(
+          'aria-pressed',
+          'true',
+        )
+        expect(xmlButton()).toHaveAttribute('aria-pressed', 'false')
+      },
+    )
+
+    it('XML shows what the backend returned after a change, not what the browser made', async () => {
+      await openPage({
+        spell: (text) => wordsOf(text, ['jey']),
+        page: () => ({ content: xmlOf('ala jey') }),
+        correct: () => ({ content: xmlOf('what the backend says') }),
+      })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+
+      await userEvent.click(screen.getAllByText('jey', { selector: '.word' })[0])
+      await userEvent.keyboard('jej{Enter}')
+
+      await waitFor(() => expect(pageText().textContent).toContain('what the backend says'))
+      await userEvent.click(xmlButton())
+      expect(xmlBox().textContent).toBe(xmlOf('what the backend says'))
+    })
+  })
+
+  it('has the Text and XML buttons in the sidebar, below the tools', async () => {
     await openPage()
     await screen.findByRole('img')
 
@@ -3094,9 +3197,6 @@ describe('page view', () => {
     expect(
       within(group).getAllByRole('button').map((b) => b.textContent),
     ).toEqual(['Text', 'XML'])
-    for (const button of within(group).getAllByRole('button')) {
-      expect(button).toBeDisabled()
-    }
     expect(sidebar.lastElementChild).toBe(group)
   })
 

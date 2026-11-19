@@ -6,6 +6,7 @@ import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
 import Sidebar, { type SidebarView } from './Sidebar'
 import StructureView from './StructureView'
+import XmlView from './XmlView'
 
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
@@ -59,7 +60,8 @@ interface Props {
  * Right half: previous/next page and "Mark as ready" buttons, and the page
  * itself, read-only: its text as extracted by the backend, in which the
  * spelling is corrected, or (NER view) the named entities, recognized by the
- * backend. The Structure button of the sidebar shows the text in a way that
+ * backend. The Text button shows the text as it is, the XML button the page's
+ * XML (`xml_content_corrected`) with the markup on a grey background. The Structure button of the sidebar shows the text in a way that
  * the sections of the page can be marked in it.
  */
 export default function PageViewer({
@@ -86,8 +88,14 @@ export default function PageViewer({
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
   const misspelled = (words ?? []).filter((word) => !word.correct).length
-  // Kept while moving from page to page.
+  // Every page opens in the correction view: moving to another page goes back
+  // to it, wherever the user was.
   const [view, setView] = useState<View>('correction')
+  const [viewedPage, setViewedPage] = useState(page.number)
+  if (viewedPage !== page.number) {
+    setViewedPage(page.number)
+    setView('correction')
+  }
 
   return (
     <div className="viewer">
@@ -175,6 +183,20 @@ export default function PageViewer({
             onLegalSpelling={onLegalSpelling}
           />
         )}
+        {view === 'text' && (
+          <PageText
+            text={text}
+            words={null}
+            entities={null}
+            decisions={decisions}
+            busy={busy}
+            onConfirm={onConfirmEntity}
+            onReject={onRejectEntity}
+            onCorrectWord={onCorrectWord}
+            onLegalSpelling={onLegalSpelling}
+          />
+        )}
+        {view === 'xml' && <XmlView xml={page.content} />}
         {view === 'structure' && (
           <StructureView
             text={text}

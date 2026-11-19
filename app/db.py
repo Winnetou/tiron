@@ -54,8 +54,8 @@ CREATE TABLE IF NOT EXISTS pages (
     id uuid PRIMARY KEY,
     edition_id uuid NOT NULL REFERENCES editions (id),
     number integer NOT NULL CHECK (number >= 0),
-    raw_content text NOT NULL,
-    corrected_content text,
+    raw_ocr_content text NOT NULL,
+    xml_content_corrected text,
     scan_uri text,
     ready boolean NOT NULL DEFAULT false,
     UNIQUE (edition_id, number)
@@ -181,15 +181,15 @@ class Database:
     def create_page(self, page: Page) -> Page:
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content,"
+            " (id, edition_id, number, raw_ocr_content, xml_content_corrected,"
             " scan_uri, ready)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
             (
                 page.id,
                 page.edition_id,
                 page.number,
-                page.raw_content,
-                page.corrected_content,
+                page.raw_ocr_content,
+                page.xml_content_corrected,
                 page.scan_uri,
                 page.ready,
             ),
@@ -233,10 +233,10 @@ class Database:
             if row is None:
                 return None
             page = Page.model_validate(row)
-            corrected_content = replace(page.corrected_content or "")
+            xml_content_corrected = replace(page.xml_content_corrected or "")
             updated = self.conn.execute(
-                "UPDATE pages SET corrected_content = %s WHERE id = %s RETURNING *",
-                (corrected_content, page.id),
+                "UPDATE pages SET xml_content_corrected = %s WHERE id = %s RETURNING *",
+                (xml_content_corrected, page.id),
             ).fetchone()
             if record:
                 self.create_correction(
@@ -249,7 +249,7 @@ class Database:
         edition_id: UUID,
         number: int,
         *,
-        corrected_content: str | None = UNSET,
+        xml_content_corrected: str | None = UNSET,
         ready: bool = UNSET,
     ) -> Page | None:
         """Change the corrected content and/or the ready flag of a page, and
@@ -257,12 +257,12 @@ class Database:
 
         These are the only two columns that can be changed: the signature has
         no way to reach the others. An argument left out is not touched;
-        corrected_content=None clears the correction.
+        xml_content_corrected=None clears the correction.
         """
         changes = {
             column: value
             for column, value in (
-                ("corrected_content", corrected_content),
+                ("xml_content_corrected", xml_content_corrected),
                 ("ready", ready),
             )
             if value is not UNSET
@@ -290,24 +290,24 @@ class Database:
     def save_fetched_page(self, page: Page) -> Page:
         """Store a page freshly fetched from Polona and return the stored page.
 
-        If the page (same edition and number) is already stored, only the
-        fetched data (raw_content, scan_uri) is refreshed: its id, corrected
-        content and ready flag are kept, so re-fetching never loses work."""
+        If the page (same edition and number) is already stored, only scan_uri
+        is refreshed. raw_ocr_content is written once, when the page is first
+        fetched, and never changes after that; the id, xml_content_corrected
+        and ready flag are kept too, so re-fetching never loses work."""
         row = self.conn.execute(
             "INSERT INTO pages"
-            " (id, edition_id, number, raw_content, corrected_content,"
+            " (id, edition_id, number, raw_ocr_content, xml_content_corrected,"
             " scan_uri, ready)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (edition_id, number) DO UPDATE SET"
-            " raw_content = EXCLUDED.raw_content,"
             " scan_uri = EXCLUDED.scan_uri"
             " RETURNING *",
             (
                 page.id,
                 page.edition_id,
                 page.number,
-                page.raw_content,
-                page.corrected_content,
+                page.raw_ocr_content,
+                page.xml_content_corrected,
                 page.scan_uri,
                 page.ready,
             ),

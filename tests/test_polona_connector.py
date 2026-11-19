@@ -80,7 +80,7 @@ def test_fetch_page_returns_scan_url_and_content(polona):
 
     assert result == {
         "scan_uri": "https://polona.pl/iiif/3/img2/full/max/0/default.jpg",
-        "raw_content": "Ala ma\nkota.\n\nprzypis\n",
+        "raw_ocr_content": "Ala ma\nkota.\n\nprzypis\n",
     }
     assert calls == [
         f"https://polona.pl/api/library-object-query/digital-objects/{edition_id}/contents",
@@ -109,7 +109,7 @@ def test_fetch_page_without_ocr(polona):
 
     result = fetch_page(uuid4(), 0)
 
-    assert result["raw_content"] == ""
+    assert result["raw_ocr_content"] == ""
 
 
 def test_fetch_page_tiff_fallback(polona):

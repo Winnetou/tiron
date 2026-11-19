@@ -57,7 +57,7 @@ def _polona_errors() -> Iterator[None]:
 
 class PolonaPage(TypedDict):
     scan_uri: str
-    raw_content: str
+    raw_ocr_content: str
 
 
 class EditionMetadata(TypedDict):
@@ -175,7 +175,7 @@ def fetch_page(edition_id: UUID, page_number: int) -> PolonaPage:
     "Skan 100" in the viewer).
 
     Returns the full-resolution scan URL under "scan_uri" and the text of
-    the OCR layer under "raw_content" ("" if the page has no OCR layer).
+    the OCR layer under "raw_ocr_content" ("" if the page has no OCR layer).
 
     Raises PolonaError, and nothing else: with `not_found` set if the edition
     has no scans or image, the page is out of range, or polona.pl answers 404;
@@ -184,8 +184,8 @@ def fetch_page(edition_id: UUID, page_number: int) -> PolonaPage:
     entry = _get_page_entry(edition_id, page_number)
     scan_uri = _scan_url(entry)
     alto = _stream(entry, "OCR_ALTO")
-    raw_content = alto_to_text(_fetch(f"{BASE}/api{alto}")) if alto else ""
-    return {"scan_uri": scan_uri, "raw_content": raw_content}
+    raw_ocr_content = alto_to_text(_fetch(f"{BASE}/api{alto}")) if alto else ""
+    return {"scan_uri": scan_uri, "raw_ocr_content": raw_ocr_content}
 
 
 def _first(metadata: dict, *keys: str) -> str | None:
