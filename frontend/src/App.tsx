@@ -81,6 +81,19 @@ async function withText(page: Page): Promise<PageWithText> {
   }
 }
 
+/**
+ * The recognized entities and the ones the user added: where they overlap, the
+ * user's win. Null while nothing is known (no recognition, and none added).
+ */
+function withAdded(found: Entity[] | null, added: Entity[]): Entity[] | null {
+  if (found === null && added.length === 0) return null
+  const overlaps = (a: Entity, b: Entity) => a.start < b.end && b.start < a.end
+  return [
+    ...(found ?? []).filter((entity) => !added.some((mine) => overlaps(entity, mine))),
+    ...added,
+  ]
+}
+
 export default function App() {
   // An address that names a page (/editions/{uuid}/pages/{number}) opens it.
   const fromPath = pageFromPath(window.location.pathname)
@@ -96,6 +109,12 @@ export default function App() {
     text: string
     entities: Entity[]
   } | null>(null)
+  // The entities that the user marked in the text, which the recognition did
+  // not find. Like `recognized`, they belong to one text.
+  const [added, setAdded] = useState<{ text: string; entities: Entity[] }>({
+    text: '',
+    entities: [],
+  })
   const [recognizing, setRecognizing] = useState(false)
   // What was done last, to tell the user (not an error): cleared by the next request.
   const [notice, setNotice] = useState<string | null>(null)
@@ -182,6 +201,37 @@ export default function App() {
     return run(tagEntity(page.edition_id, page.number, entity, label), () =>
       decide(text, entity, { kind: 'confirmed', label }),
     )
+  }
+
+  /**
+   * The user marked some text as an entity that the recognition missed: the
+   * backend marks it in the XML like any other entity, and it is then shown
+   * (confirmed) with the recognized ones, also when the text is recognized again.
+   */
+  function createEntity(
+    page: Page,
+    text: string,
+    selection: TextSelection,
+    label: string,
+  ) {
+    const entity: Entity = {
+      text: selection.text,
+      label,
+      start: selection.start,
+      end: selection.end,
+    }
+    return run(tagEntity(page.edition_id, page.number, entity, label), () => {
+      setAdded((previous) => ({
+        text,
+        entities: [
+          ...(previous.text === text ? previous.entities : []).filter(
+            (other) => entityKey(other) !== entityKey(entity),
+          ),
+          entity,
+        ],
+      }))
+      decide(text, entity, { kind: 'confirmed', label })
+    })
   }
 
   /**
@@ -290,7 +340,10 @@ export default function App() {
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
         onMarkReady={() => markReady(page)}
-        entities={recognized?.text === text ? recognized.entities : null}
+        entities={withAdded(
+          recognized?.text === text ? recognized.entities : null,
+          added.text === text ? added.entities : [],
+        )}
         recognizing={recognizing}
         onRecognizeEntities={() => recognize(text)}
         decisions={decided.text === text ? decided.byKey : {}}
@@ -300,6 +353,9 @@ export default function App() {
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
+        onCreateEntity={(selection, label) =>
+          createEntity(page, text, selection, label)
+        }
         onMarkSection={(selection, section, n) =>
           markPageSection(page, selection, section, n)
         }

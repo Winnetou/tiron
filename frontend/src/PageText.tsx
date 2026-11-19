@@ -1,13 +1,29 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
+  ENTITY_LABELS,
   entityKey,
   labelOptions,
   type Decision,
   type Entity,
 } from './entities'
+import { selectionInText } from './selection'
 import { buildSegments, type Segment, type Word } from './segments'
+import type { TextSelection } from './sections'
 
 const NOT_NER = 'Not NER'
+
+/** About how wide the dialog of a new entity is, to keep it inside the box. */
+const POPUP_WIDTH = 300
+
+/** The dialog of a selection: where it is, in the box, and for which text. */
+interface Pending {
+  selection: TextSelection
+  /** The text the selection was made in: it is only valid for that text. */
+  forText: string
+  left: number
+  /** Below the selection, or above it for one in the lower half of the box. */
+  placement: { top: number } | { bottom: number }
+}
 
 interface EntityMarkProps {
   entity: Entity
@@ -208,6 +224,12 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /**
+   * The user selected some text and chose a label for it: an entity that the
+   * recognition did not find. Without it (outside the NER view) a selection
+   * does nothing.
+   */
+  onCreateEntity?: (selection: TextSelection, label: string) => void
 }
 
 /**
@@ -226,7 +248,64 @@ export default function PageText({
   onReject,
   onCorrectWord,
   onLegalSpelling,
+  onCreateEntity,
 }: Props) {
+  const wrap = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLPreElement>(null)
+  // The selection that a new entity can be made of, and the label chosen for it.
+  const [pending, setPending] = useState<Pending | null>(null)
+  const [label, setLabel] = useState('')
+  const active = pending && pending.forText === text ? pending : null
+
+  function clear() {
+    setPending(null)
+    setLabel('')
+  }
+
+  // Escape closes the dialog wherever the keyboard focus is.
+  useEffect(() => {
+    if (!active) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        clear()
+        window.getSelection()?.removeAllRanges()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [active])
+
+  /** Called when a selection may have been made: show the dialog for it. */
+  function read() {
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return clear()
+    }
+    const range = selection.getRangeAt(0)
+    const found = box.current && selectionInText(box.current, range, text)
+    if (!found || !wrap.current) return clear()
+
+    // jsdom (the tests) has no layout: then the dialog is at the corner
+    const rect = range.getBoundingClientRect?.() ?? new DOMRect()
+    const area = wrap.current.getBoundingClientRect()
+    const lower = rect.bottom - area.top > area.height / 2
+    setPending({
+      selection: found,
+      forText: text,
+      left: Math.max(0, Math.min(rect.right - area.left, area.width - POPUP_WIDTH)),
+      placement: lower
+        ? { bottom: Math.max(0, area.bottom - rect.top + 6) }
+        : { top: rect.bottom - area.top + 6 },
+    })
+    setLabel('')
+  }
+
+  function create() {
+    if (!active || !onCreateEntity || label === '') return
+    onCreateEntity(active.selection, label)
+    clear()
+    window.getSelection()?.removeAllRanges()
+  }
   // The word being edited. It is only valid for the words it was chosen from: a
   // new text has new words, and then nothing is being edited.
   const [editing, setEditing] = useState<{
@@ -306,9 +385,51 @@ export default function PageText({
     )
   }
 
-  return (
-    <pre className="page-box" role="region" aria-label="Page text" tabIndex={0}>
+  const pre = (
+    <pre
+      ref={box}
+      className="page-box"
+      role="region"
+      aria-label="Page text"
+      tabIndex={0}
+      onMouseUp={onCreateEntity ? read : undefined}
+      onKeyUp={onCreateEntity ? read : undefined}
+    >
       {items}
     </pre>
+  )
+  if (!onCreateEntity) return pre
+
+  return (
+    <div className="structure-wrap" ref={wrap}>
+      <p className="structure-hint">
+        Select some text to mark it as a named entity the recognition missed.
+      </p>
+      {pre}
+      {active && (
+        <div
+          role="dialog"
+          aria-label="Mark the selected text as a named entity"
+          className={`structure-popup ${'bottom' in active.placement ? 'above' : 'below'}`}
+          style={{ left: active.left, ...active.placement }}
+        >
+          <select
+            aria-label="Named entity"
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+          >
+            <option value="">Choose a label…</option>
+            {ENTITY_LABELS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={create} disabled={label === '' || busy}>
+            Confirm
+          </button>
+        </div>
+      )}
+    </div>
   )
 }

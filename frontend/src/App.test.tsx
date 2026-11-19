@@ -2662,6 +2662,207 @@ describe('correcting a word', () => {
   })
 })
 
+describe('an entity the recognition missed', () => {
+  const TEXT = 'Jan Kowalski mieszka w Paryżu od 1840 roku.'
+  const FOUND: Entity = {
+    text: 'Jan Kowalski',
+    label: 'persName',
+    start: 0,
+    end: 12,
+  }
+  const nerButton = () =>
+    screen.getByRole('button', { name: 'Named entity recognition' })
+  const dialog = () =>
+    screen.queryByRole('dialog', { name: 'Mark the selected text as a named entity' })
+  const dropdown = () => screen.getByRole('combobox', { name: 'Named entity' })
+  const tagCalls = () => calls.filter((c) => c.url.endsWith('/entities'))
+  const nerCalls = () => calls.filter((c) => c.url === '/ner')
+  const marks = () =>
+    Array.from(pageText().querySelectorAll('mark.entity')).map((m) => m.textContent)
+
+  async function openNer(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      ner: () => [FOUND],
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+  }
+
+  /** Select `selected` in the text (where it first is), as with the mouse. */
+  function select(selected: string) {
+    const box = pageText()
+    const from = TEXT.indexOf(selected)
+    const to = from + selected.length
+    // the text nodes of the text, without the ones in a dialog
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
+    const range = document.createRange()
+    let seen = 0
+    let node: Text | null
+    while ((node = walker.nextNode() as Text | null)) {
+      if (node.parentElement?.closest('[role="dialog"]')) continue
+      const end = seen + node.data.length
+      if (from >= seen && from < end) range.setStart(node, from - seen)
+      if (to > seen && to <= end) range.setEnd(node, to - seen)
+      seen = end
+    }
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.mouseUp(box)
+  }
+
+  afterEach(() => window.getSelection()?.removeAllRanges())
+
+  it('offers a dialog for a selection in the NER view', async () => {
+    await openNer()
+
+    select('Paryżu')
+
+    expect(dialog()).toBeInTheDocument()
+  })
+
+  it('has a dropdown of the labels, without "Not NER", and a disabled Confirm', async () => {
+    await openNer()
+
+    select('Paryżu')
+
+    expect(
+      within(dropdown())
+        .getAllByRole('option')
+        .map((o) => (o as HTMLOptionElement).value),
+    ).toEqual(['', 'persName', 'placeName', 'orgName', 'geogName', 'date', 'time'])
+    expect(screen.queryByRole('option', { name: 'Not NER' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+  })
+
+  it('does nothing in the correction view', async () => {
+    await openPage({ page: () => ({ content: xmlOf(TEXT) }) })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+
+    select('Paryżu')
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('sends the selected text, its place and the label to the backend', async () => {
+    await openNer()
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(tagCalls()).toHaveLength(1))
+    expect(tagCalls()[0].method).toBe('POST')
+    expect(tagCalls()[0].url).toBe(`/editions/${UUID}/pages/0/entities`)
+    expect(tagCalls()[0].body).toEqual({
+      start: TEXT.indexOf('Paryżu'),
+      end: TEXT.indexOf('Paryżu') + 6,
+      text: 'Paryżu',
+      label: 'placeName',
+    })
+  })
+
+  it('shows it as a confirmed entity with the others, and closes the dialog', async () => {
+    await openNer()
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski', 'Paryżu']))
+    expect(pageText().querySelectorAll('mark.confirmed')).toHaveLength(1)
+    expect(pageText().querySelector('mark.confirmed')?.textContent).toBe('Paryżu')
+    expect(dialog()).toBeNull()
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('stays when the text is recognized again', async () => {
+    await openNer()
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(marks()).toContain('Paryżu'))
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(nerCalls()).toHaveLength(2))
+    expect(marks()).toEqual(['Jan Kowalski', 'Paryżu'])
+    expect(pageText().querySelector('mark.confirmed')?.textContent).toBe('Paryżu')
+  })
+
+  it('wins over a recognized entity that it overlaps', async () => {
+    await openNer()
+
+    select('Kowalski mieszka')
+    await userEvent.selectOptions(dropdown(), 'persName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(marks()).toEqual(['Kowalski mieszka']))
+  })
+
+  it('works when nothing was recognized', async () => {
+    await openNer({ ner: () => [] }).catch(() => undefined)
+    await waitFor(() => expect(nerCalls()).toHaveLength(1))
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(marks()).toEqual(['Paryżu']))
+  })
+
+  it('shows the backend error and no entity when the backend refuses', async () => {
+    await openNer({ tag: () => new Error('The entity spans paragraphs') })
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('spans paragraphs')
+    expect(marks()).toEqual(['Jan Kowalski'])
+  })
+
+  it('closes with Escape, and sends nothing', async () => {
+    await openNer()
+    select('Paryżu')
+    expect(dialog()).toBeInTheDocument()
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(dialog()).toBeNull()
+    expect(tagCalls()).toHaveLength(0)
+  })
+
+  it('closes when the selection is cleared by a click', async () => {
+    await openNer()
+    select('Paryżu')
+
+    window.getSelection()!.removeAllRanges()
+    fireEvent.mouseUp(pageText())
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('works while the dialog of a recognized entity is open', async () => {
+    await openNer()
+    await userEvent.hover(pageText().querySelector('mark.entity')!)
+    expect(screen.getByRole('dialog', { name: 'Named entity: Jan Kowalski' })).toBeInTheDocument()
+
+    select('Paryżu')
+
+    expect(dialog()).toBeInTheDocument()
+    await userEvent.selectOptions(dropdown(), 'placeName')
+    await userEvent.click(within(dialog()!).getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(tagCalls()[0].body).toMatchObject({
+      start: TEXT.indexOf('Paryżu'),
+      end: TEXT.indexOf('Paryżu') + 6,
+    }))
+  })
+})
+
 describe('legal spellings', () => {
   const TEXT = 'Ala ma kota, a jey tey nie ma. Jey!'
   const WRONG = ['jey', 'Jey', 'tey']

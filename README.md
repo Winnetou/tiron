@@ -461,6 +461,17 @@ sends a new request, and clicking the button while the XML is displayed switches
 to the text. The first click is as fast as any other, because the backend loads
 its model when it starts; the button pulses while a request is running.
 
+In the NER view the user can also mark an entity that the recognition missed:
+select some of the text, as in the Structure view, and a dialog appears next to
+the selection with a dropdown of the labels (`persName`, `placeName`, `orgName`,
+`geogName`, `date`, `time`; no "Not NER", which makes no sense here) and a Confirm
+button. Confirm sends it to `POST /editions/{id}/pages/{n}/entities`, like a
+recognized entity that was confirmed, and the backend marks it in the XML. It is
+shown in green with the recognized entities, and stays when the text is
+recognized again; if it overlaps a recognized entity, it replaces it. The
+dialog of a recognized entity may be open meanwhile: its text is not counted in
+the offsets of the selection.
+
 **Confirming or rejecting an entity.** When the mouse is over a red entity (or
 it has the keyboard focus), a small dialog appears next to it. It lists every
 label the model can give (`persName`, `placeName`, `orgName`, `geogName`,
