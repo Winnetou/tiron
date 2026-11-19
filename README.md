@@ -346,6 +346,17 @@ added). Nothing else is changed: this only records the spelling.
   keeps a word that was made legal from being red again on the next page of the
   edition, or after a reload. Nothing lists them yet.
 
+### The entities marked in a page
+
+`POST /tei/entities` takes `{"xml": "..."}` like `POST /tei/text` (422 in the same
+cases) and lists the named entities that are marked in it: every `<persName>`,
+`<placeName>`, `<orgName>`, `<geogName>`, `<date>` and `<time>` element, whoever
+put it there, in the order of the document. Each is like an entity that
+`POST /ner` finds: `text`, `label` (the name of the element), and `start` and
+`end` (offsets into the text that `/tei/text` gives, counted the way Python
+does). Spaces and line breaks at its ends are not part of it. Nothing is stored.
+This is how a page that is opened again shows what was confirmed before.
+
 ### The sections marked in a page
 
 `POST /tei/sections` takes `{"xml": "..."}` like `POST /tei/text` (422 in the same
@@ -461,16 +472,21 @@ sends a new request, and clicking the button while the XML is displayed switches
 to the text. The first click is as fast as any other, because the backend loads
 its model when it starts; the button pulses while a request is running.
 
+The entities that are marked in the XML are shown as confirmed (green) in the NER
+view, also after the page is opened again: when the view is opened (the NER button)
+and after each confirmation, the frontend asks `POST /tei/entities` for the XML of
+the page, next to the recognition. Every marked entity is shown, whoever marked it,
+and where one overlaps a recognized entity, the marked one wins. They are not shown
+in the correction view.
+
 In the NER view the user can also mark an entity that the recognition missed:
 select some of the text, as in the Structure view, and a dialog appears next to
 the selection with a dropdown of the labels (`persName`, `placeName`, `orgName`,
 `geogName`, `date`, `time`; no "Not NER", which makes no sense here) and a Confirm
 button. Confirm sends it to `POST /editions/{id}/pages/{n}/entities`, like a
-recognized entity that was confirmed, and the backend marks it in the XML. It is
-shown in green with the recognized entities, and stays when the text is
-recognized again; if it overlaps a recognized entity, it replaces it. The
-dialog of a recognized entity may be open meanwhile: its text is not counted in
-the offsets of the selection.
+recognized entity that was confirmed, and the backend marks it in the XML; it is
+then read back from the XML and shown in green. The dialog of a recognized entity
+may be open meanwhile: its text is not counted in the offsets of the selection.
 
 **Confirming or rejecting an entity.** When the mouse is over a red entity (or
 it has the keyboard focus), a small dialog appears next to it. It lists every

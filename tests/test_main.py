@@ -1826,6 +1826,44 @@ class TestMarkPageSection:
         assert "SectionMark" in schema["components"]["schemas"]
 
 
+class TestTeiEntities:
+    def test_lists_the_entities_marked_in_the_xml(self):
+        xml = str(text_to_tei_xml("Jan Kowalski mieszka w Paryżu."))
+        xml = xml.replace("Jan Kowalski", "<persName>Jan Kowalski</persName>")
+        xml = xml.replace("Paryżu", "<placeName>Paryżu</placeName>")
+
+        response = client.post("/tei/entities", json={"xml": xml})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "entities": [
+                {"text": "Jan Kowalski", "label": "persName", "start": 0, "end": 12},
+                {"text": "Paryżu", "label": "placeName", "start": 23, "end": 29},
+            ]
+        }
+
+    def test_no_entities(self):
+        xml = str(text_to_tei_xml("Ala"))
+
+        assert client.post("/tei/entities", json={"xml": xml}).json() == {
+            "entities": []
+        }
+
+    def test_xml_that_is_not_tei_is_422(self):
+        response = client.post("/tei/entities", json={"xml": "<a/>"})
+
+        assert response.status_code == 422
+        assert "TEI" in response.json()["detail"]
+
+    def test_stores_nothing(self, monkeypatch):
+        update = mock.Mock()
+        monkeypatch.setattr(db, "update_page", update)
+
+        client.post("/tei/entities", json={"xml": str(text_to_tei_xml("Ala"))})
+
+        update.assert_not_called()
+
+
 class TestTeiSections:
     def test_lists_the_sections_marked_in_the_xml(self):
         xml = str(text_to_tei_xml("84 KATEDRA\n\ncle"))

@@ -89,6 +89,10 @@ class TeiSections(BaseModel):
     sections: list[SectionSpan]
 
 
+class TeiEntities(BaseModel):
+    entities: list[Entity]
+
+
 class NerRequest(BaseModel):
     text: str = Field(max_length=100_000)
 

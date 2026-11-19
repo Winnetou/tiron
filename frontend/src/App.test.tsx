@@ -23,6 +23,32 @@ const xmlOf = (text: string) =>
 const textOf = (xml: string) =>
   xml.match(/<p>([\s\S]*)<\/p>/)![1].replace(/<[^>]+>/g, '') // tags are not text, and the text may have several lines
 
+/**
+ * What the backend's POST /tei/entities answers for such XML: the elements
+ * <persName>, <placeName>, ... with their place in the text.
+ */
+const entitiesOf = (xml: string): Entity[] => {
+  const entities: Entity[] = []
+  let offset = 0
+  const content = xml.match(/<p>([\s\S]*)<\/p>/)![1]
+  const plain = [...content.replace(/<[^>]+>/g, '')]
+  const open: { label: string; start: number }[] = []
+  for (const token of content.split(/(<[^>]+>)/)) {
+    const tag = token.match(/^<(\/?)(persName|placeName|orgName|geogName|date|time)\b/)
+    if (tag && !tag[1]) open.push({ label: tag[2], start: offset })
+    else if (tag) {
+      const { label, start } = open.pop()!
+      entities.push({
+        label,
+        start,
+        end: offset,
+        text: plain.slice(start, offset).join(''),
+      })
+    } else if (!token.startsWith('<')) offset += [...token].length
+  }
+  return entities.sort((a, b) => a.start - b.start)
+}
+
 const PAGE: Page = {
   id: 'a8ae3c6d-c4cf-4d11-82d0-112582bb355f',
   edition_id: UUID,
@@ -66,6 +92,8 @@ interface Options {
   tei?: (xml: string) => { text: string } | Error
   /** Answer of GET /editions?page=N; defaults to 250 editions. */
   editions?: (page: number) => { items: string[]; pages: number } | Error
+  /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
+  marked?: (xml: string) => Entity[] | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -172,6 +200,12 @@ function fakeBackend(options: Options = {}) {
         ? options.tei(body.xml)
         : { text: textOf(body.xml) }
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url === '/tei/entities') {
+      const answer = options.marked ? options.marked(body.xml) : entitiesOf(body.xml)
+      return answer instanceof Error
+        ? failure(422, answer)
+        : reply(true, 200, { entities: answer })
     }
     if (url === '/tei/sections') {
       const answer = options.sections ? options.sections(body.xml) : []
@@ -716,7 +750,7 @@ describe('confirming or rejecting an entity', () => {
   const mark = (text: string) =>
     screen.getByText(text, { selector: 'mark' }) as HTMLElement
   const dialog = () => screen.queryByRole('dialog')
-  const tagCalls = () => calls.filter((c) => c.url.endsWith('/entities'))
+  const tagCalls = () => calls.filter((c) => /\/pages\/\d+\/entities$/.test(c.url))
   const hover = (text: string) => userEvent.hover(mark(text))
 
   async function recognized(extra: Options = {}) {
@@ -1012,6 +1046,7 @@ describe('confirming or rejecting an entity', () => {
         `POST /editions/${UUID}/pages/0/entities`,
         'POST /tei/text', // the backend extracts the text of the new XML
         'POST /spellcheck', // ... and checks it
+        'POST /tei/entities', // ... and reads the entities marked in it
       ])
     })
 
@@ -2675,7 +2710,7 @@ describe('an entity the recognition missed', () => {
   const dialog = () =>
     screen.queryByRole('dialog', { name: 'Mark the selected text as a named entity' })
   const dropdown = () => screen.getByRole('combobox', { name: 'Named entity' })
-  const tagCalls = () => calls.filter((c) => c.url.endsWith('/entities'))
+  const tagCalls = () => calls.filter((c) => /\/pages\/\d+\/entities$/.test(c.url))
   const nerCalls = () => calls.filter((c) => c.url === '/ner')
   const marks = () =>
     Array.from(pageText().querySelectorAll('mark.entity')).map((m) => m.textContent)
@@ -2860,6 +2895,122 @@ describe('an entity the recognition missed', () => {
       start: TEXT.indexOf('Paryżu'),
       end: TEXT.indexOf('Paryżu') + 6,
     }))
+  })
+})
+
+describe('entities that are marked in the XML already', () => {
+  const TEXT = 'Jan Kowalski mieszka w Paryżu od 1840 roku.'
+  const MARKED_XML = xmlOf(
+    'Jan Kowalski mieszka w <placeName>Paryżu</placeName> od <date when="1840">1840</date> roku.',
+  )
+  const nerButton = () =>
+    screen.getByRole('button', { name: 'Named entity recognition' })
+  const marks = () =>
+    Array.from(pageText().querySelectorAll('mark.entity')).map((m) => m.textContent)
+  const confirmed = () =>
+    Array.from(pageText().querySelectorAll('mark.confirmed')).map((m) => m.textContent)
+  const FOUND: Entity = { text: 'Jan Kowalski', label: 'persName', start: 0, end: 12 }
+
+  async function reopen(extra: Options = {}) {
+    // as after a refresh: the XML has the tags, nothing is known in the browser
+    await openPage({
+      page: () => ({ content: MARKED_XML }),
+      ner: () => [FOUND],
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+
+  it('are shown as confirmed in the NER view, with the recognized ones', async () => {
+    await reopen()
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() =>
+      expect(marks()).toEqual(['Jan Kowalski', 'Paryżu', '1840']),
+    )
+    expect(confirmed()).toEqual(['Paryżu', '1840'])
+  })
+
+  it('are asked of the backend, for the XML of the page, when the NER view is opened', async () => {
+    await reopen()
+    calls.length = 0
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toHaveLength(3))
+    const asked = calls.filter((c) => c.url === '/tei/entities')
+    expect(asked).toHaveLength(1)
+    expect(asked[0].body).toEqual({ xml: MARKED_XML })
+  })
+
+  it('are not shown in the correction view', async () => {
+    await reopen()
+
+    expect(pageText().querySelectorAll('mark')).toHaveLength(0)
+    expect(calls.filter((c) => c.url === '/tei/entities')).toHaveLength(0)
+  })
+
+  it('are shown whatever tag they have, also one that was not made by the app', async () => {
+    await reopen()
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(confirmed()).toContain('1840'))
+  })
+
+  it('win over a recognized entity that they overlap', async () => {
+    await reopen({
+      ner: () => [{ text: 'w Paryżu od', label: 'placeName', start: 20, end: 31 }],
+    })
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Paryżu', '1840']))
+  })
+
+  it('have no dialog: they are confirmed', async () => {
+    await reopen()
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(confirmed()).toHaveLength(2))
+
+    await userEvent.hover(pageText().querySelectorAll('mark.confirmed')[0])
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('are shown when the recognition fails', async () => {
+    await reopen({ ner: () => new Error('The model is not installed') })
+
+    await userEvent.click(nerButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('not installed')
+    await waitFor(() => expect(confirmed()).toEqual(['Paryżu', '1840']))
+  })
+
+  it('are left out, and the rest works, when the backend cannot read them', async () => {
+    await reopen({ marked: () => new Error('The XML is not TEI') })
+
+    await userEvent.click(nerButton())
+
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
+    expect(confirmed()).toEqual([])
+  })
+
+  it('a new entity is read back from the XML that the backend returns', async () => {
+    await reopen()
+    await userEvent.click(nerButton())
+    await waitFor(() => expect(marks()).toHaveLength(3))
+    calls.length = 0
+
+    // confirm the recognized "Jan Kowalski"
+    await userEvent.hover(pageText().querySelector('mark.entity')!)
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirm' }),
+    )
+
+    await waitFor(() => expect(confirmed()).toEqual(['Jan Kowalski', 'Paryżu', '1840']))
+    expect(calls.filter((c) => c.url === '/tei/entities')).toHaveLength(1)
   })
 })
 

@@ -9,6 +9,7 @@ import {
   recognizeEntities,
   spellcheck,
   tagEntity,
+  teiEntities,
   teiToText,
   updatePage,
   type Page,
@@ -82,15 +83,16 @@ async function withText(page: Page): Promise<PageWithText> {
 }
 
 /**
- * The recognized entities and the ones the user added: where they overlap, the
- * user's win. Null while nothing is known (no recognition, and none added).
+ * The recognized entities and the ones marked in the XML: where they overlap,
+ * the XML wins, as a person marked it. Null while nothing is known (no
+ * recognition, and nothing marked).
  */
-function withAdded(found: Entity[] | null, added: Entity[]): Entity[] | null {
-  if (found === null && added.length === 0) return null
+function withMarked(found: Entity[] | null, marked: Entity[]): Entity[] | null {
+  if (found === null && marked.length === 0) return null
   const overlaps = (a: Entity, b: Entity) => a.start < b.end && b.start < a.end
   return [
-    ...(found ?? []).filter((entity) => !added.some((mine) => overlaps(entity, mine))),
-    ...added,
+    ...(found ?? []).filter((entity) => !marked.some((mine) => overlaps(entity, mine))),
+    ...marked,
   ]
 }
 
@@ -109,12 +111,11 @@ export default function App() {
     text: string
     entities: Entity[]
   } | null>(null)
-  // The entities that the user marked in the text, which the recognition did
-  // not find. Like `recognized`, they belong to one text.
-  const [added, setAdded] = useState<{ text: string; entities: Entity[] }>({
-    text: '',
-    entities: [],
-  })
+  // The entities that are marked in the XML, as the backend reads them from it,
+  // with the XML they are of: they are only shown for that same XML.
+  const [marked, setMarked] = useState<{ xml: string; entities: Entity[] } | null>(
+    null,
+  )
   const [recognizing, setRecognizing] = useState(false)
   // What was done last, to tell the user (not an error): cleared by the next request.
   const [notice, setNotice] = useState<string | null>(null)
@@ -169,10 +170,25 @@ export default function App() {
     })
   }
 
-  /** Send the text of the page to the backend and keep the entities it finds. */
-  async function recognize(text: string) {
+  /**
+   * Ask the backend which entities are marked in the XML, to show them as
+   * confirmed. If it cannot say, they are just not shown.
+   */
+  function loadMarked(xml: string) {
+    teiEntities(xml)
+      .then((entities) => setMarked({ xml, entities }))
+      .catch(() => setMarked(null))
+  }
+
+  /**
+   * Send the text of the page to the backend and keep the entities it finds,
+   * and read the ones that are marked in the XML already: they are shown after
+   * a refresh too.
+   */
+  async function recognize(page: Page, text: string) {
     setRecognizing(true)
     setActionError(null)
+    loadMarked(page.content)
     try {
       setRecognized({ text, entities: await recognizeEntities(text) })
     } catch (error) {
@@ -198,40 +214,27 @@ export default function App() {
    * change, so the entities stay as they are; the XML view shows the new tag.
    */
   function confirmEntity(page: Page, text: string, entity: Entity, label: string) {
-    return run(tagEntity(page.edition_id, page.number, entity, label), () =>
-      decide(text, entity, { kind: 'confirmed', label }),
-    )
+    return run(tagEntity(page.edition_id, page.number, entity, label), (tagged) => {
+      decide(text, entity, { kind: 'confirmed', label })
+      loadMarked(tagged.content)
+    })
   }
 
   /**
    * The user marked some text as an entity that the recognition missed: the
-   * backend marks it in the XML like any other entity, and it is then shown
-   * (confirmed) with the recognized ones, also when the text is recognized again.
+   * backend marks it in the XML like any other entity, and it is then read from
+   * the XML and shown (confirmed) with the recognized ones.
    */
-  function createEntity(
-    page: Page,
-    text: string,
-    selection: TextSelection,
-    label: string,
-  ) {
+  function createEntity(page: Page, selection: TextSelection, label: string) {
     const entity: Entity = {
       text: selection.text,
       label,
       start: selection.start,
       end: selection.end,
     }
-    return run(tagEntity(page.edition_id, page.number, entity, label), () => {
-      setAdded((previous) => ({
-        text,
-        entities: [
-          ...(previous.text === text ? previous.entities : []).filter(
-            (other) => entityKey(other) !== entityKey(entity),
-          ),
-          entity,
-        ],
-      }))
-      decide(text, entity, { kind: 'confirmed', label })
-    })
+    return run(tagEntity(page.edition_id, page.number, entity, label), (tagged) =>
+      loadMarked(tagged.content),
+    )
   }
 
   /**
@@ -328,6 +331,18 @@ export default function App() {
 
   if (status.kind === 'done') {
     const { page, text, textError, words, spellError } = status
+    // What is marked in this page's XML counts as confirmed, whatever was
+    // decided: the XML is what a person made.
+    const markedHere = marked?.xml === page.content ? marked.entities : []
+    const decisionsHere: Record<string, Decision> = {
+      ...(decided.text === text ? decided.byKey : {}),
+      ...Object.fromEntries(
+        markedHere.map((entity) => [
+          entityKey(entity),
+          { kind: 'confirmed', label: entity.label } as const,
+        ]),
+      ),
+    }
     return (
       <PageViewer
         page={page}
@@ -340,13 +355,13 @@ export default function App() {
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
         onMarkReady={() => markReady(page)}
-        entities={withAdded(
+        entities={withMarked(
           recognized?.text === text ? recognized.entities : null,
-          added.text === text ? added.entities : [],
+          markedHere,
         )}
         recognizing={recognizing}
-        onRecognizeEntities={() => recognize(text)}
-        decisions={decided.text === text ? decided.byKey : {}}
+        onRecognizeEntities={() => recognize(page, text)}
+        decisions={decisionsHere}
         onConfirmEntity={(entity, label) =>
           confirmEntity(page, text, entity, label)
         }
@@ -354,7 +369,7 @@ export default function App() {
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
         onCreateEntity={(selection, label) =>
-          createEntity(page, text, selection, label)
+          createEntity(page, selection, label)
         }
         onMarkSection={(selection, section, n) =>
           markPageSection(page, selection, section, n)
