@@ -3014,6 +3014,187 @@ describe('entities that are marked in the XML already', () => {
   })
 })
 
+describe('the scan', () => {
+  const scan = () => screen.getByRole('img', { name: 'Scan of page 0' })
+  const spinner = () => screen.queryByRole('progressbar', { name: 'Loading the scan' })
+
+  it('shows a loading indicator until the image has loaded', async () => {
+    await openPage()
+    await screen.findByRole('img')
+
+    expect(spinner()).toBeInTheDocument()
+    expect(spinner()).toHaveTextContent('Loading the scan')
+
+    fireEvent.load(scan())
+
+    expect(spinner()).toBeNull()
+    expect(scan()).toBeVisible()
+  })
+
+  it('shows it again for the scan of the next page, until that has loaded', async () => {
+    await openPage({
+      page: (n) => ({ scan_uri: `https://polona.pl/scan-${n}.jpg` }),
+    })
+    fireEvent.load(await screen.findByRole('img', { name: 'Scan of page 0' }))
+    expect(spinner()).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    fireEvent.load(await screen.findByRole('img', { name: 'Scan of page 1' }))
+    expect(spinner()).toBeNull()
+  })
+
+  it('is back for the next page while its scan is still coming', async () => {
+    await openPage({
+      page: (n) => ({ scan_uri: `https://polona.pl/scan-${n}.jpg` }),
+    })
+    fireEvent.load(await screen.findByRole('img', { name: 'Scan of page 0' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    await screen.findByRole('img', { name: 'Scan of page 1' })
+    expect(spinner()).toBeInTheDocument()
+  })
+
+  it('stays while the image has not loaded, whatever else is done to the page', async () => {
+    await openPage()
+    await screen.findByRole('img')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+
+    expect(spinner()).toBeInTheDocument()
+  })
+
+  it('says so, and has no spinner, when the image cannot be loaded', async () => {
+    await openPage()
+    await screen.findByRole('img')
+
+    fireEvent.error(scan())
+
+    expect(spinner()).toBeNull()
+    expect(await screen.findByRole('alert')).toHaveTextContent('scan could not be loaded')
+  })
+
+  it('has no spinner for a page without a scan', async () => {
+    await openPage({ page: () => ({ scan_uri: null }) })
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+
+    expect(spinner()).toBeNull()
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+})
+
+describe('scrolling the scan and the text together', () => {
+  /**
+   * Give an element a size and a scroll position, which jsdom does not have. As
+   * in a browser, a change of the position is followed by a scroll event.
+   */
+  function layout(element: Element, scrollHeight: number, clientHeight: number) {
+    let scrollTop = 0
+    Object.defineProperties(element, {
+      scrollHeight: { value: scrollHeight, configurable: true },
+      clientHeight: { value: clientHeight, configurable: true },
+      scrollTop: {
+        get: () => scrollTop,
+        set: (value: number) => {
+          if (value === scrollTop) return
+          scrollTop = value
+          element.dispatchEvent(new Event('scroll'))
+        },
+        configurable: true,
+      },
+    })
+  }
+  const scanHalf = () => document.querySelectorAll('.viewer-half')[0] as HTMLElement
+
+  async function open() {
+    await openPage()
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    layout(scanHalf(), 2000, 500) // 1500 to scroll
+    layout(pageText(), 1000, 400) // 600 to scroll
+  }
+
+  it('scrolling the scan scrolls the text by the same part of the way', async () => {
+    await open()
+
+    scanHalf().scrollTop = 750 // half way
+    expect(pageText().scrollTop).toBe(300)
+
+    scanHalf().scrollTop = 1500 // to the end
+    expect(pageText().scrollTop).toBe(600)
+
+    scanHalf().scrollTop = 0
+    expect(pageText().scrollTop).toBe(0)
+  })
+
+  it('scrolling the text scrolls the scan by the same part of the way', async () => {
+    await open()
+
+    pageText().scrollTop = 300 // half way
+    expect(scanHalf().scrollTop).toBe(750)
+
+    pageText().scrollTop = 600 // to the end
+    expect(scanHalf().scrollTop).toBe(1500)
+
+    pageText().scrollTop = 0
+    expect(scanHalf().scrollTop).toBe(0)
+  })
+
+  it('does not bounce: the one that was moved does not move the other back', async () => {
+    await open()
+    // 1/3 of the text is 200 of 600, and 1/3 of the scan is 500 of 1500
+    const scans: number[] = []
+    scanHalf().addEventListener('scroll', () => scans.push(scanHalf().scrollTop))
+
+    pageText().scrollTop = 200
+
+    expect(scanHalf().scrollTop).toBe(500)
+    expect(pageText().scrollTop).toBe(200)
+    expect(scans).toEqual([500]) // moved once, and not again by the echo
+  })
+
+  it('keeps following after an echo, in either direction', async () => {
+    await open()
+
+    pageText().scrollTop = 300
+    scanHalf().scrollTop = 300 // a fifth of the way
+    expect(pageText().scrollTop).toBe(120)
+    pageText().scrollTop = 60 // a tenth of the way
+    expect(scanHalf().scrollTop).toBe(150)
+  })
+
+  it('also moves the XML view, which is another box', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+    const xml = screen.getByRole('region', { name: 'Page XML' })
+    layout(xml, 3000, 400) // 2600 to scroll
+
+    scanHalf().scrollTop = 300 // a fifth of the way
+    expect(xml.scrollTop).toBe(520)
+
+    xml.scrollTop = 1300 // half way
+    expect(scanHalf().scrollTop).toBe(750)
+  })
+
+  it('does nothing when the text has nothing to scroll', async () => {
+    await open()
+    layout(pageText(), 300, 400)
+
+    scanHalf().scrollTop = 750
+
+    expect(pageText().scrollTop).toBe(0)
+  })
+
+  it('does not move the scan when it has nothing to scroll', async () => {
+    await open()
+    layout(scanHalf(), 400, 500)
+
+    pageText().scrollTop = 300
+
+    expect(scanHalf().scrollTop).toBe(0)
+  })
+})
+
 describe('legal spellings', () => {
   const TEXT = 'Ala ma kota, a jey tey nie ma. Jey!'
   const WRONG = ['jey', 'Jey', 'tey']
