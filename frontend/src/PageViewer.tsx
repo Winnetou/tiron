@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Page } from './api'
-import { entityKey, type Decision, type Entity } from './entities'
+import type { Decision, Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
@@ -87,11 +87,7 @@ export default function PageViewer({
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
-  // The entities that are still shown: not the ones rejected as "Not NER".
   const misspelled = (words ?? []).filter((word) => !word.correct).length
-  const entityCount = (entities ?? []).filter(
-    (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
-  ).length
   // Kept while moving from page to page.
   const [view, setView] = useState<View>('text')
 
@@ -153,18 +149,6 @@ export default function PageViewer({
           >
             {page.ready ? 'Ready' : 'Mark as ready'}
           </button>
-          {words && (
-            <span className="spell-count" aria-live="polite">
-              {misspelled === 0 ? 'No misspelled words' : `${misspelled} misspelled`}
-            </span>
-          )}
-          {entities && (
-            <span className="entity-count" aria-live="polite">
-              {entityCount === 0
-                ? 'No entities'
-                : `${entityCount} ${entityCount === 1 ? 'entity' : 'entities'}`}
-            </span>
-          )}
           <div className="view-switch" role="group" aria-label="Show">
             {(['text', 'xml'] as const).map((choice) => (
               <button
@@ -195,8 +179,8 @@ export default function PageViewer({
         {(view === 'text' || view === 'ner') && (
           <PageText
             text={text}
-            words={view === 'text' ? words : undefined}
-            entities={view === 'ner' ? entities : undefined}
+            words={view === 'text' ? words : null}
+            entities={view === 'ner' ? entities : null}
             decisions={decisions}
             busy={busy}
             onConfirm={onConfirmEntity}

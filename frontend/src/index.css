@@ -209,23 +209,8 @@ button {
   font-weight: 600;
 }
 
-.spell-count,
-.entity-count {
-  font-size: 0.85rem;
-  color: #c00000;
-}
-
-.spell-count {
+.view-switch {
   margin-left: auto;
-}
-
-.entity-count {
-  margin-left: 0.75rem;
-}
-
-.spell-count + .view-switch,
-.entity-count + .view-switch {
-  margin-left: 0.75rem;
 }
 
 /* Shown while a recognition request is running. */
