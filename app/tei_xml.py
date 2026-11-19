@@ -1,6 +1,7 @@
 """Conversion between page text and TEI XML, using delb."""
 
 import re
+from collections.abc import Callable
 from typing import Any, get_args
 from xml.sax.saxutils import quoteattr
 
@@ -236,6 +237,44 @@ def _is_section(node: TagNode) -> bool:
     return name in {"fw", "noteGrp", "note"}
 
 
+def _marked_elements(
+    text_element: TagNode, wanted: Callable[[TagNode], bool]
+) -> tuple[str, list[tuple[TagNode, int, int]]]:
+    """The text of a <text>, and the elements in it that `wanted` picks, in the
+    order of the document (outer ones first), each with the characters of the
+    text that it covers: `start` to `end`, in code points. An element without
+    text is left out."""
+    text, sources = _extract(text_element)
+    first: dict[int, int] = {}
+    last: dict[int, int] = {}
+    for index, source in enumerate(sources):
+        if source is not None:
+            key = id(source[0])
+            first.setdefault(key, index)
+            last[key] = index
+
+    found: list[tuple[TagNode, int, int]] = []
+
+    def walk(node: TagNode) -> None:
+        for child in node.iterate_children():
+            if not isinstance(child, TagNode):
+                continue
+            if wanted(child):
+                keys = [id(t) for t in _text_nodes(child) if id(t) in first]
+                if keys:
+                    found.append(
+                        (
+                            child,
+                            min(first[k] for k in keys),
+                            max(last[k] for k in keys) + 1,
+                        )
+                    )
+            walk(child)
+
+    walk(text_element)
+    return text, found
+
+
 def tei_xml_sections(xml: str) -> list[dict[str, Any]]:
     """The sections of a page that are marked in the XML (the elements that
     mark_section makes: <fw>, a <div> of type "toc", <noteGrp> and <note>), in
@@ -248,41 +287,57 @@ def tei_xml_sections(xml: str) -> list[dict[str, Any]]:
 
     Raises InvalidTei if the XML is not a TEI document (see _parse_tei).
     """
-    text_element = _text_element(_parse_tei(xml))
-    _, sources = _extract(text_element)
-    first: dict[int, int] = {}
-    last: dict[int, int] = {}
-    for index, source in enumerate(sources):
-        if source is not None:
-            key = id(source[0])
-            first.setdefault(key, index)
-            last[key] = index
+    _, found = _marked_elements(_text_element(_parse_tei(xml)), _is_section)
+    return [
+        {
+            "start": start,
+            "end": end,
+            "open": f"<{node.local_name}"
+            + "".join(
+                f" {name}={quoteattr(value)}"
+                for name, value in _attributes(node).items()
+            )
+            + ">",
+            "close": f"</{node.local_name}>",
+        }
+        for node, start, end in found
+    ]
 
-    sections: list[dict[str, Any]] = []
 
-    def walk(node: TagNode) -> None:
-        for child in node.iterate_children():
-            if not isinstance(child, TagNode):
-                continue
-            if _is_section(child):
-                keys = [id(t) for t in _text_nodes(child) if id(t) in first]
-                if keys:
-                    attributes = "".join(
-                        f" {name}={quoteattr(value)}"
-                        for name, value in _attributes(child).items()
-                    )
-                    sections.append(
-                        {
-                            "start": min(first[k] for k in keys),
-                            "end": max(last[k] for k in keys) + 1,
-                            "open": f"<{child.local_name}{attributes}>",
-                            "close": f"</{child.local_name}>",
-                        }
-                    )
-            walk(child)
+def tei_xml_entities(xml: str) -> list[dict[str, Any]]:
+    """The named entities that are marked in the XML: every element that
+    tag_text_range can make (<persName>, <placeName>, <orgName>, <geogName>,
+    <date>, <time>), whoever put it there, in the order of the document.
 
-    walk(text_element)
-    return sections
+    Each is the `label` (the element's name), its `text`, and `start` and `end`,
+    the characters of the text that tei_xml_to_text gives for the same XML (in
+    code points), so `text[start:end]` is the entity's `text`, like an entity
+    that the recognition finds. Spaces and line breaks at its ends are left out,
+    as tag_text_range leaves them outside the element. An element without text
+    is left out.
+
+    Raises InvalidTei if the XML is not a TEI document (see _parse_tei).
+    """
+    labels = set(get_args(EntityLabel))
+    text, found = _marked_elements(
+        _text_element(_parse_tei(xml)), lambda node: node.local_name in labels
+    )
+    entities: list[dict[str, Any]] = []
+    for node, start, end in found:
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start < end:
+            entities.append(
+                {
+                    "label": node.local_name,
+                    "text": text[start:end],
+                    "start": start,
+                    "end": end,
+                }
+            )
+    return entities
 
 
 class TextChanged(ValueError):

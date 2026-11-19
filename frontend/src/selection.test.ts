@@ -171,4 +171,57 @@ describe('selectionInText', () => {
     })
     selection.removeAllRanges()
   })
+
+  describe('with a dialog in the container', () => {
+    /** "Ala " + <mark>ma<dialog>XYZ</dialog></mark> + " kota" */
+    function withDialog() {
+      const pre = document.createElement('pre')
+      pre.append('Ala ')
+      const mark = document.createElement('mark')
+      mark.append('ma')
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      dialog.textContent = 'XYZ'
+      mark.append(dialog)
+      pre.append(mark, ' kota')
+      document.body.append(pre)
+      box = pre
+      return { pre, dialog }
+    }
+
+    it('does not count the text of the dialog', () => {
+      const { pre } = withDialog()
+      const range = document.createRange()
+      range.setStart(pre.lastChild!, 1) // "kota", after the dialog
+      range.setEnd(pre.lastChild!, 5)
+
+      expect(selectionInText(pre, range, 'Ala ma kota')).toEqual({
+        start: 7,
+        end: 11,
+        text: 'kota',
+      })
+    })
+
+    it('finds a selection that ends in the text before the dialog', () => {
+      const { pre } = withDialog()
+      const range = document.createRange()
+      range.setStart(pre.firstChild!, 0)
+      range.setEnd(pre.querySelector('mark')!.firstChild!, 2)
+
+      expect(selectionInText(pre, range, 'Ala ma kota')).toEqual({
+        start: 0,
+        end: 6,
+        text: 'Ala ma',
+      })
+    })
+
+    it('is null for a selection in the dialog', () => {
+      const { pre, dialog } = withDialog()
+      const range = document.createRange()
+      range.setStart(dialog.firstChild!, 0)
+      range.setEnd(dialog.firstChild!, 2)
+
+      expect(selectionInText(pre, range, 'Ala ma kota')).toBeNull()
+    })
+  })
 })

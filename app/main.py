@@ -21,6 +21,7 @@ from app.models import (
     SectionMark,
     SpellcheckRequest,
     SpellcheckResult,
+    TeiEntities,
     TeiSections,
     TeiText,
     TeiXml,
@@ -38,6 +39,7 @@ from app.tei_xml import (
     mark_section,
     replace_text_range,
     tag_text_range,
+    tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
     text_to_tei_xml,
@@ -371,6 +373,26 @@ def tei_sections(tei: TeiXml) -> TeiSections:
     """
     try:
         return TeiSections(sections=tei_xml_sections(tei.xml))
+    except InvalidTei as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+
+@app.post("/tei/entities", response_model=TeiEntities)
+def tei_entities(tei: TeiXml) -> TeiEntities:
+    """The named entities that are marked in a TEI XML document: the elements
+    that `POST .../entities` makes (`<persName>`, `<placeName>`, `<orgName>`,
+    `<geogName>`, `<date>`, `<time>`), so that a page that is opened again shows
+    what was confirmed before. Every such element counts, whoever put it there.
+
+    The body is `{"xml": "<TEI ...>...</TEI>"}`, as for `POST /tei/text`, and
+    the answer is 422 in the same cases. The response is `{"entities": [...]}`,
+    in the order of the document. Each entity has the same fields as one that
+    `POST /ner` finds: its `text`, its `label` (the name of the element) and its
+    `start` and `end`, the characters of the text that `POST /tei/text` gives
+    for the same XML (counted the way Python does). Nothing is stored.
+    """
+    try:
+        return TeiEntities(entities=tei_xml_entities(tei.xml))
     except InvalidTei as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 

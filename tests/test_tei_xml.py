@@ -13,6 +13,7 @@ from app.tei_xml import (
     mark_section,
     replace_text_range,
     tag_text_range,
+    tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
     text_to_tei_xml,
@@ -1417,6 +1418,70 @@ def test_random_sections_keep_the_text_and_a_valid_structure(seed):
         if section != "toc":
             assert tei_xml_to_text(result) == extracted  # the text is the same
         xml = result
+
+
+class TestEntitiesOfTheXml:
+    def test_nothing_is_marked(self):
+        assert tei_xml_entities(generated("Ala ma kota")) == []
+
+    def test_each_entity_with_its_label_text_and_place(self):
+        text = "Jan Kowalski mieszka w Paryżu od 1840 roku."
+        xml = generated(text)
+        xml = tag_text_range(xml, 0, 12, "persName", "Jan Kowalski")
+        xml = tag_text_range(xml, 23, 29, "placeName", "Paryżu")
+
+        found = tei_xml_entities(xml)
+
+        assert found == [
+            {"label": "persName", "text": "Jan Kowalski", "start": 0, "end": 12},
+            {"label": "placeName", "text": "Paryżu", "start": 23, "end": 29},
+        ]
+        assert all(text[e["start"] : e["end"]] == e["text"] for e in found)
+
+    def test_all_the_labels(self):
+        text = "a b c d e f"
+        xml = generated(text)
+        labels = ["persName", "placeName", "orgName", "geogName", "date", "time"]
+        for i, label in enumerate(labels):
+            xml = tag_text_range(xml, 2 * i, 2 * i + 1, label, text[2 * i])
+
+        assert [e["label"] for e in tei_xml_entities(xml)] == labels
+
+    def test_an_element_that_somebody_else_put_there_counts_too(self):
+        xml = generated("W roku 1840 był tu Jan.").replace(
+            "1840", '<date when="1840">1840</date>'
+        )
+
+        (entity,) = tei_xml_entities(xml)
+
+        assert (entity["label"], entity["text"]) == ("date", "1840")
+
+    def test_an_entity_over_a_line_break_has_the_break_in_its_text(self):
+        xml = generated("Jan Ko\nwalski tu")
+        text = tei_xml_to_text(xml)
+        xml = tag_text_range(xml, 0, 13, "persName", text[:13])
+
+        (entity,) = tei_xml_entities(xml)
+
+        assert text[entity["start"] : entity["end"]] == entity["text"] == text[:13]
+
+    def test_counts_code_points_after_emoji(self):
+        text = "😀 Jan Kowalski"
+        xml = tag_text_range(generated(text), 2, 14, "persName", "Jan Kowalski")
+
+        (entity,) = tei_xml_entities(xml)
+
+        assert (entity["start"], entity["end"]) == (2, 14)
+        assert text[entity["start"] : entity["end"]] == "Jan Kowalski"
+
+    def test_sections_are_not_entities(self):
+        xml = mark(generated("84 KATEDRA\n\nAla"), "84 KATEDRA", "header")
+
+        assert tei_xml_entities(xml) == []
+
+    def test_rejects_xml_that_is_not_tei(self):
+        with pytest.raises(InvalidTei):
+            tei_xml_entities("<a/>")
 
 
 class TestSectionsOfTheXml:

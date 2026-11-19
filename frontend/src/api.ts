@@ -147,6 +147,21 @@ export async function teiSections(xml: string): Promise<SectionSpan[]> {
 }
 
 /**
+ * Calls POST /tei/entities: the named entities that are marked in the XML (the
+ * elements `tagEntity` makes, whoever put them there), with where they are in
+ * the text, like the entities that the recognition finds. The frontend does not
+ * read the XML itself.
+ */
+export async function teiEntities(xml: string): Promise<Entity[]> {
+  const { entities } = await request<{ entities: Entity[] }>('/tei/entities', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ xml }),
+  })
+  return entities
+}
+
+/**
  * Calls POST /ner: the backend finds the named entities (people, places,
  * organisations, dates, ...) in a plain text. Each has the character offsets
  * `start` and `end` in the text that was sent.
