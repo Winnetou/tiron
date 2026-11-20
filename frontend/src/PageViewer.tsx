@@ -8,6 +8,29 @@ import Sidebar, { type SidebarView } from './Sidebar'
 import StructureView from './StructureView'
 import XmlView from './XmlView'
 
+/** The arrow of a page button: backward (left) or forward (right). */
+function Arrow({ direction }: { direction: 'left' | 'right' }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {direction === 'left' ? (
+        <path d="M19 12H5M11 6l-6 6 6 6" />
+      ) : (
+        <path d="M5 12h14M13 6l6 6-6 6" />
+      )}
+    </svg>
+  )
+}
+
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
@@ -28,8 +51,6 @@ interface Props {
   error: string | null
   onPrevious: () => void
   onNext: () => void
-  /** Mark the page as ready. */
-  onMarkReady: () => void
   /** The named entities found in `text`; null if not recognized yet. */
   entities: Entity[] | null
   recognizing: boolean
@@ -61,7 +82,7 @@ interface Props {
 
 /**
  * Left half: the scan, with zoom buttons.
- * Right half: previous/next page and "Mark as ready" buttons, and the page
+ * Right half: previous/next page buttons, and the page
  * itself, read-only: its text as extracted by the backend, in which the
  * spelling is corrected, or (NER view) the named entities, recognized by the
  * backend. The Text button shows the text as it is, the XML button the page's
@@ -78,7 +99,6 @@ export default function PageViewer({
   error,
   onPrevious,
   onNext,
-  onMarkReady,
   entities,
   recognizing,
   onRecognizeEntities,
@@ -93,7 +113,6 @@ export default function PageViewer({
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
-  const misspelled = (words ?? []).filter((word) => !word.correct).length
   // Every page opens in the correction view: moving to another page goes back
   // to it, wherever the user was.
   const [view, setView] = useState<View>('correction')
@@ -169,8 +188,12 @@ export default function PageViewer({
             role="progressbar"
             aria-label="Loading the scan"
           >
-            <span className="spinner" aria-hidden="true" />
-            Loading the scan …
+            <div className="scan-loading-place">
+              <div className="scan-loading-box">
+                <span className="spinner" aria-hidden="true" />
+                Loading the scan …
+              </div>
+            </div>
           </div>
         )}
         {scanFailed && <p role="alert">The scan could not be loaded.</p>}
@@ -182,6 +205,8 @@ export default function PageViewer({
             alt={`Scan of page ${page.number}`}
             style={{ width: `${zoom}%` }}
             hidden={scanFailed}
+            // the scan is what the page is for: the browser must fetch it first
+            fetchPriority="high"
             onLoad={() => setScan({ src: page.scan_uri!, failed: false })}
             onError={() => setScan({ src: page.scan_uri!, failed: true })}
           />
@@ -196,31 +221,26 @@ export default function PageViewer({
         <nav className="page-nav">
           <button
             type="button"
+            className="page-nav-button previous"
+            aria-label="Previous page"
+            data-tooltip="Previous page"
             onClick={onPrevious}
             disabled={page.number === 0 || busy}
           >
-            Previous page
+            <Arrow direction="left" />
           </button>
           <span>Page {page.number}</span>
-          <button type="button" onClick={onNext} disabled={busy}>
-            Next page
-          </button>
-        </nav>
-        <div className="page-actions">
           <button
             type="button"
-            onClick={onMarkReady}
-            // a page with a misspelled word (in red) cannot be marked as ready
-            disabled={page.ready || busy || misspelled > 0}
-            title={
-              misspelled > 0 && !page.ready
-                ? 'Correct the misspelled words first'
-                : undefined
-            }
+            className="page-nav-button next"
+            aria-label="Next page"
+            data-tooltip="Next page"
+            onClick={onNext}
+            disabled={busy}
           >
-            {page.ready ? 'Ready' : 'Mark as ready'}
+            <Arrow direction="right" />
           </button>
-        </div>
+        </nav>
         {error && <p role="alert">{error}</p>}
         {spellError && (
           <p role="alert">The spelling cannot be checked: {spellError}</p>

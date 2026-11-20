@@ -66,12 +66,40 @@ button {
   max-width: none; /* width is set by the zoom level */
 }
 
-/* Shown while the scan is loading, so that the user knows to wait. */
+/*
+ * Shown while the scan is loading, so that the user knows to wait. It is laid
+ * over the half and takes no room: the scan itself stays where it is, at the
+ * top, so that the browser fetches it with the priority of what is on the
+ * screen, and shows it as it comes in.
+ */
 .scan-loading {
+  position: sticky;
+  top: 3.5rem; /* below the zoom buttons */
+  z-index: 1;
+  height: 0;
+  pointer-events: none;
+}
+
+/* In the middle of what is left of the half below the zoom buttons. */
+.scan-loading-place {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(100vh - 6.5rem);
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 2rem 0;
+  justify-content: center;
+}
+
+.scan-loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.85);
   color: #555;
 }
 
@@ -126,6 +154,53 @@ button {
   margin-bottom: 0.5rem;
 }
 
+/* Round, small buttons with an arrow: the name shows below them on hover. */
+.page-nav-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.page-nav-button:disabled {
+  cursor: default;
+}
+
+.page-nav-button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  z-index: 2;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: #fff;
+  background: #333;
+  border-radius: 0.25rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+/* kept inside the half: the previous one starts at its left edge, the next one
+   ends at its right edge */
+.page-nav-button.previous::after {
+  left: 0;
+}
+
+.page-nav-button.next::after {
+  right: 0;
+}
+
+.page-nav-button:hover::after,
+.page-nav-button:focus-visible::after {
+  opacity: 1;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -143,6 +218,7 @@ button {
   width: 2.5rem;
   height: 2.5rem;
   padding: 0;
+  border-radius: 50%;
   cursor: pointer;
 }
 
@@ -174,13 +250,6 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.page-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
 }
 
 

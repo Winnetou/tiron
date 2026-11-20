@@ -487,8 +487,7 @@ page cannot be loaded, the reason is shown with a link back to the main page.
 A page's `content` is TEI XML, but the frontend never shows it, and it never
 reads it either. As soon as it gets a page, it sends the `content` back to
 `POST /tei/text` and shows the text that comes back (in a read-only text box).
-The same happens for every page it opens afterwards (previous/next page) and
-after "Mark as ready".
+The same happens for every page it opens afterwards (previous/next page).
 
 **The backend is the only source of truth for whether the XML is correct.**
 The frontend has no XML parsing or validation of its own: if the backend
