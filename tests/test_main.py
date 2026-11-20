@@ -734,6 +734,26 @@ class TestTagEntity:
         monkeypatch.setattr(db, "update_page", mock.Mock(side_effect=update))
         return state
 
+    @pytest.mark.parametrize("label", ["ref", "bibl", "cit"])
+    def test_accepts_a_reference_a_bibliography_and_a_citation(self, stored, label):
+        response = client.post(
+            self.url(stored["page"].edition_id),
+            json=self.body("Paryżu", label),
+        )
+
+        assert response.status_code == 200
+        assert f"<{label}>" in response.json()["content"]
+        assert "<cit><quote>Paryżu</quote></cit>" in response.json()["content"] or (
+            label != "cit"
+        )
+
+    def test_still_refuses_an_element_that_is_not_a_label(self, stored):
+        response = client.post(
+            self.url(stored["page"].edition_id), json=self.body("Paryżu", "quote")
+        )
+
+        assert response.status_code == 422
+
     def test_marks_the_entity_and_saves_the_new_xml(self, stored):
         page = stored["page"]
 

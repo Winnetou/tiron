@@ -34,7 +34,7 @@ const entitiesOf = (xml: string): Entity[] => {
   const plain = [...content.replace(/<[^>]+>/g, '')]
   const open: { label: string; start: number }[] = []
   for (const token of content.split(/(<[^>]+>)/)) {
-    const tag = token.match(/^<(\/?)(persName|placeName|orgName|geogName|date|time)\b/)
+    const tag = token.match(/^<(\/?)(persName|placeName|orgName|geogName|date|time|ref|bibl|cit)\b/)
     if (tag && !tag[1]) open.push({ label: tag[2], start: offset })
     else if (tag) {
       const { label, start } = open.pop()!
@@ -2791,9 +2791,59 @@ describe('an entity the recognition missed', () => {
       within(dropdown())
         .getAllByRole('option')
         .map((o) => (o as HTMLOptionElement).value),
-    ).toEqual(['', 'persName', 'placeName', 'orgName', 'geogName', 'date', 'time'])
+    ).toEqual([
+      '',
+      'persName',
+      'placeName',
+      'orgName',
+      'geogName',
+      'date',
+      'time',
+      'ref',
+      'bibl',
+      'cit',
+    ])
     expect(screen.queryByRole('option', { name: 'Not NER' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+  })
+
+  it('says what ref, bibl and cit are', async () => {
+    await openNer()
+
+    select('Paryżu')
+
+    expect(screen.getByRole('option', { name: 'ref (reference)' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('option', { name: 'bibl (bibliographic information)' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'cit (cited quotation)' })).toBeInTheDocument()
+  })
+
+  it.each(['ref', 'bibl', 'cit'])('sends %s to the backend as the label', async (label) => {
+    await openNer()
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), label)
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(tagCalls()).toHaveLength(1))
+    expect(tagCalls()[0].body).toEqual({
+      start: TEXT.indexOf('Paryżu'),
+      end: TEXT.indexOf('Paryżu') + 6,
+      text: 'Paryżu',
+      label,
+    })
+  })
+
+  it('shows what was marked as a reference as confirmed, like any entity', async () => {
+    await openNer()
+
+    select('Paryżu')
+    await userEvent.selectOptions(dropdown(), 'ref')
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski', 'Paryżu']))
+    expect(pageText().querySelector('mark.confirmed')?.textContent).toBe('Paryżu')
   })
 
   it('does nothing in the correction view', async () => {

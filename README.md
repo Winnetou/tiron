@@ -232,7 +232,11 @@ so that `<p>Adam Mickiewicz mieszkał ...</p>` becomes
 `<p><persName>Adam Mickiewicz</persName> mieszkał ...</p>`. The response is the
 updated page, like `GET`. `label` is one of the six that the model produces,
 which are also TEI elements: `persName`, `placeName`, `orgName`, `geogName`,
-`date`, `time`.
+`date`, `time`; or one of three that the model cannot find, which the user marks by
+hand: `ref` (a reference in the text), `bibl` (bibliographic information) and `cit`
+(a cited quotation). The first two are wrapped like the others: `<ref>Jan
+Kowalski</ref>`. TEI wants the text of a `<cit>` in a `<quote>`, so it becomes
+`<cit><quote>Jan Kowalski</quote></cit>`. Any other label is 422.
 
 - **The backend finds the place in the XML.** `start`/`end` are offsets into the
   text that `POST /tei/text` gives for this page, and the backend maps them to
@@ -533,8 +537,10 @@ ignore a double click.
 In the NER view the user can also mark an entity that the recognition missed:
 select some of the text, as in the Structure view, and a dialog appears next to
 the selection with a dropdown of the labels (`persName`, `placeName`, `orgName`,
-`geogName`, `date`, `time`; no "Not NER", which makes no sense here) and a Confirm
-button. Confirm sends it to `POST /editions/{id}/pages/{n}/entities`, like a
+`geogName`, `date`, `time`, and `ref` for a reference, `bibl` for bibliographic
+information, `cit` for a cited quotation; no "Not NER", which makes no sense here)
+and a Confirm button. The recognized entities keep the dialog of the six labels of
+the model, as the three others are not something it finds. Confirm sends it to `POST /editions/{id}/pages/{n}/entities`, like a
 recognized entity that was confirmed, and the backend marks it in the XML; it is
 then read back from the XML and shown in green. The dialog of a recognized entity
 may be open meanwhile: its text is not counted in the offsets of the selection.
