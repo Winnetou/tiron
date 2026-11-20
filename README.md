@@ -117,6 +117,17 @@ raw OCR text is never served.
    served from the database. A page that Polona does not have therefore leaves
    its (new) edition stored.
 
+   **The first fetch of a page is safe against concurrent requests.** Requests for
+   the same page that is not stored yet take turns (a lock for each page, in the
+   backend process); the ones that wait look in the database again when their
+   turn comes, find the page that the first one saved and return it. Polona is
+   asked once, the page is saved once, and a stored page is never overwritten.
+   Other pages do not wait for it. The lock is not shared between backend
+   processes (the backend runs as one, and its threads share one database
+   connection, which is why a database lock would not do): with several
+   processes the page could still be fetched twice, but it is stored once, with
+   the text of the first.
+
 ### What is fetched from Polona
 
 For a page that is not stored yet, two things are fetched: the edition's

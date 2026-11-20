@@ -1,3 +1,5 @@
+import threading
+import time
 from unittest import mock
 from uuid import uuid4
 
@@ -164,3 +166,103 @@ class TestIdempotentFetchPage:
 
         with pytest.raises(PolonaError):
             page_service.idempotent_fetch_page(edition_id, 3, db=db)
+
+
+class TestConcurrentFirstFetch:
+    """Several requests for the same page that is not stored yet."""
+
+    class FakeDatabase:
+        """Stores what is saved, like the real one, and is safe to share."""
+
+        def __init__(self, edition):
+            self.edition = edition
+            self.pages = {}
+            self.saves = 0
+
+        def get_page_by_number(self, edition_id, number):
+            return self.pages.get((edition_id, number))
+
+        def get_edition(self, edition_id):
+            return self.edition
+
+        def save_fetched_page(self, page):
+            self.saves += 1
+            return self.pages.setdefault((page.edition_id, page.number), page)
+
+    def run_requests(self, db, edition_id, numbers):
+        results = [None] * len(numbers)
+
+        def request(index, number):
+            results[index] = page_service.idempotent_fetch_page(
+                edition_id, number, db=db
+            )
+
+        threads = [
+            threading.Thread(target=request, args=(i, n)) for i, n in enumerate(numbers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        return results
+
+    @pytest.fixture
+    def slow_polona(self, polona):
+        def slow(edition_id, number):
+            time.sleep(0.1)  # long enough for the other requests to arrive
+            return PAGE
+
+        polona.page.side_effect = slow
+        return polona
+
+    def test_polona_is_asked_once_and_the_page_is_saved_once(self, slow_polona):
+        edition_id = uuid4()
+        db = self.FakeDatabase(Edition(id=edition_id, work_id=uuid4()))
+
+        results = self.run_requests(db, edition_id, [3] * 5)
+
+        assert slow_polona.page.call_count == 1
+        assert db.saves == 1
+        assert all(page is results[0] for page in results)
+
+    def test_a_new_edition_is_saved_once(self, slow_polona):
+        edition_id = uuid4()
+        db = self.FakeDatabase(None)
+        db.upsert_edition = mock.Mock(
+            side_effect=lambda work, edition: setattr(db, "edition", edition) or edition
+        )
+        db.get_edition = lambda edition_id: db.edition
+
+        self.run_requests(db, edition_id, [3] * 5)
+
+        db.upsert_edition.assert_called_once()
+        slow_polona.metadata.assert_called_once()
+
+    def test_different_pages_do_not_wait_for_each_other(self, slow_polona):
+        edition_id = uuid4()
+        db = self.FakeDatabase(Edition(id=edition_id, work_id=uuid4()))
+        started = time.perf_counter()
+
+        self.run_requests(db, edition_id, [1, 2, 3, 4])
+
+        assert slow_polona.page.call_count == 4
+        assert time.perf_counter() - started < 0.35  # not 4 * 0.1 one after another
+
+    def test_a_failed_fetch_lets_the_next_request_try_again(self, polona):
+        edition_id = uuid4()
+        db = self.FakeDatabase(Edition(id=edition_id, work_id=uuid4()))
+        polona.page.side_effect = [PolonaError("down"), PAGE]
+
+        with pytest.raises(PolonaError):
+            page_service.idempotent_fetch_page(edition_id, 3, db=db)
+        page = page_service.idempotent_fetch_page(edition_id, 3, db=db)
+
+        assert page.raw_ocr_content == "Ala ma kota"
+
+    def test_no_lock_is_left_behind(self, slow_polona):
+        edition_id = uuid4()
+        db = self.FakeDatabase(Edition(id=edition_id, work_id=uuid4()))
+
+        self.run_requests(db, edition_id, [3] * 3 + [4])
+
+        assert page_service._fetching == {}

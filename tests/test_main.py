@@ -298,7 +298,8 @@ def test_get_page_fetches_from_polona_when_not_stored(in_collection, polona):
 
     client.get(f"/editions/{edition_id}/pages/7")
 
-    db.get_page_by_number.assert_called_once_with(edition_id, 7)
+    # asked before and after taking the lock for the first fetch of the page
+    assert db.get_page_by_number.call_args_list == [mock.call(edition_id, 7)] * 2
     polona.assert_called_once_with(edition_id, 7)
 
 
