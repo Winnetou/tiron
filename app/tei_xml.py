@@ -307,7 +307,8 @@ def tei_xml_sections(xml: str) -> list[dict[str, Any]]:
 def tei_xml_entities(xml: str) -> list[dict[str, Any]]:
     """The named entities that are marked in the XML: every element that
     tag_text_range can make (<persName>, <placeName>, <orgName>, <geogName>,
-    <date>, <time>), whoever put it there, in the order of the document.
+    <date>, <time>, <ref>, <bibl>, <cit>), whoever put it there, in the order of
+    the document.
 
     Each is the `label` (the element's name), its `text`, and `start` and `end`,
     the characters of the text that tei_xml_to_text gives for the same XML (in
@@ -470,7 +471,9 @@ def tag_text_range(xml: str, start: int, end: int, label: str, text: str) -> str
     """
     if label not in get_args(EntityLabel):
         raise CannotTag(f"{label!r} is not an entity label")
-    return _wrap_inline(xml, start, end, text, label, {}, what="entity")
+    # A <cit> holds the quotation in a <quote> (it has no text of its own in TEI).
+    inner = "quote" if label == "cit" else None
+    return _wrap_inline(xml, start, end, text, label, {}, what="entity", inner=inner)
 
 
 def _wrap_inline(
@@ -481,10 +484,12 @@ def _wrap_inline(
     name: str,
     attributes: dict[str, str],
     what: str = "selection",
+    inner: str | None = None,
 ) -> str:
     """The inline wrapping behind tag_text_range, for an element `name` with the
     given attributes (see there for what it does and when it refuses). `what`
-    is how the messages call the text: "entity", "selection"."""
+    is how the messages call the text: "entity", "selection". With `inner`, the
+    text goes into an element of that name inside the new one (<cit><quote>)."""
     root, sources, start, end = _locate(xml, start, end, text, what)
     first, last = sources[start], sources[end - 1]
     assert first is not None and last is not None  # not whitespace: real text
@@ -510,15 +515,19 @@ def _wrap_inline(
         end_child, last_node, last_index
     ):
         raise CannotTag(f"The {what} ends inside <{end_child.local_name}>")
-    if (
-        parent.local_name == name
-        and _attributes(parent) == attributes
-        and all(
-            any(node is other for other in covered)
-            for node in children
-            if not (isinstance(node, TextNode) and not node.content.strip())
-        )
-    ):
+    whole = all(
+        any(node is other for other in covered)
+        for node in children
+        if not (isinstance(node, TextNode) and not node.content.strip())
+    )
+    already_in = (parent.local_name == name and _attributes(parent) == attributes) or (
+        # the quotation of a <cit> that is just it
+        inner is not None
+        and parent.local_name == inner
+        and parent.parent is not None
+        and parent.parent.local_name == name
+    )
+    if whole and already_in:
         return xml  # already marked, and the whole of the element
     # Comments and processing instructions are not reachable as children, so
     # they could not be moved along with the selection.
@@ -546,7 +555,12 @@ def _wrap_inline(
     covered[0].add_preceding_siblings(wrapper)
     for node in covered:
         node.detach()
-    wrapper.append_children(*covered)
+    if inner is None:
+        wrapper.append_children(*covered)
+    else:
+        inside = TagNode(inner, {}, namespace=TEI_NAMESPACE)
+        wrapper.append_children(inside)
+        inside.append_children(*covered)
 
     return _serialise(root, xml)
 

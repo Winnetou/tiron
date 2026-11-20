@@ -95,6 +95,18 @@ export const ENTITY_LABELS = [
 ] as const
 
 /**
+ * What else the user can mark a selected text as, which the NER model cannot
+ * find: a reference in the text, bibliographic information and a cited
+ * quotation. They are TEI elements too (`ref`, `bibl`, `cit`), and the backend
+ * marks the text with them like with an entity.
+ */
+export const TEXT_LABELS = [
+  { label: 'ref', description: 'reference' },
+  { label: 'bibl', description: 'bibliographic information' },
+  { label: 'cit', description: 'cited quotation' },
+] as const
+
+/**
  * The labels to choose from for an entity: all of them, and the one it was
  * recognized with too, should the model ever give one that is not in the list.
  */

@@ -205,8 +205,10 @@ def tag_entity(
 ) -> PageView:
     """Mark a named entity in the TEI XML of a stored page: the characters
     `start` to `end` of the page's text are put inside an element named `label`
-    (`persName`, `placeName`, `orgName`, `geogName`, `date` or `time`), and the
-    changed XML is saved as the page's corrected content.
+    (`persName`, `placeName`, `orgName`, `geogName`, `date`, `time`, or `ref`, a
+    reference in the text, `bibl`, bibliographic information, or `cit`, a cited
+    quotation, which TEI wants in a `<quote>`: `<cit><quote>...</quote></cit>`),
+    and the changed XML is saved as the page's corrected content.
 
     The body is `{"start": 0, "end": 15, "text": "Adam Mickiewicz", "label":
     "persName"}`: what `POST /ner` returned, so the offsets are those of the
@@ -384,8 +386,9 @@ def tei_sections(tei: TeiXml) -> TeiSections:
 def tei_entities(tei: TeiXml) -> TeiEntities:
     """The named entities that are marked in a TEI XML document: the elements
     that `POST .../entities` makes (`<persName>`, `<placeName>`, `<orgName>`,
-    `<geogName>`, `<date>`, `<time>`), so that a page that is opened again shows
-    what was confirmed before. Every such element counts, whoever put it there.
+    `<geogName>`, `<date>`, `<time>`, `<ref>`, `<bibl>`, `<cit>`), so that a page
+    that is opened again shows what was confirmed before. Every such element
+    counts, whoever put it there.
 
     The body is `{"xml": "<TEI ...>...</TEI>"}`, as for `POST /tei/text`, and
     the answer is 422 in the same cases. The response is `{"entities": [...]}`,

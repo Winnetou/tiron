@@ -1508,6 +1508,57 @@ class TestInsertTextAt:
             insert_text_at("<a/>", 0, "X")
 
 
+class TestReferencesBibliographyAndQuotations:
+    TEXT = "Ala ma kota. Jan Kowalski tu."
+
+    def tag(self, label, xml=None):
+        return tag_text_range(
+            xml or generated(self.TEXT), 13, 25, label, "Jan Kowalski"
+        )
+
+    @pytest.mark.parametrize("label", ["ref", "bibl"])
+    def test_surrounds_the_text_with_the_element(self, label):
+        assert f"<{label}>Jan Kowalski</{label}>" in self.tag(label)
+
+    def test_a_citation_holds_the_quotation_in_a_quote(self):
+        assert "<cit><quote>Jan Kowalski</quote></cit>" in self.tag("cit")
+
+    @pytest.mark.parametrize("label", ["ref", "bibl", "cit"])
+    def test_the_text_is_the_same(self, label):
+        assert tei_xml_to_text(self.tag(label)) == self.TEXT
+
+    @pytest.mark.parametrize("label", ["ref", "bibl", "cit"])
+    def test_marking_it_again_changes_nothing(self, label):
+        once = self.tag(label)
+
+        assert self.tag(label, once) == once
+
+    @pytest.mark.parametrize("label", ["ref", "bibl", "cit"])
+    def test_is_read_back_from_the_xml_with_its_label(self, label):
+        assert tei_xml_entities(self.tag(label)) == [
+            {"label": label, "text": "Jan Kowalski", "start": 13, "end": 25}
+        ]
+
+    def test_a_citation_may_have_a_reference_inside(self):
+        xml = self.tag("cit")
+
+        result = tag_text_range(xml, 13, 16, "ref", "Jan")
+
+        assert "<cit><quote><ref>Jan</ref> Kowalski</quote></cit>" in result
+
+    def test_a_citation_across_a_line_break(self):
+        xml = generated("Ala ma\nkota tu")
+
+        result = tag_text_range(xml, 4, 11, "cit", "ma\nkota")
+
+        assert tei_xml_to_text(result) == "Ala ma\nkota tu"
+        assert "<cit><quote>ma<lb/>kota</quote></cit>" in result.replace("\n", "")
+
+    def test_another_label_is_still_refused(self):
+        with pytest.raises(CannotTag, match="not an entity label"):
+            self.tag("quote")
+
+
 class TestEntitiesOfTheXml:
     def test_nothing_is_marked(self):
         assert tei_xml_entities(generated("Ala ma kota")) == []

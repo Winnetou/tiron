@@ -110,8 +110,20 @@ class NerResult(BaseModel):
     entities: list[Entity]
 
 
-# The labels of the NER model, which are also the TEI elements they become.
-EntityLabel = Literal["date", "geogName", "orgName", "persName", "placeName", "time"]
+# What a text can be marked as: the labels of the NER model, which are TEI
+# elements, and the elements for what the NER model cannot find, a reference
+# (<ref>), bibliographic information (<bibl>) and a cited quotation (<cit>).
+EntityLabel = Literal[
+    "date",
+    "geogName",
+    "orgName",
+    "persName",
+    "placeName",
+    "time",
+    "ref",
+    "bibl",
+    "cit",
+]
 
 
 # The sections of a page that can be marked, as the API calls them.

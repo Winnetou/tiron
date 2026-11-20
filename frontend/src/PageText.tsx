@@ -7,6 +7,7 @@ import {
 } from 'react'
 import {
   ENTITY_LABELS,
+  TEXT_LABELS,
   entityKey,
   labelOptions,
   type Decision,
@@ -520,6 +521,11 @@ export default function PageText({
             {ENTITY_LABELS.map((option) => (
               <option key={option} value={option}>
                 {option}
+              </option>
+            ))}
+            {TEXT_LABELS.map(({ label: option, description }) => (
+              <option key={option} value={option}>
+                {option} ({description})
               </option>
             ))}
           </select>
