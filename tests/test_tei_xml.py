@@ -7,11 +7,13 @@ import pytest
 from app.tei_xml import (
     TEI_NAMESPACE,
     CannotInsert,
+    CannotJoin,
     CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
     insert_text_at,
+    join_text_range,
     mark_section,
     replace_text_range,
     tag_text_range,
@@ -1506,6 +1508,76 @@ class TestInsertTextAt:
     def test_rejects_xml_that_is_not_tei(self):
         with pytest.raises(InvalidTei):
             insert_text_at("<a/>", 0, "X")
+
+
+class TestJoinTextRange:
+    TEXT = "Ala jest abso lutely tu\nnoc"
+
+    def join(self, start=9, end=20, text="abso lutely", xml=None, source=TEXT):
+        return tei_xml_to_text(
+            join_text_range(xml or generated(source), start, end, text)
+        )
+
+    def test_removes_the_space_between_two_tokens(self):
+        assert self.join() == "Ala jest absolutely tu\nnoc"
+
+    def test_joins_more_than_two_tokens(self):
+        assert self.join(4, 23, "jest abso lutely tu") == "Ala jestabsolutelytu\nnoc"
+
+    def test_the_rest_of_the_text_is_the_same(self):
+        assert self.join().replace("absolutely", "abso lutely") == self.TEXT
+
+    def test_the_whole_run_of_whitespace_goes(self):
+        xml = generated(self.TEXT).replace("abso lutely", "abso \n   lutely")
+
+        assert self.join(xml=xml) == "Ala jest absolutely tu\nnoc"
+
+    def test_the_markup_around_stays(self):
+        xml = tag_text_range(generated(self.TEXT), 4, 8, "persName", "jest")
+
+        result = join_text_range(xml, 9, 20, "abso lutely")
+
+        assert "<persName>jest</persName>" in result
+        assert "absolutely" in result
+
+    def test_a_space_between_two_elements_goes(self):
+        xml = generated("Ala ma kota")
+        xml = tag_text_range(xml, 0, 3, "persName", "Ala")
+        xml = tag_text_range(xml, 4, 6, "placeName", "ma")
+
+        result = join_text_range(xml, 0, 6, "Ala ma")
+
+        assert tei_xml_to_text(result) == "Alama kota"
+        assert "<persName>Ala</persName><placeName>ma</placeName>" in result
+
+    def test_counts_code_points_after_emoji(self):
+        assert self.join(11, 22, "abso lutely", source="😀 Ala jest abso lutely") == (
+            "😀 Ala jest absolutely"
+        )
+
+    def test_the_text_must_be_what_is_there(self):
+        with pytest.raises(TextChanged):
+            self.join(text="abso lutelz")
+
+    @pytest.mark.parametrize("start, end", [(-1, 20), (9, 99), (20, 9)])
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            self.join(start, end)
+
+    def test_tokens_on_different_lines_are_not_joined(self):
+        with pytest.raises(CannotJoin):
+            self.join(21, 27, "tu\nnoc")
+
+    @pytest.mark.parametrize(
+        "text", ["abso", "abso  lutely", " abso lutely", "abso lutely ", "a\tb"]
+    )
+    def test_the_text_must_be_tokens_with_single_spaces(self, text):
+        with pytest.raises(CannotJoin):
+            join_text_range(generated(self.TEXT), 9, 20, text)
+
+    def test_rejects_xml_that_is_not_tei(self):
+        with pytest.raises(InvalidTei):
+            join_text_range("<a/>", 0, 3, "a b")
 
 
 class TestReferencesBibliographyAndQuotations:

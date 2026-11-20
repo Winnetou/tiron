@@ -105,6 +105,11 @@ interface Options {
   marked?: (xml: string) => Entity[] | Error
   /** Answer of POST .../tokens; defaults to putting the token in the text. */
   token?: (body: { position: number; text: string }, page: Page) => Partial<Page> | Error
+  /** Answer of POST .../joins; defaults to removing the spaces from the text. */
+  join?: (
+    body: { start: number; end: number; text: string },
+    page: Page,
+  ) => Partial<Page> | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -228,11 +233,13 @@ function fakeBackend(options: Options = {}) {
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
     const sectioning = url.match(/\/pages\/(\d+)\/sections$/)
     const adding = url.match(/\/pages\/(\d+)\/tokens$/)
+    const joining = url.match(/\/pages\/(\d+)\/joins$/)
     const number = Number(
       tagging?.[1] ??
         correcting?.[1] ??
         sectioning?.[1] ??
         adding?.[1] ??
+        joining?.[1] ??
         url.split('/').pop(),
     )
     const page = pageFor(number)
@@ -242,6 +249,16 @@ function fakeBackend(options: Options = {}) {
       const changes = options.correct
         ? options.correct(body, current)
         : { content: current.content.replace(body.before, body.after) }
+      if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    if (joining) {
+      const current = pages.get(number) ?? page
+      const changes = options.join
+        ? options.join(body, current)
+        : { content: current.content.replace(body.text, body.text.replace(/ /g, '')) }
       if (changes instanceof Error) return failure(409, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
@@ -2363,7 +2380,10 @@ describe('correcting a word', () => {
       const field = editor()!.closest('.word-editor')!
       expect(field.previousSibling?.textContent).toBe(' ')
       expect(field.nextSibling?.textContent).toMatch(/^ /)
-      expect(pageText().textContent).toBe('Ala ma kota, a Legal spelling tey nie ma.')
+      // (the join buttons of its neighbours are part of the editor)
+      expect(pageText().textContent!.replace(field.textContent!, '')).toBe(
+        'Ala ma kota, a  tey nie ma.',
+      )
       expect(screen.queryByText('jey', { selector: '.word' })).toBeNull()
     })
 
@@ -3264,6 +3284,106 @@ describe('scrolling the scan and the text together', () => {
     pageText().scrollTop = 300
 
     expect(scanHalf().scrollTop).toBe(0)
+  })
+})
+
+describe('joining two tokens that the OCR split', () => {
+  const TEXT = 'Ala jest abso lutely tu, a\nnoc'
+  const joinCalls = () => calls.filter((c) => c.url.endsWith('/joins'))
+  const previous = () => screen.queryByRole('button', { name: /Join with previous/ })
+  const next = () => screen.queryByRole('button', { name: /Join with next/ })
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text),
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  const edit = (word: string) => userEvent.click(screen.getByText(word, { selector: '.word' }))
+
+  it('offers to join a word with the next one when only a space is between', async () => {
+    await open()
+
+    await edit('abso')
+
+    expect(next()).toBeInTheDocument()
+    expect(previous()).toBeInTheDocument()
+  })
+
+  it('sends the two words, and shows the joined text', async () => {
+    await open()
+    await edit('abso')
+
+    await userEvent.click(next()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].method).toBe('POST')
+    expect(joinCalls()[0].url).toBe(`/editions/${UUID}/pages/0/joins`)
+    expect(joinCalls()[0].body).toEqual({ start: 9, end: 20, text: 'abso lutely' })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('Ala jest absolutely tu, a\nnoc'),
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('joins with the previous word from the second one', async () => {
+    await open()
+    await edit('lutely')
+
+    await userEvent.click(previous()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].body).toEqual({ start: 9, end: 20, text: 'abso lutely' })
+  })
+
+  it('records no correction and changes nothing else', async () => {
+    await open()
+    await edit('abso')
+    await userEvent.click(next()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(calls.filter((c) => c.url.endsWith('/corrections'))).toHaveLength(0)
+  })
+
+  it('does not offer it across a line break or punctuation', async () => {
+    await open()
+
+    await edit('a') // "a" is followed by a line break, and preceded by ", "
+    expect(next()).toBeNull()
+    expect(previous()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('tu') // "tu" is followed by a comma
+    expect(next()).toBeNull()
+  })
+
+  it('offers nothing for the first word of the page, as to the previous one', async () => {
+    await open()
+
+    await edit('Ala')
+
+    expect(previous()).toBeNull()
+    expect(next()).toBeInTheDocument()
+  })
+
+  it('shows the error when the backend refuses, and keeps the text', async () => {
+    await open({ join: () => new Error('The page has changed') })
+    await edit('abso')
+
+    await userEvent.click(next()!)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('is not offered outside the correction view', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+    expect(document.querySelectorAll('.word')).toHaveLength(0)
+    expect(next()).toBeNull()
   })
 })
 

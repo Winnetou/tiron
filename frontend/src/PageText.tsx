@@ -150,6 +150,9 @@ interface WordEditorProps {
   word: Word
   busy: boolean
   onSubmit: (after: string) => void
+  /** Join the word with the previous / next one (only if there is a place). */
+  onJoinPrevious?: () => void
+  onJoinNext?: () => void
   /** The spelling is legal in this edition (only offered for a misspelled word). */
   onLegal: () => void
   onCancel: () => void
@@ -160,9 +163,20 @@ interface WordEditorProps {
  * (or leaving the field) cancels. Nothing is sent if the text is empty or is
  * the same as before. A misspelled word also has a "Legal spelling" button next
  * to the field, to say that the spelling as it is, is legal in the edition.
- * While a request is running the field is disabled and cannot be left.
+ * Next to a word that has another one right before or after it, with only a
+ * space between, "Join with previous" / "Join with next" remove that space (the
+ * OCR split a word in two). While a request is running the field is disabled
+ * and cannot be left.
  */
-function WordEditor({ word, busy, onSubmit, onLegal, onCancel }: WordEditorProps) {
+function WordEditor({
+  word,
+  busy,
+  onSubmit,
+  onJoinPrevious,
+  onJoinNext,
+  onLegal,
+  onCancel,
+}: WordEditorProps) {
   const [value, setValue] = useState(word.text)
   const input = useRef<HTMLInputElement>(null)
 
@@ -220,6 +234,30 @@ function WordEditor({ word, busy, onSubmit, onLegal, onCancel }: WordEditorProps
           Legal spelling
         </button>
       )}
+      {onJoinPrevious && (
+        <button
+          type="button"
+          className="join-button"
+          title="Remove the space before the word"
+          disabled={busy}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onJoinPrevious}
+        >
+          ← Join with previous
+        </button>
+      )}
+      {onJoinNext && (
+        <button
+          type="button"
+          className="join-button"
+          title="Remove the space after the word"
+          disabled={busy}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onJoinNext}
+        >
+          Join with next →
+        </button>
+      )}
     </span>
   )
 }
@@ -253,6 +291,12 @@ interface Props {
    * nothing.
    */
   onAddToken?: (position: number, token: string) => void
+  /**
+   * The user chose to join a word with its neighbour, two words that the OCR
+   * split: the space between them goes. Without it (outside the correction
+   * view) the words cannot be joined.
+   */
+  onJoinWords?: (words: Word[]) => void
 }
 
 /**
@@ -273,6 +317,7 @@ export default function PageText({
   onLegalSpelling,
   onCreateEntity,
   onAddToken,
+  onJoinWords,
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -388,6 +433,12 @@ export default function PageText({
 
   // The editor takes the place of the first segment of the word; the others
   // (a word that an entity cuts in two) are left out meanwhile.
+  // Words that are only a space apart can be joined (not across a line break
+  // or punctuation).
+  const codePoints = Array.from(text)
+  const apart = (before: Word, after: Word) =>
+    codePoints.slice(before.end, after.start).join('') === ' '
+  const sorted = [...(words ?? [])].sort((a, b) => a.start - b.start)
   const editorAt = segments.findIndex((segment) => segment.word === editedWord)
   function render(segment: Segment, index: number): ReactNode {
     const { word } = segment
@@ -395,12 +446,29 @@ export default function PageText({
     if (!word) return segment.text
     if (word === editedWord) {
       if (index !== editorAt) return null
+      const at = sorted.indexOf(word)
+      const previous = sorted[at - 1]
+      const next = sorted[at + 1]
+      const joinWith = (pair: Word[]) => () => {
+        setEditing(null)
+        onJoinWords?.(pair)
+      }
       return (
         <WordEditor
           key={key}
           word={word}
           busy={busy}
           onSubmit={(after) => onCorrectWord(word, after)}
+          onJoinPrevious={
+            onJoinWords && previous && apart(previous, word)
+              ? joinWith([previous, word])
+              : undefined
+          }
+          onJoinNext={
+            onJoinWords && next && apart(word, next)
+              ? joinWith([word, next])
+              : undefined
+          }
           onLegal={() => onLegalSpelling(word)}
           onCancel={() => setEditing(null)}
         />

@@ -1210,6 +1210,93 @@ class TestAddToken:
         assert self.post(stored, {"position": 0, "text": "XX"}).status_code == 422
 
 
+class TestJoinTokens:
+    TEXT = "Ala jest abso lutely tu"
+    XML = str(text_to_tei_xml(TEXT))
+
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/joins"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
+            ),
+            "recorded": [],
+        }
+
+        def apply(edition_id, number, replace, before, after, record=True):
+            page = state["page"]
+            if (edition_id, number) != (page.edition_id, page.number):
+                return None
+            new_xml = replace(page.xml_content_corrected or "")
+            state["page"] = page.model_copy(update={"xml_content_corrected": new_xml})
+            if record:
+                state["recorded"].append((before, after))
+            return state["page"]
+
+        monkeypatch.setattr(db, "apply_correction", mock.Mock(side_effect=apply))
+        return state
+
+    BODY = {"start": 9, "end": 20, "text": "abso lutely"}
+
+    def post(self, stored, body=BODY):
+        return client.post(self.url(stored["page"].edition_id), json=body)
+
+    def test_removes_the_space_in_the_xml(self, stored):
+        response = self.post(stored)
+
+        assert response.status_code == 200
+        assert tei_xml_to_text(response.json()["content"]) == "Ala jest absolutely tu"
+        assert tei_xml_to_text(stored["page"].xml_content_corrected) == (
+            "Ala jest absolutely tu"
+        )
+
+    def test_records_no_correction(self, stored):
+        self.post(stored)
+
+        assert stored["recorded"] == []
+
+    def test_does_not_touch_the_raw_ocr_text(self, stored):
+        self.post(stored)
+
+        assert stored["page"].raw_ocr_content == self.TEXT
+
+    def test_page_not_stored(self, stored):
+        assert client.post(self.url(), json=self.BODY).status_code == 404
+
+    def test_the_page_has_changed_is_409(self, stored):
+        response = self.post(stored, {"start": 9, "end": 20, "text": "abso lutelz"})
+
+        assert response.status_code == 409
+        assert stored["page"].xml_content_corrected == self.XML
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"start": 9, "end": 13, "text": "abso"},  # one token
+            {"start": 8, "end": 20, "text": " abso lutely"},
+            {"start": 9, "end": 20},
+            {"end": 20, "text": "abso lutely"},
+            {"start": 20, "end": 9, "text": "abso lutely"},
+            {"start": -1, "end": 20, "text": "abso lutely"},
+            {"start": 9, "end": 20, "text": "abso lutely", "extra": 1},
+        ],
+    )
+    def test_rejects_what_is_not_acceptable_and_changes_nothing(self, stored, body):
+        assert self.post(stored, body).status_code == 422
+        assert stored["page"].xml_content_corrected == self.XML
+
+    def test_a_page_without_xml_is_422(self, stored):
+        stored["page"] = stored["page"].model_copy(update={"xml_content_corrected": ""})
+
+        assert self.post(stored).status_code == 422
+
+
 class TestCorrectWord:
     TEXT = "Wielu Biskupów krak., że dawnieyszych kościół.\nTo jey tey."
     XML = str(text_to_tei_xml(TEXT))

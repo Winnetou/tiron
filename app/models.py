@@ -198,6 +198,24 @@ class NewToken(BaseModel):
     text: str = Field(min_length=1, max_length=200)
 
 
+class TokenJoin(BaseModel):
+    """Tokens of the text of a page to join into one (the OCR split a word): the
+    characters `start` to `end`, which are `text` (two or more tokens, separated
+    by single spaces), lose their spaces."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=3)
+    text: str = Field(min_length=3, max_length=400)
+
+    @model_validator(mode="after")
+    def check_range(self) -> TokenJoin:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
 class NewLegalSpelling(BaseModel):
     """A spelling to be made legal in an edition (the edition is in the path)."""
 

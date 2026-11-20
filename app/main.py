@@ -26,6 +26,7 @@ from app.models import (
     TeiSections,
     TeiText,
     TeiXml,
+    TokenJoin,
     WordCorrection,
 )
 from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
@@ -34,11 +35,13 @@ from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
 from app.spelling import SpellcheckUnavailable, check_words, get_checker
 from app.tei_xml import (
     CannotInsert,
+    CannotJoin,
     CannotReplace,
     CannotTag,
     InvalidTei,
     TextChanged,
     insert_text_at,
+    join_text_range,
     mark_section,
     replace_text_range,
     tag_text_range,
@@ -584,6 +587,63 @@ def add_token(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
     logger.info(
         "Token added on page %s of %s at %s", number, edition_id, token.position
+    )
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/pages/{number}/joins", response_model=PageView)
+def join_tokens(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], join: TokenJoin
+) -> PageView:
+    """Join tokens of a stored page that the OCR split ("abso lutely") into one:
+    the spaces between them, in the characters `start` to `end` of the page's
+    text, are removed from the page's TEI XML.
+
+    The body is `{"start": 25, "end": 36, "text": "abso lutely"}`. The offsets are
+    those of the text that `POST /tei/text` gives for this page. `text` is the
+    tokens as the client saw them, two or more, separated by single spaces; the
+    backend checks that it is what is at those offsets. The spaces are removed
+    where they are, so the markup around stays; the frontend never has to read
+    the XML. Tokens on different lines are not joined.
+
+    The new XML is saved as the page's corrected content. No Correction is
+    recorded: joining is not correcting a word. The text of the page changes, so
+    the offsets of its entities and words from before are no longer valid.
+
+    404 if the page is not stored. 409 if the text at the offsets is not `text`,
+    because the page has changed since. 422 if the page has no valid TEI XML, or
+    `text` is not tokens separated by single spaces. Returns the updated page as
+    a PageView.
+    """
+
+    def join_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to join tokens in")
+        return join_text_range(xml, join.start, join.end, join.text)
+
+    try:
+        page = db.apply_correction(
+            edition_id, number, join_in_xml, join.text, "", record=False
+        )
+    except TextChanged as exc:
+        logger.warning(
+            "Tokens not joined on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotJoin) as exc:
+        logger.warning(
+            "Tokens not joined on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Tokens joined on page %s of %s (%s-%s)",
+        number,
+        edition_id,
+        join.start,
+        join.end,
     )
     return PageView.from_page(page)
 
