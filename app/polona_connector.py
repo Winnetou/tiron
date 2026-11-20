@@ -167,7 +167,7 @@ def alto_to_text(xml_bytes: bytes) -> str:
 
 
 @_polona_errors()
-def fetch_page(edition_id: UUID, page_number: int) -> PolonaPage:
+def request_polona_edition_page(edition_id: UUID, page_number: int) -> PolonaPage:
     """Fetch a page of an edition from polona.pl.
 
     `edition_id` is the Polona object UUID. `page_number` is 0-based, like
@@ -254,7 +254,7 @@ def fetch_edition_metadata(edition_id: UUID) -> EditionMetadata:
     - year: first 4-digit year in "date", "dateDescriptive" or "imprint"
       (the first year of a range), if within 1500-2030.
 
-    Raises PolonaError, and nothing else, like fetch_page.
+    Raises PolonaError, and nothing else, like request_polona_edition_page.
     """
     data = json.loads(
         _fetch(f"{BASE}/api/library-object-query/digital-objects/{edition_id}")

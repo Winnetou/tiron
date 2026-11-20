@@ -106,14 +106,34 @@ raw OCR text is never served.
 2. **The database is asked first.** If the page (edition + number) is already
    stored, it is returned from there and Polona is not contacted. Stored pages
    are never refreshed automatically.
-3. **Otherwise the page is fetched from Polona** (`app/polona_connector.py`),
-   saved, and returned. The next request for it is served from the database.
+3. **Otherwise the page is fetched from Polona and saved**
+   (`idempotent_fetch_page` in `app/page_service.py`, which calls
+   `fetch_unsaved_page_from_polona`). The edition comes first, because the page
+   belongs to it: if it is not stored yet, its metadata is fetched and it is
+   saved (`upsert_edition` keeps an edition that is stored already, so two
+   requests for the same new edition store it once). Then the page is requested
+   from Polona (`request_polona_edition_page` in `app/polona_connector.py`), saved
+   (`_fetch_page_from_known_edition`) and returned. The next request for it is
+   served from the database. A page that Polona does not have therefore leaves
+   its (new) edition stored.
+
+   **The first fetch of a page is safe against concurrent requests.** Requests for
+   the same page that is not stored yet take turns (a lock for each page, in the
+   backend process); the ones that wait look in the database again when their
+   turn comes, find the page that the first one saved and return it. Polona is
+   asked once, the page is saved once, and a stored page is never overwritten.
+   Other pages do not wait for it. The lock is not shared between backend
+   processes (the backend runs as one, and its threads share one database
+   connection, which is why a database lock would not do): with several
+   processes the page could still be fetched twice, but it is stored once, with
+   the text of the first.
 
 ### What is fetched from Polona
 
-For a page that is not stored yet, two things are fetched.
+For a page that is not stored yet, two things are fetched: the edition's
+metadata first (if the edition is new), then the page itself.
 
-**The page itself** (`fetch_page`):
+**The page itself** (`request_polona_edition_page`):
 
 - The list of the edition's page scans is read from Polona's
   `library-object-query/digital-objects/{uuid}/contents` endpoint, and the
@@ -708,8 +728,9 @@ logged: only ids, offsets and counts.
 ### When Polona fails
 
 `app/polona_connector.py` turns every failure into one exception,
-`PolonaError`, and `idempotent_fetch_page` maps it to an HTTP error. Nothing is saved when
-Polona fails.
+`PolonaError`, and the page endpoint (`fetch_page` in `app/main.py`) maps it to an
+HTTP error. No page is saved when
+Polona fails (a new edition may be: it is saved before its page is fetched).
 
 | Situation | Response |
 |---|---|
