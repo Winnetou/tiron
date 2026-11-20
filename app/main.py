@@ -9,6 +9,7 @@ import psycopg.errors
 from fastapi import FastAPI, HTTPException, Path, Response, status
 from fastapi_pagination import add_pagination
 
+from app import page_service
 from app.db import Database
 from app.models import (
     CollectionPage,
@@ -30,8 +31,8 @@ from app.models import (
     WordCorrection,
 )
 from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
-from app.ontology import Edition, LegalSpelling, Page, Work
-from app.polona_connector import PolonaError, fetch_edition_metadata, fetch_page
+from app.ontology import LegalSpelling
+from app.polona_connector import PolonaError
 from app.spelling import SpellcheckUnavailable, check_words, get_checker
 from app.tei_xml import (
     CannotInsert,
@@ -48,7 +49,6 @@ from app.tei_xml import (
     tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
-    text_to_tei_xml,
 )
 
 db = Database()
@@ -109,25 +109,24 @@ def list_editions() -> CollectionPage:
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
-def idempotent_fetch_page(
-    edition_id: UUID, number: Annotated[int, Path(ge=0)]
-) -> PageView:
+def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
     """Return a page of an edition, ready to display.
 
     1. The edition must be in the collection, otherwise 404. This check comes
        first, so it also guards pages that are already stored.
     2. If the page is already in the database, it is returned from there and
        Polona is not contacted.
-    3. Otherwise the page is fetched from Polona. If the edition is not stored
-       yet, its metadata is fetched too and a Work and an Edition are created
-       (the page needs its edition). The page is then saved and returned, so
-       the next request is served from the database. It is saved with the
-       Polona text as `raw_ocr_content`, and that text converted to TEI XML as
+    3. Otherwise (see `page_service.idempotent_fetch_page`) the edition is saved
+       first, if it is not stored yet: its metadata is fetched and a Work and an
+       Edition are created (the page needs its edition). The page is then
+       fetched from Polona, saved and returned, so the next request is served
+       from the database. It is saved with the Polona text as
+       `raw_ocr_content`, and that text converted to TEI XML as
        `xml_content_corrected`, which the user then edits.
 
     Polona failures are turned into HTTP errors: 404 if Polona has no such
-    page, 502 if it could not be reached or answered unexpectedly. Nothing is
-    saved in that case.
+    page, 502 if it could not be reached or answered unexpectedly. No page is
+    saved in that case (the edition may be, if it was new).
 
     The response is a PageView: its `content` is the page's TEI XML
     (`xml_content_corrected`). The raw OCR text is never served.
@@ -135,27 +134,8 @@ def idempotent_fetch_page(
     if not db.check_edition_in_collection(edition_id):
         logger.warning("Edition %s is not in the collection", edition_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
-    stored = db.get_page_by_number(edition_id, number)
-    if stored is not None:
-        logger.debug(
-            "Page %s of edition %s is served from the database", number, edition_id
-        )
-        return PageView.from_page(stored)
-    logger.info("Fetching page %s of edition %s from Polona", number, edition_id)
     try:
-        polona_page = fetch_page(edition_id, number)
-        if db.get_edition(edition_id) is None:
-            metadata = fetch_edition_metadata(edition_id)
-            work = Work(author=metadata["author"], title=metadata["title"])
-            db.upsert_edition(
-                work,
-                Edition(
-                    id=edition_id,
-                    work_id=work.id,
-                    place=metadata["place"],
-                    year=metadata["year"],
-                ),
-            )
+        page = page_service.idempotent_fetch_page(edition_id, number, db=db)
     except PolonaError as exc:
         logger.warning(
             "Polona failed for page %s of edition %s: %s", number, edition_id, exc
@@ -163,17 +143,6 @@ def idempotent_fetch_page(
         if exc.not_found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found") from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    raw_ocr_content = polona_page["raw_ocr_content"]
-    page = db.save_fetched_page(
-        Page(
-            edition_id=edition_id,
-            number=number,
-            raw_ocr_content=raw_ocr_content,
-            xml_content_corrected=str(text_to_tei_xml(raw_ocr_content)),
-            scan_uri=polona_page["scan_uri"],
-        )
-    )
-    logger.info("Page %s of edition %s is saved", number, edition_id)
     return PageView.from_page(page)
 
 
