@@ -68,6 +68,8 @@ interface Props {
   onLegalSpelling: (word: Word) => void
   /** The user double-clicked a place of the text and typed a token for it. */
   onAddToken: (position: number, token: string) => void
+  /** Join two neighbouring words that the OCR split: the space between goes. */
+  onJoinWords: (words: Word[]) => void
   /** The user selected some text in the NER view and chose a label for it. */
   onCreateEntity: (selection: TextSelection, label: string) => void
   /** Mark the selected text of the page as a section of it. */
@@ -110,6 +112,7 @@ export default function PageViewer({
   onMarkSection,
   onCreateEntity,
   onAddToken,
+  onJoinWords,
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
@@ -270,6 +273,7 @@ export default function PageViewer({
             onCreateEntity={view === 'ner' ? onCreateEntity : undefined}
             // in the correction view a double click adds a token the OCR missed
             onAddToken={view === 'correction' ? onAddToken : undefined}
+            onJoinWords={view === 'correction' ? onJoinWords : undefined}
           />
         )}
         {view === 'text' && (

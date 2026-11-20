@@ -350,6 +350,26 @@ the page's `xml_content_corrected`, in one transaction with the page locked. No
 Correction is recorded: adding a token is not correcting a word. The raw OCR text is
 not touched. The response is the updated `PageView`.
 
+### Joining tokens that the OCR split
+
+Sometimes the OCR cuts one word in two ("abso lutely").
+`POST /editions/{edition_id}/pages/{number}/joins` with `{"start": 25, "end": 36,
+"text": "abso lutely"}` removes the spaces between the tokens in the characters
+`start` to `end` of the text that `POST /tei/text` gives for the page. `text` is
+two or more tokens separated by single spaces, as the client saw them.
+
+- The spaces are removed where they are in the XML (all the whitespace of the run,
+  also when it is a text node of its own between two inline elements), so the
+  markup around stays. Joining the last word of one `<persName>` and the first of
+  the next one puts the two elements next to each other, without a space.
+- Tokens on different lines are not joined: a line break is not a space.
+- `text` is checked against what is at the offsets: 409 if the page has changed
+  since. 422 if `text` is not tokens with single spaces between them, or the page
+  has no valid TEI XML; 404 if the page is not stored.
+- Like adding a token, no Correction is recorded (it is not the correction of a
+  word), the raw OCR text is not touched, and the response is the updated
+  `PageView`. The text changes, so check the spelling again (the frontend does).
+
 ### Legal spellings
 
 Old print has spellings that the dictionary does not know and that are not
@@ -532,6 +552,13 @@ between two characters that was clicked and sends it with the token to
 `POST .../tokens`; the page is then shown again with its new text and its spelling
 checked again. Escape closes the box. The text view, the XML view and the NER view
 ignore a double click.
+
+Also in the correction view, when a word is clicked to be edited and there is
+another word right before or after it with only a space between them (not across a
+line break or punctuation), the editor has "← Join with previous" and "Join with
+next →" buttons, for a word that the OCR split in two ("abso lutely"). They send
+the two words to `POST .../joins`, which removes the space; the page is shown
+again with its new text, and the spelling is checked again.
 
 In the NER view the user can also mark an entity that the recognition missed:
 select some of the text, as in the Structure view, and a dialog appears next to

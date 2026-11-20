@@ -704,6 +704,72 @@ def insert_text_at(xml: str, position: int, token: str) -> str:
     return _serialise(root, xml)
 
 
+class CannotJoin(ValueError):
+    """The tokens cannot be joined in the XML; the message says why."""
+
+
+def join_text_range(xml: str, start: int, end: int, text: str) -> str:
+    """Join the tokens in the characters `start` to `end` of the text of a TEI
+    document, which must be `text`, into one: the spaces between them are removed
+    (OCR sometimes splits one word in two, "abso lutely"), and the changed XML
+    is returned.
+
+    `text` is two or more tokens, each separated from the next by exactly one
+    space (a run of whitespace in the XML is one space in the text, and all of it
+    goes). The spaces are removed where they are, in the text nodes that hold them
+    (or the nodes of their own between two inline elements), so the markup around
+    stays as it is. Tokens on different lines are not joined: a line break is not
+    a space.
+
+    Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
+    offsets is not `text`, and CannotJoin for the other problems.
+    """
+    if (
+        " " not in text
+        or any(c.isspace() and c != " " for c in text)
+        or "  " in text
+        or text != text.strip()
+    ):
+        raise CannotJoin("There must be two or more tokens, separated by single spaces")
+    root = _parse_tei(xml)
+    text_element = _text_element(root)
+    extracted, sources = _extract(text_element)
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {text!r}: the page has changed"
+        )
+
+    # the raw characters, to find the whole run of whitespace of each space
+    raw: list[_Char] = []
+    _flatten(text_element, raw)
+    where = {
+        (id(source[0]), source[1]): position
+        for position, (_, source) in enumerate(raw)
+        if source is not None
+    }
+    doomed: dict[int, tuple[TextNode, set[int]]] = {}
+    for offset in range(start, end):
+        if extracted[offset] != " ":
+            continue
+        source = sources[offset]
+        assert source is not None  # a space between two tokens is in the XML
+        position = where[(id(source[0]), source[1])]
+        while position < len(raw) and raw[position][0].isspace():
+            node, index = raw[position][1]  # type: ignore[misc]
+            doomed.setdefault(id(node), (node, set()))[1].add(index)
+            position += 1
+
+    for node, indexes in doomed.values():
+        content = "".join(
+            char for index, char in enumerate(node.content) if index not in indexes
+        )
+        if content:
+            node.content = content
+        else:
+            node.detach()
+    return _serialise(root, xml)
+
+
 # The sections of a page that can be marked, by the name the API gives them: the
 # element they become and its attributes. A running header or footer and a
 # printed page number are forme work (<fw>) in TEI, and a note is a <note> (a

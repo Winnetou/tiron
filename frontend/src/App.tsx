@@ -3,6 +3,7 @@ import {
   addLegalSpelling,
   addToken,
   correctWord,
+  joinTokens,
   getPage,
   markSection,
   pageFromPath,
@@ -362,6 +363,9 @@ export default function App() {
         onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
         onCorrectWord={(word, after) => correct(page, word, after)}
         onLegalSpelling={(word) => legalize(page, text, word)}
+        onJoinWords={(words) =>
+          run(joinTokens(page.edition_id, page.number, words))
+        }
         onAddToken={(position, token) =>
           run(addToken(page.edition_id, page.number, position, token))
         }

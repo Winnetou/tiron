@@ -261,6 +261,27 @@ export function addToken(
   })
 }
 
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/joins: the backend removes the
+ * spaces between `words` (the OCR split a word in two: "abso lutely") in the XML
+ * of the page, and returns the updated page. No correction is recorded for it.
+ */
+export function joinTokens(
+  editionId: string,
+  number: number,
+  words: Word[],
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/joins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: words[0].start,
+      end: words[words.length - 1].end,
+      text: words.map((word) => word.text).join(' '),
+    }),
+  })
+}
+
 export function correctWord(
   editionId: string,
   number: number,
