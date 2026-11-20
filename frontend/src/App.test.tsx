@@ -725,17 +725,6 @@ describe('named entity recognition', () => {
     expect(screen.queryByText(/entit/)).toBeNull()
   })
 
-  it('keeps the highlights when the page is marked ready: same text', async () => {
-    await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
-    await userEvent.click(nerButton())
-    await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
-
-    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
-
-    await screen.findByRole('button', { name: 'Ready' })
-    expect(marks()).toEqual(['Jan Kowalski'])
-  })
-
   it('cannot be used when there is no text', async () => {
     await openPage({ tei: () => new Error('The XML is empty') })
     await screen.findByRole('alert')
@@ -3104,6 +3093,16 @@ describe('the scan', () => {
     expect(scan()).toBeVisible()
   })
 
+  it('asks the browser to fetch the scan first, and does not push it down', async () => {
+    await openPage()
+    await screen.findByRole('img')
+
+    expect(scan()).toHaveAttribute('fetchpriority', 'high')
+    // the spinner is laid over the half, so it is not in the way of the scan
+    expect(spinner()!.classList.contains('scan-loading')).toBe(true)
+    expect(getComputedStyle(spinner()!).height).toBe('0px')
+  })
+
   it('shows it again for the scan of the next page, until that has loaded', async () => {
     await openPage({
       page: (n) => ({ scan_uri: `https://polona.pl/scan-${n}.jpg` }),
@@ -4146,6 +4145,33 @@ describe('page view', () => {
 describe('page navigation', () => {
   const open = (number: number) => openPage({}, number)
 
+  it('has round buttons with an arrow, and the name only as a tooltip', async () => {
+    await open(1)
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+
+    const previous = screen.getByRole('button', { name: 'Previous page' })
+    const next = screen.getByRole('button', { name: 'Next page' })
+
+    for (const button of [previous, next]) {
+      expect(button.querySelector('svg')).not.toBeNull() // the arrow
+      expect(button.textContent).toBe('') // no words on the button itself
+      expect(button).toHaveAttribute('data-tooltip', button.getAttribute('aria-label'))
+      expect(parseFloat(getComputedStyle(button).borderRadius)).toBeGreaterThan(0)
+    }
+    expect(getComputedStyle(previous).borderRadius).toBe('50%')
+  })
+
+  it('has round buttons in the sidebar too', async () => {
+    await open(1)
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+
+    const buttons = Array.from(document.querySelectorAll('.sidebar-button'))
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const button of buttons) {
+      expect(getComputedStyle(button).borderRadius).toBe('50%')
+    }
+  })
+
   it('disables previous page on page 0', async () => {
     await open(0)
     await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
@@ -4194,74 +4220,3 @@ describe('page navigation', () => {
   })
 })
 
-describe('mark as ready', () => {
-  it('sends only the flag, then shows the page as Ready', async () => {
-    await openPage()
-    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
-
-    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
-
-    const ready = await screen.findByRole('button', { name: 'Ready' })
-    expect(ready).toBeDisabled()
-    const patches = calls.filter((c) => c.method === 'PATCH')
-    expect(patches).toHaveLength(1)
-    expect(patches[0].url).toBe(`/editions/${UUID}/pages/0`)
-    expect(patches[0].body).toEqual({ ready: true })
-    expect(pageText().textContent).toBe('text of page 0') // the text is still shown
-  })
-
-  it('shows an already ready page as Ready', async () => {
-    await openPage({ page: () => ({ ready: true }) })
-
-    expect(await screen.findByRole('button', { name: 'Ready' })).toBeDisabled()
-  })
-
-  describe('with misspelled words', () => {
-    const ready = () => screen.getByRole('button', { name: 'Mark as ready' })
-    const open = async (wrong: string[]) => {
-      await openPage({
-        page: () => ({ content: xmlOf('Ala ma jey kota') }),
-        spell: (text) => wordsOf(text, wrong),
-      })
-      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
-    }
-
-    it('is inactive while a word is wrong', async () => {
-      await open(['jey'])
-
-      expect(ready()).toBeDisabled()
-    })
-
-    it('is active when no word is wrong', async () => {
-      await open([])
-
-      expect(ready()).toBeEnabled()
-    })
-
-    it('becomes active when the last wrong word is corrected', async () => {
-      await openPage({
-        page: () => ({ content: xmlOf('Ala ma jey kota') }),
-        spell: (text) => wordsOf(text, text.includes('jey') ? ['jey'] : []),
-      })
-      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
-      expect(ready()).toBeDisabled()
-
-      await userEvent.click(screen.getByText('jey'))
-      const field = await screen.findByRole('textbox')
-      await userEvent.clear(field)
-      await userEvent.type(field, 'jej{Enter}')
-
-      await waitFor(() => expect(ready()).toBeEnabled())
-    })
-  })
-
-  it('shows an error when marking as ready fails', async () => {
-    await openPage({ patch: new Error('Page not found') })
-    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
-
-    await userEvent.click(screen.getByRole('button', { name: 'Mark as ready' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
-    expect(screen.getByRole('button', { name: 'Mark as ready' })).toBeEnabled()
-  })
-})

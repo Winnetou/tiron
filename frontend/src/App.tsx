@@ -12,7 +12,6 @@ import {
   tagEntity,
   teiEntities,
   teiToText,
-  updatePage,
   type Page,
 } from './api'
 import EditionList from './EditionList'
@@ -325,11 +324,6 @@ export default function App() {
     )
   }
 
-  /** Set the ready flag of the open page. */
-  function markReady(page: Page) {
-    return run(updatePage(page.edition_id, page.number, { ready: true }))
-  }
-
   if (status.kind === 'done') {
     const { page, text, textError, words, spellError } = status
     // What is marked in this page's XML counts as confirmed, whatever was
@@ -355,7 +349,6 @@ export default function App() {
         error={actionError}
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
-        onMarkReady={() => markReady(page)}
         entities={withMarked(
           recognized?.text === text ? recognized.entities : null,
           markedHere,
