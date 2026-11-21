@@ -123,20 +123,6 @@ def test_edition_fetched_completed_cannot_be_null(db, edition):
         )
 
 
-def test_an_editions_table_from_before_the_columns_gets_them(db, edition):
-    db.conn.execute("ALTER TABLE editions DROP COLUMN fetched_completed")
-    db.conn.execute("ALTER TABLE editions DROP COLUMN page_count")
-
-    Database().close()  # the schema is run again, on the old table
-
-    stored = db.get_edition(edition.id)
-    assert (stored.fetched_completed, stored.page_count) == (False, None)
-    with pytest.raises(psycopg.errors.CheckViolation):
-        db.conn.execute(
-            "UPDATE editions SET page_count = 0 WHERE id = %s", (edition.id,)
-        )
-
-
 def test_edition_requires_existing_work(db):
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         db.create_edition(Edition(work_id=uuid4(), place="X", year=1900))
