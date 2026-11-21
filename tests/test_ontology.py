@@ -34,6 +34,20 @@ def test_edition_generates_uuid():
     assert edition.year == 1890
 
 
+def test_edition_fetch_columns_default_to_not_completed_and_no_page_count():
+    edition = Edition(work_id=WORK_ID)
+
+    assert edition.fetched_completed is False
+    assert edition.page_count is None
+
+
+def test_edition_page_count_must_be_at_least_1():
+    assert Edition(work_id=WORK_ID, page_count=1).page_count == 1
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            Edition(work_id=WORK_ID, page_count=bad)
+
+
 @pytest.mark.parametrize("year", [1500, 2030])
 def test_edition_year_bounds_inclusive(year):
     assert Edition(work_id=WORK_ID, place="Kraków", year=year).year == year

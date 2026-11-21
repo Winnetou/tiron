@@ -17,6 +17,8 @@ class Edition(BaseModel):
     work_id: UUID
     place: str | None = None
     year: int | None = Field(default=None, ge=1500, le=2030)
+    fetched_completed: bool = False
+    page_count: int | None = Field(default=None, ge=1)
 
 
 class Page(BaseModel):

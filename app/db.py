@@ -49,8 +49,11 @@ CREATE TABLE IF NOT EXISTS editions (
     id uuid PRIMARY KEY,
     work_id uuid NOT NULL REFERENCES works (id),
     place text,
-    year integer CHECK (year BETWEEN 1500 AND 2030)
+    year integer CHECK (year BETWEEN 1500 AND 2030),
+    fetched_completed boolean NOT NULL DEFAULT false,
+    page_count integer CHECK (page_count >= 1)
 );
+
 
 CREATE TABLE IF NOT EXISTS pages (
     id uuid PRIMARY KEY,
@@ -123,9 +126,17 @@ class Database:
 
     def create_edition(self, edition: Edition) -> Edition:
         row = self.conn.execute(
-            "INSERT INTO editions (id, work_id, place, year)"
-            " VALUES (%s, %s, %s, %s) RETURNING *",
-            (edition.id, edition.work_id, edition.place, edition.year),
+            "INSERT INTO editions"
+            " (id, work_id, place, year, fetched_completed, page_count)"
+            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (
+                edition.id,
+                edition.work_id,
+                edition.place,
+                edition.year,
+                edition.fetched_completed,
+                edition.page_count,
+            ),
         ).fetchone()
         return Edition.model_validate(row)
 
@@ -161,10 +172,18 @@ class Database:
                 raise psycopg.Rollback
             stored_work = self._get_or_create_work(work)
             row = self.conn.execute(
-                "INSERT INTO editions (id, work_id, place, year)"
-                " VALUES (%s, %s, %s, %s)"
+                "INSERT INTO editions"
+                " (id, work_id, place, year, fetched_completed, page_count)"
+                " VALUES (%s, %s, %s, %s, %s, %s)"
                 " ON CONFLICT (id) DO NOTHING RETURNING *",
-                (edition.id, stored_work.id, edition.place, edition.year),
+                (
+                    edition.id,
+                    stored_work.id,
+                    edition.place,
+                    edition.year,
+                    edition.fetched_completed,
+                    edition.page_count,
+                ),
             ).fetchone()
             if row is None:
                 raise psycopg.Rollback  # created concurrently: discard our work
