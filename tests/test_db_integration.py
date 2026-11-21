@@ -51,6 +51,78 @@ def test_edition_roundtrip(db, edition):
     assert db.get_edition(uuid4()) is None
 
 
+def test_edition_fetch_columns_default_to_not_completed_and_no_page_count(db, edition):
+    stored = db.get_edition(edition.id)
+
+    assert stored.fetched_completed is False
+    assert stored.page_count is None
+
+
+def test_create_edition_writes_the_fetch_columns(db):
+    work = db.create_work(Work(author="Bolesław Prus"))
+
+    created = db.create_edition(
+        Edition(work_id=work.id, fetched_completed=True, page_count=412)
+    )
+
+    stored = db.get_edition(created.id)
+    assert (created.fetched_completed, created.page_count) == (True, 412)
+    assert (stored.fetched_completed, stored.page_count) == (True, 412)
+
+
+def test_upsert_edition_writes_the_fetch_columns(db):
+    work = Work(author="Bolesław Prus", title="Lalka")
+
+    stored = db.upsert_edition(
+        work, Edition(work_id=work.id, fetched_completed=True, page_count=7)
+    )
+
+    assert (stored.fetched_completed, stored.page_count) == (True, 7)
+    again = db.get_edition(stored.id)
+    assert (again.fetched_completed, again.page_count) == (True, 7)
+
+
+def test_upsert_edition_keeps_the_stored_fetch_columns(db):
+    work = Work(author="Bolesław Prus", title="Lalka")
+    first = db.upsert_edition(work, Edition(work_id=work.id, page_count=7))
+
+    again = db.upsert_edition(
+        work,
+        Edition(id=first.id, work_id=work.id, fetched_completed=True, page_count=99),
+    )
+
+    assert (again.fetched_completed, again.page_count) == (False, 7)
+
+
+def test_edition_page_count_must_be_at_least_1(db, edition):
+    for bad in (0, -3):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.conn.execute(
+                "UPDATE editions SET page_count = %s WHERE id = %s", (bad, edition.id)
+            )
+
+
+def test_edition_fetch_columns_can_be_set_and_page_count_can_be_null_again(db, edition):
+    db.conn.execute(
+        "UPDATE editions SET fetched_completed = true, page_count = 1 WHERE id = %s",
+        (edition.id,),
+    )
+    stored = db.get_edition(edition.id)
+    assert (stored.fetched_completed, stored.page_count) == (True, 1)
+
+    db.conn.execute(
+        "UPDATE editions SET page_count = NULL WHERE id = %s", (edition.id,)
+    )
+    assert db.get_edition(edition.id).page_count is None
+
+
+def test_edition_fetched_completed_cannot_be_null(db, edition):
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        db.conn.execute(
+            "UPDATE editions SET fetched_completed = NULL WHERE id = %s", (edition.id,)
+        )
+
+
 def test_edition_requires_existing_work(db):
     with pytest.raises(psycopg.errors.ForeignKeyViolation):
         db.create_edition(Edition(work_id=uuid4(), place="X", year=1900))
