@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS editions (
     id uuid PRIMARY KEY,
     work_id uuid NOT NULL REFERENCES works (id),
     place text,
-    year integer CHECK (year BETWEEN 1500 AND 2030)
-    fetched_completed boolean NOT NULL DEFAULT false
+    year integer CHECK (year BETWEEN 1500 AND 2030),
+    fetched_completed boolean NOT NULL DEFAULT false,
     page_count integer CHECK (page_count >= 1)
 );
 
@@ -144,6 +144,40 @@ class Database:
         row = self.conn.execute(
             "SELECT * FROM editions WHERE id = %s", (edition_id,)
         ).fetchone()
+        return Edition.model_validate(row) if row else None
+
+    def update_edition(
+        self,
+        edition_id: UUID,
+        *,
+        fetched_completed: bool = UNSET,
+        page_count: int | None = UNSET,
+    ) -> Edition | None:
+        """Change one of the fetch columns of an edition, `fetched_completed` or
+        `page_count`, and return the updated edition (None if there is no such
+        edition).
+
+        Exactly one of them is given, and the other is not touched; these are the
+        only two columns that can be changed. page_count=None clears the count.
+        Raises ValueError if none or both are given.
+        """
+        changes = {
+            column: value
+            for column, value in (
+                ("fetched_completed", fetched_completed),
+                ("page_count", page_count),
+            )
+            if value is not UNSET
+        }
+        if len(changes) != 1:
+            raise ValueError(
+                "Give exactly one of fetched_completed and page_count to update"
+            )
+        (column, value), *_ = changes.items()
+        query = sql.SQL("UPDATE editions SET {} = %s WHERE id = %s RETURNING *").format(
+            sql.Identifier(column)
+        )
+        row = self.conn.execute(query, (value, edition_id)).fetchone()
         return Edition.model_validate(row) if row else None
 
     # Pages

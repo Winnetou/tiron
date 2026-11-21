@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from uuid import UUID
 
 from app.async_tasking.domain_events import NewEditionCreatedEvent
-from app.async_tasking.event_consumers import NewEditionCreatedEventConsumer
+from app.celery_app import handle_new_edition_created
 from app.persistence.db import Database
 from app.persistence.ontology import Edition, Page, Work
 from app.polona.polona_connector import (
@@ -85,10 +85,10 @@ def idempotent_fetch_page(edition_id: UUID, page_number: int, *, db: Database) -
 
 
 def fire_event(edition_id: UUID) -> None:
-    """Fire a `NewEditionCreatedEvent` for the edition, and let its consumer
-    handle it."""
+    """Fire a `NewEditionCreatedEvent` for the edition: it is sent to the Celery
+    worker, where its consumer handles it (`handle_new_edition_created`)."""
     event = NewEditionCreatedEvent(edition_id=edition_id)
-    NewEditionCreatedEventConsumer().handle(event)
+    handle_new_edition_created.delay(event.model_dump(mode="json"))
 
 
 def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:

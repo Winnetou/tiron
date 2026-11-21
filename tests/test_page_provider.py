@@ -266,3 +266,33 @@ class TestConcurrentFirstFetch:
         self.run_requests(db, edition_id, [3] * 3 + [4])
 
         assert page_provider._fetching == {}
+
+
+class TestFireEvent:
+    def test_a_new_edition_fires_the_event(self, polona, no_broker):
+        edition_id = uuid4()
+        db = database(None, Edition(id=edition_id, work_id=uuid4()))
+
+        page_provider.idempotent_fetch_edition(edition_id, db=db)
+
+        no_broker.assert_called_once_with({"edition_id": str(edition_id)})
+
+    def test_a_known_edition_fires_nothing(self, polona, no_broker):
+        edition_id = uuid4()
+        db = database(Edition(id=edition_id, work_id=uuid4()))
+
+        page_provider.idempotent_fetch_edition(edition_id, db=db)
+
+        no_broker.assert_not_called()
+
+    def test_the_task_hands_the_event_to_the_consumer(self, monkeypatch):
+        from app import celery_app
+
+        handle = mock.Mock()
+        monkeypatch.setattr(celery_app.NewEditionCreatedEventConsumer, "handle", handle)
+        edition_id = uuid4()
+
+        celery_app.handle_new_edition_created({"edition_id": str(edition_id)})
+
+        (event,) = handle.call_args.args
+        assert event.edition_id == edition_id

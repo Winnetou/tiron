@@ -667,3 +667,28 @@ def test_list_collection_pages_the_ids_in_order(db):
 
     assert page.items == ids[2:4]
     assert (page.total, page.page, page.size) == (5, 2, 2)
+
+
+def test_update_edition_sets_the_page_count_only(db, edition):
+    updated = db.update_edition(edition.id, page_count=12)
+
+    assert (updated.page_count, updated.fetched_completed) == (12, False)
+    assert db.get_edition(edition.id) == updated
+
+
+def test_update_edition_sets_fetched_completed_only(db, edition):
+    db.update_edition(edition.id, page_count=12)
+
+    updated = db.update_edition(edition.id, fetched_completed=True)
+
+    assert (updated.fetched_completed, updated.page_count) == (True, 12)
+
+
+def test_update_edition_can_clear_the_page_count(db, edition):
+    db.update_edition(edition.id, page_count=12)
+
+    assert db.update_edition(edition.id, page_count=None).page_count is None
+
+
+def test_update_edition_of_an_unknown_edition_is_none(db):
+    assert db.update_edition(uuid4(), page_count=3) is None
