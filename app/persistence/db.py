@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS editions (
     id uuid PRIMARY KEY,
     work_id uuid NOT NULL REFERENCES works (id),
     place text,
-    year integer CHECK (year BETWEEN 1500 AND 2030)
-    fetched_completed boolean NOT NULL DEFAULT false
+    year integer CHECK (year BETWEEN 1500 AND 2030),
+    fetched_completed boolean NOT NULL DEFAULT false,
     page_count integer CHECK (page_count >= 1)
 );
 

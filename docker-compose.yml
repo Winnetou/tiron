@@ -39,6 +39,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tiron}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # The backend sends tasks to the celery-worker through the broker.
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-tiron}:${RABBITMQ_PASSWORD:-tiron}@rabbitmq:5672//
     volumes: 
       - ./app:/app/app
     ports:
