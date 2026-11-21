@@ -4,8 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from app import polona_connector
-from app.polona_connector import (
+from app.polona import polona_connector
+from app.polona.polona_connector import (
     PolonaError,
     alto_to_text,
     fetch_edition_metadata,

@@ -3,7 +3,14 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.ontology import Collection, Correction, Edition, LegalSpelling, Page, Work
+from app.persistence.ontology import (
+    Collection,
+    Correction,
+    Edition,
+    LegalSpelling,
+    Page,
+    Work,
+)
 
 WORK_ID = uuid4()
 

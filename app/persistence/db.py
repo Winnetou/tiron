@@ -21,7 +21,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from app.ontology import Correction, Edition, LegalSpelling, Page, Work
+from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
 
 
 def get_conninfo() -> str:
