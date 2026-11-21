@@ -620,6 +620,9 @@ def add_legal_spelling(
     not know it: old print has spellings like "jey" and "tey", which are not
     mistakes there.
 
+    We call it "legal", not "correct": the dictionary is a modern one, and what
+    was correct in the 19th century often is not anymore. We have no better word.
+
     The body is `{"spelling": "jey"}`: one word, as it is written in the
     edition (case matters: "Jey" is another spelling). The response is
     `{"edition_id": ..., "spelling": ...}`. A spelling is stored once per

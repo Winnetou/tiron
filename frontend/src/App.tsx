@@ -280,9 +280,11 @@ export default function App() {
   }
 
   /**
-   * Say that the spelling of a misspelled word is legal in the edition. The text
-   * does not change, so only its words are asked for again: the backend counts
-   * the spelling as correct now, and the word is no longer red.
+   * Say that the spelling of a misspelled word is legal in the edition ("legal",
+   * not "correct": what was correct in the 19th century often is not anymore, and
+   * we have no better word for it). The text does not change, so only its words
+   * are asked for again: the backend counts the spelling as correct now, and the
+   * word is no longer red.
    */
   async function legalize(page: Page, text: string, word: Word) {
     setBusy(true)

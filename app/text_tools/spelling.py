@@ -75,9 +75,14 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
     space is not a token.
 
     `legal` are spellings that are legal in the edition the text is from: such a
-    word is correct even if the dictionary does not know it. They match the way
-    the dictionary does: a legal "jey" also makes "Jey" and "JEY" correct (a
-    sentence can start with it), but a legal "Jey" does not make "jey" correct.
+    word is reported as correct even if the dictionary does not know it. ("Legal",
+    not "correct": the dictionary is a modern one, and what was correct in the
+    19th century often is not anymore; we have no better word. "Correct" is the
+    verdict of this function, "legal" is what a person decided for the edition.)
+
+    They match the way the dictionary does: a legal "jey" also makes "Jey" and
+    "JEY" correct (a sentence can start with it), but a legal "Jey" does not make
+    "jey" correct.
 
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """

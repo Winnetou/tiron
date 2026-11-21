@@ -408,7 +408,20 @@ two or more tokens separated by single spaces, as the client saw them.
 
 Old print has spellings that the dictionary does not know and that are not
 mistakes there (`jey`, `tey`, `raczey`). A **legal spelling** says so, for one
-edition. They are kept in the table `legal_spellings`, with two columns: the
+edition.
+
+**Why "legal" and not "correct".** The dictionary is a modern one: "correct"
+there means correct today. What was correct in the 19th century often is not
+anymore, and the other way round, so calling these spellings "correct" would
+be wrong, and "incorrect" for the dictionary's verdict on them would be wrong
+too. We have no better word, so we say **legal**: a spelling that the edition
+itself uses and that is not to be corrected. In the API, the code and these
+docs, "correct" and the `correct` flag of a word are the dictionary's verdict
+(a legal spelling only makes the verdict come out as correct), and "legal" is
+what a person decides for an edition. The decision is for an edition, not for
+the language.
+
+They are kept in the table `legal_spellings`, with two columns: the
 `edition_id` (an edition that is stored) and the `spelling`. The two are unique
 together (they are the table's primary key), so an edition has each spelling
 once, and the same spelling can be legal in many editions.

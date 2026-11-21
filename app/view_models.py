@@ -217,7 +217,8 @@ class TokenJoin(BaseModel):
 
 
 class NewLegalSpelling(BaseModel):
-    """A spelling to be made legal in an edition (the edition is in the path)."""
+    """A spelling to be made legal in an edition (the edition is in the path).
+    "Legal", not "correct": see `LegalSpelling`."""
 
     model_config = ConfigDict(extra="forbid")
 

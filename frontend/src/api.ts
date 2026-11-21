@@ -223,6 +223,8 @@ export async function spellcheck(
 /**
  * Calls POST /editions/{editionId}/legal-spellings: the backend records that a
  * spelling is legal in the edition, although the dictionary does not know it.
+ * We say "legal", not "correct": the dictionary is a modern one, and what was
+ * correct in the 19th century often is not anymore. We have no better word.
  * Sending one that is already recorded is fine.
  */
 export async function addLegalSpelling(
