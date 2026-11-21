@@ -23,7 +23,8 @@ and **Frontend tests** (and that branches are up to date before merging).
 ## Running with Docker Compose
 
 `docker compose up --build` (or `make up`) starts the backend together with its
-own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
+own PostgreSQL 17 database, the frontend, and a RabbitMQ broker with a Celery
+worker (`docker-compose.yml`):
 
 - **`db`** keeps its data in the named volume `db-data`, so it survives
   `docker compose down`, rebuilding the image, and removing the containers. Only
@@ -54,7 +55,24 @@ own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
   It only waits for the backend to be started, not healthy, so for the first
   minutes the main page shows an error until the backend has loaded its models.
   `make frontend` still runs the dev server on the host instead.
+<<<<<<< HEAD
 - A new database is empty, and the main page lists the editions of the
+=======
+- **`rabbitmq`** (RabbitMQ 4) is the message broker for the Celery worker. It keeps
+  its data in the named volume `rabbitmq-data` (and has a fixed hostname, because
+  RabbitMQ stores it under the node name), and waits for nobody. Its port is not
+  published: only the containers of the compose network reach it, as
+  `amqp://<user>:<password>@rabbitmq:5672//`. The user and password are
+  `RABBITMQ_USER` and `RABBITMQ_PASSWORD` from `.env`, `tiron` and `tiron` if not
+  set.
+- **`celery-worker`** is built from the same `Dockerfile` as the backend (the tasks
+  are part of the app) and runs `celery -A app.celery_app worker`. It waits until
+  RabbitMQ and the database are healthy, gets the broker address as
+  `CELERY_BROKER_URL` and reaches the database like the backend does. `app/` is
+  mounted, so restart the container after editing the tasks
+  (`docker compose restart celery-worker`).
+- A new database is empty. Pages can only be opened for editions in the
+>>>>>>> a6fbda1 (feat: add celery worked with container and rabbit container)
   `collection` table, so add one first, for example:
 
   ```

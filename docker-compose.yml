@@ -1,4 +1,5 @@
-# The backend, its PostgreSQL database, and the frontend.
+# The backend, its PostgreSQL database, the frontend, and the RabbitMQ broker
+# with the Celery worker.
 #
 #   docker compose up --build        (or: make up)
 #
@@ -56,6 +57,52 @@ services:
       retries: 5
       start_period: 300s
 
+  rabbitmq:
+    image: rabbitmq:4
+    restart: unless-stopped
+    # RabbitMQ keeps its data under the node name, which is made of the hostname:
+    # without a fixed one, a recreated container would not find its queues.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-tiron}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-tiron}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    # Not published: only the containers of this compose network reach the broker.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  celery-worker:
+    # The same image as the backend: the tasks are part of the app.
+    build: .
+    restart: unless-stopped
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - worker
+      - --loglevel=${LOG_LEVEL:-INFO}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    environment:
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-tiron}:${RABBITMQ_PASSWORD:-tiron}@rabbitmq:5672//
+      # The tasks use the database, which is reachable as "db" in the network.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-tiron}
+      POSTGRES_USER: ${POSTGRES_USER:-tiron}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./app:/app/app
+
   frontend:
     build: ./frontend
     restart: unless-stopped
@@ -77,3 +124,4 @@ services:
 
 volumes:
   db-data:
+  rabbitmq-data:
