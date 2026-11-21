@@ -4,6 +4,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from uuid import UUID
 
+from app.async_tasking.domain_events import NewEditionCreatedEvent
+from app.async_tasking.event_consumers import NewEditionCreatedEventConsumer
 from app.persistence.db import Database
 from app.persistence.ontology import Edition, Page, Work
 from app.polona.polona_connector import (
@@ -82,6 +84,13 @@ def idempotent_fetch_page(edition_id: UUID, page_number: int, *, db: Database) -
         return fetch_page_from_known_edition(edition, page_number, db=db)
 
 
+def fire_event(edition_id: UUID) -> None:
+    """Fire a `NewEditionCreatedEvent` for the edition, and let its consumer
+    handle it."""
+    event = NewEditionCreatedEvent(edition_id=edition_id)
+    NewEditionCreatedEventConsumer().handle(event)
+
+
 def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     """Return the edition from the database, saving it first if it is not
     stored there yet.
@@ -106,6 +115,7 @@ def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
                 year=metadata["year"],
             )
         )
+        fire_event(edition_instance.id)
     return edition_instance
 
 
