@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from app.db import Database, get_conninfo
+from app.persistence.db import Database, get_conninfo
 
 ENV = {
     "POSTGRES_DB": "tiron",
@@ -55,7 +55,7 @@ def test_database_connects_on_instantiation(monkeypatch):
     for name, value in ENV.items():
         monkeypatch.setenv(name, value)
     connect = mock.Mock()
-    monkeypatch.setattr("app.db.psycopg.connect", connect)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
 
     db = Database()
 
@@ -67,7 +67,7 @@ def test_database_creates_schema_on_instantiation(monkeypatch):
     for name, value in ENV.items():
         monkeypatch.setenv(name, value)
     connect = mock.Mock()
-    monkeypatch.setattr("app.db.psycopg.connect", connect)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
 
     Database()
 
@@ -91,7 +91,7 @@ def test_check_edition_in_collection_returns_bool(monkeypatch, present):
     connect.return_value.execute.return_value.fetchone.return_value = {
         "present": present
     }
-    monkeypatch.setattr("app.db.psycopg.connect", connect)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
     edition_id = uuid4()
 
     assert Database().check_edition_in_collection(edition_id) is present

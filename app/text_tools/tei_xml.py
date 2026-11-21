@@ -9,7 +9,7 @@ import delb
 from delb import TagNode, tag
 from delb.nodes import TextNode
 
-from app.models import EntityLabel, SectionKind
+from app.view_models import EntityLabel, SectionKind
 
 TEI_NAMESPACE = "http://www.tei-c.org/ns/1.0"
 

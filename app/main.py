@@ -9,9 +9,29 @@ import psycopg.errors
 from fastapi import FastAPI, HTTPException, Path, Response, status
 from fastapi_pagination import add_pagination
 
-from app import page_service
-from app.db import Database
-from app.models import (
+from app import page_provider
+from app.persistence.db import Database
+from app.persistence.ontology import LegalSpelling
+from app.polona.polona_connector import PolonaError
+from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
+from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools.tei_xml import (
+    CannotInsert,
+    CannotJoin,
+    CannotReplace,
+    CannotTag,
+    InvalidTei,
+    TextChanged,
+    insert_text_at,
+    join_text_range,
+    mark_section,
+    replace_text_range,
+    tag_text_range,
+    tei_xml_entities,
+    tei_xml_sections,
+    tei_xml_to_text,
+)
+from app.view_models import (
     CollectionPage,
     EntityTag,
     NerRequest,
@@ -29,26 +49,6 @@ from app.models import (
     TeiXml,
     TokenJoin,
     WordCorrection,
-)
-from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
-from app.ontology import LegalSpelling
-from app.polona_connector import PolonaError
-from app.spelling import SpellcheckUnavailable, check_words, get_checker
-from app.tei_xml import (
-    CannotInsert,
-    CannotJoin,
-    CannotReplace,
-    CannotTag,
-    InvalidTei,
-    TextChanged,
-    insert_text_at,
-    join_text_range,
-    mark_section,
-    replace_text_range,
-    tag_text_range,
-    tei_xml_entities,
-    tei_xml_sections,
-    tei_xml_to_text,
 )
 
 db = Database()
@@ -116,7 +116,7 @@ def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView
        first, so it also guards pages that are already stored.
     2. If the page is already in the database, it is returned from there and
        Polona is not contacted.
-    3. Otherwise (see `page_service.idempotent_fetch_page`) the edition is saved
+    3. Otherwise (see `page_provider.idempotent_fetch_page`) the edition is saved
        first, if it is not stored yet: its metadata is fetched and a Work and an
        Edition are created (the page needs its edition). The page is then
        fetched from Polona, saved and returned, so the next request is served
@@ -135,7 +135,7 @@ def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView
         logger.warning("Edition %s is not in the collection", edition_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
     try:
-        page = page_service.idempotent_fetch_page(edition_id, number, db=db)
+        page = page_provider.idempotent_fetch_page(edition_id, number, db=db)
     except PolonaError as exc:
         logger.warning(
             "Polona failed for page %s of edition %s: %s", number, edition_id, exc

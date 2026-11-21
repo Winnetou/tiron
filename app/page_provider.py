@@ -4,10 +4,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from uuid import UUID
 
-from app.db import Database
-from app.ontology import Edition, Page, Work
-from app.polona_connector import fetch_edition_metadata, request_polona_edition_page
-from app.tei_xml import text_to_tei_xml
+from app.persistence.db import Database
+from app.persistence.ontology import Edition, Page, Work
+from app.polona.polona_connector import (
+    fetch_edition_metadata,
+    request_polona_edition_page,
+)
+from app.text_tools.tei_xml import text_to_tei_xml
 
 logger = logging.getLogger(__name__)
 

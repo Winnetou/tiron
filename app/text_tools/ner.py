@@ -6,7 +6,7 @@ import threading
 import spacy
 from spacy.language import Language
 
-from app.models import Entity
+from app.view_models import Entity
 
 logger = logging.getLogger(__name__)
 

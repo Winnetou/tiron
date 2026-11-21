@@ -4,7 +4,7 @@ import re
 import delb
 import pytest
 
-from app.tei_xml import (
+from app.text_tools.tei_xml import (
     TEI_NAMESPACE,
     CannotInsert,
     CannotJoin,
@@ -291,7 +291,7 @@ def reference_text(xml: str) -> str:
     from delb import TagNode
     from delb.nodes import TextNode
 
-    from app import tei_xml
+    from app.text_tools import tei_xml
 
     root = tei_xml._parse_tei(xml)
     parts: list[str] = []

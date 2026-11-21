@@ -5,10 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from app import page_service
-from app.ontology import Edition, Page
-from app.polona_connector import PolonaError
-from app.tei_xml import text_to_tei_xml
+from app import page_provider
+from app.persistence.ontology import Edition, Page
+from app.polona.polona_connector import PolonaError
+from app.text_tools.tei_xml import text_to_tei_xml
 
 PAGE = {"scan_uri": "https://polona.pl/scan", "raw_ocr_content": "Ala ma kota"}
 METADATA = {
@@ -24,9 +24,9 @@ def polona(monkeypatch):
     request_polona_edition_page = mock.Mock(return_value=PAGE)
     fetch_metadata = mock.Mock(return_value=METADATA)
     monkeypatch.setattr(
-        page_service, "request_polona_edition_page", request_polona_edition_page
+        page_provider, "request_polona_edition_page", request_polona_edition_page
     )
-    monkeypatch.setattr(page_service, "fetch_edition_metadata", fetch_metadata)
+    monkeypatch.setattr(page_provider, "fetch_edition_metadata", fetch_metadata)
     return mock.Mock(page=request_polona_edition_page, metadata=fetch_metadata)
 
 
@@ -44,7 +44,7 @@ class TestFetchUnsavedPageFromPolona:
         edition_id = uuid4()
         db = database(Edition(id=edition_id, work_id=uuid4()))
 
-        page = page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        page = page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
 
         assert page.raw_ocr_content == PAGE["raw_ocr_content"]
         polona.page.assert_called_once_with(edition_id, 3)
@@ -55,7 +55,7 @@ class TestFetchUnsavedPageFromPolona:
         edition_id = uuid4()
         db = database(Edition(id=edition_id, work_id=uuid4()))
 
-        page = page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        page = page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
 
         (saved,) = db.save_fetched_page.call_args.args
         assert page is saved
@@ -73,14 +73,14 @@ class TestFetchUnsavedPageFromPolona:
         db.save_fetched_page.return_value = stored
 
         assert (
-            page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db) is stored
+            page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db) is stored
         )
 
     def test_an_unknown_edition_is_saved_with_its_metadata(self, polona):
         edition_id = uuid4()
         db = database(None, Edition(id=edition_id, work_id=uuid4()))
 
-        page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
 
         polona.metadata.assert_called_once_with(edition_id)
         work, edition = db.upsert_edition.call_args.args
@@ -96,7 +96,7 @@ class TestFetchUnsavedPageFromPolona:
         order.attach_mock(db.upsert_edition, "save")
         order.attach_mock(polona.page, "fetch")
 
-        page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
 
         assert [call[0] for call in order.mock_calls] == ["save", "fetch"]
 
@@ -106,7 +106,7 @@ class TestFetchUnsavedPageFromPolona:
         db = database(Edition(id=edition_id, work_id=uuid4()))
 
         with pytest.raises(PolonaError) as raised:
-            page_service.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+            page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
 
         assert raised.value.not_found
         db.save_fetched_page.assert_not_called()
@@ -116,7 +116,7 @@ class TestFetchUnsavedPageFromPolona:
         db = database(None)
 
         with pytest.raises(PolonaError):
-            page_service.fetch_unsaved_page_from_polona(uuid4(), 3, db=db)
+            page_provider.fetch_unsaved_page_from_polona(uuid4(), 3, db=db)
 
         db.upsert_edition.assert_not_called()
         polona.page.assert_not_called()
@@ -129,7 +129,7 @@ class TestIdempotentFetchPage:
         db = database(None)
         db.get_page_by_number.return_value = stored
 
-        page = page_service.idempotent_fetch_page(edition_id, 3, db=db)
+        page = page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
         assert page is stored
         db.save_fetched_page.assert_not_called()
@@ -143,7 +143,7 @@ class TestIdempotentFetchPage:
         db = database(Edition(id=edition_id, work_id=uuid4()))
         db.get_page_by_number.return_value = None
 
-        page = page_service.idempotent_fetch_page(edition_id, 3, db=db)
+        page = page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
         assert page.raw_ocr_content == PAGE["raw_ocr_content"]
         db.save_fetched_page.assert_called_once()
@@ -154,7 +154,7 @@ class TestIdempotentFetchPage:
         db = database(None, Edition(id=edition_id, work_id=uuid4()))
         db.get_page_by_number.return_value = None
 
-        page_service.idempotent_fetch_page(edition_id, 3, db=db)
+        page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
         db.upsert_edition.assert_called_once()
 
@@ -165,7 +165,7 @@ class TestIdempotentFetchPage:
         db.get_page_by_number.return_value = None
 
         with pytest.raises(PolonaError):
-            page_service.idempotent_fetch_page(edition_id, 3, db=db)
+            page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
 
 class TestConcurrentFirstFetch:
@@ -193,7 +193,7 @@ class TestConcurrentFirstFetch:
         results = [None] * len(numbers)
 
         def request(index, number):
-            results[index] = page_service.idempotent_fetch_page(
+            results[index] = page_provider.idempotent_fetch_page(
                 edition_id, number, db=db
             )
 
@@ -254,8 +254,8 @@ class TestConcurrentFirstFetch:
         polona.page.side_effect = [PolonaError("down"), PAGE]
 
         with pytest.raises(PolonaError):
-            page_service.idempotent_fetch_page(edition_id, 3, db=db)
-        page = page_service.idempotent_fetch_page(edition_id, 3, db=db)
+            page_provider.idempotent_fetch_page(edition_id, 3, db=db)
+        page = page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
         assert page.raw_ocr_content == "Ala ma kota"
 
@@ -265,4 +265,4 @@ class TestConcurrentFirstFetch:
 
         self.run_requests(db, edition_id, [3] * 3 + [4])
 
-        assert page_service._fetching == {}
+        assert page_provider._fetching == {}

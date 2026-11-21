@@ -4,9 +4,9 @@ import time
 import phunspell
 import pytest
 
-from app import spelling
-from app.models import Word
-from app.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools import spelling
+from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.view_models import Word
 
 
 class FakeChecker:

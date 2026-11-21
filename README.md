@@ -107,12 +107,12 @@ raw OCR text is never served.
    stored, it is returned from there and Polona is not contacted. Stored pages
    are never refreshed automatically.
 3. **Otherwise the page is fetched from Polona and saved**
-   (`idempotent_fetch_page` in `app/page_service.py`, which calls
+   (`idempotent_fetch_page` in `app/page_provider.py`, which calls
    `fetch_unsaved_page_from_polona`). The edition comes first, because the page
    belongs to it: if it is not stored yet, its metadata is fetched and it is
    saved (`upsert_edition` keeps an edition that is stored already, so two
    requests for the same new edition store it once). Then the page is requested
-   from Polona (`request_polona_edition_page` in `app/polona_connector.py`), saved
+   from Polona (`request_polona_edition_page` in `app/polona/polona_connector.py`), saved
    (`_fetch_page_from_known_edition`) and returned. The next request for it is
    served from the database. A page that Polona does not have therefore leaves
    its (new) edition stored.
@@ -164,7 +164,7 @@ belongs to an edition:
 A fetched page is saved with `raw_ocr_content` (the OCR text as fetched from
 Polona) and `scan_uri`. `raw_ocr_content` is written once, when the page is
 first fetched, and never changes after that. The OCR text is also converted to
-TEI XML (`app/tei_xml.py`: paragraphs at blank lines, `<lb/>` at line breaks)
+TEI XML (`app/text_tools/tei_xml.py`: paragraphs at blank lines, `<lb/>` at line breaks)
 and saved as `xml_content_corrected`. This is the XML the user edits. Because
 every fetched page starts with an `xml_content_corrected`, `content` in the
 response is that TEI XML until a correction replaces it. If a page is ever
@@ -711,7 +711,7 @@ the backend rejects it and the frontend shows that error instead of its text.
 
 ### Logging
 
-Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.ner`,
+Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.text_tools.ner`,
 ...), and `setup_logging()` in [app/logs.py](app/logs.py) puts one handler on
 the `app` logger, writing to stderr, so these records show next to uvicorn's
 own. The level is `INFO`, or the one in the `LOG_LEVEL` environment variable
@@ -727,7 +727,7 @@ logged: only ids, offsets and counts.
 
 ### When Polona fails
 
-`app/polona_connector.py` turns every failure into one exception,
+`app/polona/polona_connector.py` turns every failure into one exception,
 `PolonaError`, and the page endpoint (`fetch_page` in `app/main.py`) maps it to an
 HTTP error. No page is saved when
 Polona fails (a new edition may be: it is saved before its page is fetched).

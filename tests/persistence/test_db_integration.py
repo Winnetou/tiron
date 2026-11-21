@@ -12,8 +12,8 @@ import pytest
 from fastapi_pagination import Page as PaginatedPage
 from fastapi_pagination import Params, set_page, set_params
 
-from app.db import Database, get_conninfo
-from app.ontology import Correction, Edition, LegalSpelling, Page, Work
+from app.persistence.db import Database, get_conninfo
+from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
 from tests.conftest import real_connect
 
 pytestmark = pytest.mark.skipif(
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def db(monkeypatch):
-    monkeypatch.setattr("app.db.psycopg.connect", real_connect)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", real_connect)
     database = Database()
     database.conn.execute(
         "TRUNCATE collection, corrections, legal_spellings, pages, editions, works"
@@ -716,7 +716,7 @@ class TestLegalSpellingsThroughTheEndpoint:
         self, client, db, edition
     ):
         # the dictionary: knows the ordinary words only
-        import app.spelling as spelling
+        import app.text_tools.spelling as spelling
 
         class Dictionary:
             def lookup(self, word):

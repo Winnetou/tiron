@@ -8,16 +8,16 @@ import spacy
 from fastapi.testclient import TestClient
 from fastapi_pagination import paginate
 
-import app.ner as ner
-import app.page_service as page_service
-import app.spelling as spelling
+import app.page_provider as page_provider
+import app.text_tools.ner as ner
+import app.text_tools.spelling as spelling
 from app.main import app, db
-from app.models import Entity, PageView, Word
-from app.ner import NerModelUnavailable
-from app.ontology import Edition, LegalSpelling, Page
-from app.polona_connector import PolonaError
-from app.spelling import SpellcheckUnavailable
-from app.tei_xml import tei_xml_to_text, text_to_tei_xml
+from app.persistence.ontology import Edition, LegalSpelling, Page
+from app.polona.polona_connector import PolonaError
+from app.text_tools.ner import NerModelUnavailable
+from app.text_tools.spelling import SpellcheckUnavailable
+from app.text_tools.tei_xml import tei_xml_to_text, text_to_tei_xml
+from app.view_models import Entity, PageView, Word
 
 client = TestClient(app)
 
@@ -50,7 +50,7 @@ META = {
 @pytest.fixture
 def polona(monkeypatch):
     monkeypatch.setattr(
-        "app.page_service.fetch_edition_metadata", mock.Mock(return_value=META)
+        "app.page_provider.fetch_edition_metadata", mock.Mock(return_value=META)
     )
     monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
     monkeypatch.setattr(db, "get_page_by_number", mock.Mock(return_value=None))
@@ -64,7 +64,7 @@ def polona(monkeypatch):
             "raw_ocr_content": "Ala ma kota",
         }
     )
-    monkeypatch.setattr("app.page_service.request_polona_edition_page", fetch)
+    monkeypatch.setattr("app.page_provider.request_polona_edition_page", fetch)
     return fetch
 
 
@@ -209,11 +209,11 @@ def test_get_page_skips_metadata_when_edition_exists(in_collection, polona):
 
     assert response.status_code == 200
     db.upsert_edition.assert_not_called()
-    page_service.fetch_edition_metadata.assert_not_called()
+    page_provider.fetch_edition_metadata.assert_not_called()
 
 
 def test_get_page_metadata_errors(in_collection, polona):
-    page_service.fetch_edition_metadata.side_effect = PolonaError("down")
+    page_provider.fetch_edition_metadata.side_effect = PolonaError("down")
 
     assert client.get(f"/editions/{uuid4()}/pages/1").status_code == 502
     db.upsert_edition.assert_not_called()
@@ -279,7 +279,7 @@ def test_get_page_returns_stored_page_without_calling_polona(in_collection, polo
     }
     db.get_page_by_number.assert_called_once_with(edition_id, 7)
     polona.assert_not_called()
-    page_service.fetch_edition_metadata.assert_not_called()
+    page_provider.fetch_edition_metadata.assert_not_called()
     db.upsert_edition.assert_not_called()
     db.save_fetched_page.assert_not_called()
 
@@ -460,7 +460,7 @@ def test_get_page_passes_the_raw_text_to_the_converter(
         seen.append(text)
         return "<converted/>"
 
-    monkeypatch.setattr("app.page_service.text_to_tei_xml", converter)
+    monkeypatch.setattr("app.page_provider.text_to_tei_xml", converter)
 
     response = client.get(f"/editions/{uuid4()}/pages/5")
 
@@ -481,7 +481,7 @@ def test_get_page_does_not_convert_a_stored_page(in_collection, polona, monkeypa
         xml_content_corrected="<TEI/>",
     )
     converter = mock.Mock()
-    monkeypatch.setattr("app.page_service.text_to_tei_xml", converter)
+    monkeypatch.setattr("app.page_provider.text_to_tei_xml", converter)
 
     client.get(f"/editions/{uuid4()}/pages/5")
 

@@ -7,7 +7,7 @@ from collections.abc import Collection
 
 import phunspell
 
-from app.models import Word
+from app.view_models import Word
 
 logger = logging.getLogger(__name__)
 

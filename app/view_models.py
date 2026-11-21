@@ -8,7 +8,7 @@ from fastapi_pagination import Page as PaginatedPage
 from fastapi_pagination.customization import CustomizedPage, UseParamsFields
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.ontology import Page, Spelling
+from app.persistence.ontology import Page, Spelling
 
 COLLECTION_PAGE_SIZE = 100
 

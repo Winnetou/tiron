@@ -5,9 +5,9 @@ import time
 import pytest
 import spacy
 
-from app import ner
-from app.models import Entity
-from app.ner import NerModelUnavailable, find_entities, get_nlp
+from app.text_tools import ner
+from app.text_tools.ner import NerModelUnavailable, find_entities, get_nlp
+from app.view_models import Entity
 
 
 def pipeline_with_ruler():
