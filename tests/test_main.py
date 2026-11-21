@@ -8,16 +8,16 @@ import spacy
 from fastapi.testclient import TestClient
 from fastapi_pagination import paginate
 
-import app.ner as ner
 import app.page_service as page_service
-import app.spelling as spelling
+import app.text_tools.ner as ner
+import app.text_tools.spelling as spelling
 from app.main import app, db
 from app.models import Entity, PageView, Word
-from app.ner import NerModelUnavailable
 from app.ontology import Edition, LegalSpelling, Page
 from app.polona_connector import PolonaError
-from app.spelling import SpellcheckUnavailable
-from app.tei_xml import tei_xml_to_text, text_to_tei_xml
+from app.text_tools.ner import NerModelUnavailable
+from app.text_tools.spelling import SpellcheckUnavailable
+from app.text_tools.tei_xml import tei_xml_to_text, text_to_tei_xml
 
 client = TestClient(app)
 

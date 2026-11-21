@@ -30,11 +30,11 @@ from app.models import (
     TokenJoin,
     WordCorrection,
 )
-from app.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.ontology import LegalSpelling
 from app.polona_connector import PolonaError
-from app.spelling import SpellcheckUnavailable, check_words, get_checker
-from app.tei_xml import (
+from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
+from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools.tei_xml import (
     CannotInsert,
     CannotJoin,
     CannotReplace,

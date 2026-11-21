@@ -164,7 +164,7 @@ belongs to an edition:
 A fetched page is saved with `raw_ocr_content` (the OCR text as fetched from
 Polona) and `scan_uri`. `raw_ocr_content` is written once, when the page is
 first fetched, and never changes after that. The OCR text is also converted to
-TEI XML (`app/tei_xml.py`: paragraphs at blank lines, `<lb/>` at line breaks)
+TEI XML (`app/text_tools/tei_xml.py`: paragraphs at blank lines, `<lb/>` at line breaks)
 and saved as `xml_content_corrected`. This is the XML the user edits. Because
 every fetched page starts with an `xml_content_corrected`, `content` in the
 response is that TEI XML until a correction replaces it. If a page is ever
@@ -711,7 +711,7 @@ the backend rejects it and the frontend shows that error instead of its text.
 
 ### Logging
 
-Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.ner`,
+Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.text_tools.ner`,
 ...), and `setup_logging()` in [app/logs.py](app/logs.py) puts one handler on
 the `app` logger, writing to stderr, so these records show next to uvicorn's
 own. The level is `INFO`, or the one in the `LOG_LEVEL` environment variable

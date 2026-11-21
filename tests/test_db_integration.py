@@ -716,7 +716,7 @@ class TestLegalSpellingsThroughTheEndpoint:
         self, client, db, edition
     ):
         # the dictionary: knows the ordinary words only
-        import app.spelling as spelling
+        import app.text_tools.spelling as spelling
 
         class Dictionary:
             def lookup(self, word):

@@ -8,7 +8,7 @@ import pytest
 from app import page_service
 from app.ontology import Edition, Page
 from app.polona_connector import PolonaError
-from app.tei_xml import text_to_tei_xml
+from app.text_tools.tei_xml import text_to_tei_xml
 
 PAGE = {"scan_uri": "https://polona.pl/scan", "raw_ocr_content": "Ala ma kota"}
 METADATA = {
