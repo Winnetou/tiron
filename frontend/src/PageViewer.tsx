@@ -70,6 +70,10 @@ interface Props {
   onAddToken: (position: number, token: string) => void
   /** Join two neighbouring words that the OCR split: the space between goes. */
   onJoinWords: (words: Word[]) => void
+  /** Start a new line between two neighbouring words of a line. */
+  onSplitLine: (words: Word[]) => void
+  /** Remove the line break between two neighbouring words on two lines. */
+  onJoinLines: (words: Word[]) => void
   /** The user selected some text in the NER view and chose a label for it. */
   onCreateEntity: (selection: TextSelection, label: string) => void
   /** Mark the selected text of the page as a section of it. */
@@ -113,6 +117,8 @@ export default function PageViewer({
   onCreateEntity,
   onAddToken,
   onJoinWords,
+  onSplitLine,
+  onJoinLines,
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
@@ -273,7 +279,12 @@ export default function PageViewer({
             onCreateEntity={view === 'ner' ? onCreateEntity : undefined}
             // in the correction view a double click adds a token the OCR missed
             onAddToken={view === 'correction' ? onAddToken : undefined}
+            // a page without text (not one whose XML could not be read) has
+            // nothing to double-click: it gets a field for its first text
+            emptyPage={text === '' && !textError}
             onJoinWords={view === 'correction' ? onJoinWords : undefined}
+            onSplitLine={view === 'correction' ? onSplitLine : undefined}
+            onJoinLines={view === 'correction' ? onJoinLines : undefined}
           />
         )}
         {view === 'text' && (

@@ -282,6 +282,50 @@ export function joinTokens(
   })
 }
 
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/line-splits: the backend turns
+ * the space between `words` (two neighbouring words of one line) into a line
+ * break in the XML of the page, and returns the updated page. No correction is
+ * recorded for it.
+ */
+export function splitLine(
+  editionId: string,
+  number: number,
+  words: Word[],
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/line-splits`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: words[0].start,
+      end: words[words.length - 1].end,
+      text: words.map((word) => word.text).join(' '),
+    }),
+  })
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/line-joins: the backend removes
+ * the line break between `words` (the last word of a line and the first one of
+ * the next line) in the XML of the page, and returns the updated page. No
+ * correction is recorded for it.
+ */
+export function joinLines(
+  editionId: string,
+  number: number,
+  words: Word[],
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/line-joins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: words[0].start,
+      end: words[words.length - 1].end,
+      text: words.map((word) => word.text).join('\n'),
+    }),
+  })
+}
+
 export function correctWord(
   editionId: string,
   number: number,

@@ -216,6 +216,43 @@ class TokenJoin(BaseModel):
         return self
 
 
+class LineSplit(BaseModel):
+    """Two tokens of the same line of a page's text, to be split into two lines:
+    the characters `start` to `end`, which are `text` (the two tokens, separated
+    by one space), and the space between them becomes a line break."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=3)
+    text: str = Field(min_length=3, max_length=400)
+
+    @model_validator(mode="after")
+    def check_range(self) -> LineSplit:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class LineJoin(BaseModel):
+    """Two lines of the text of a page to be joined into one: the characters
+    `start` to `end`, which are `text` (the last token of a line and the first
+    token of the next one, separated by one line break), and the line break
+    between them is removed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=3)
+    text: str = Field(min_length=3, max_length=400)
+
+    @model_validator(mode="after")
+    def check_range(self) -> LineJoin:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
 class NewLegalSpelling(BaseModel):
     """A spelling to be made legal in an edition (the edition is in the path)."""
 

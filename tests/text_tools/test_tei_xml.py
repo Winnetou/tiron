@@ -8,14 +8,18 @@ from app.text_tools.tei_xml import (
     TEI_NAMESPACE,
     CannotInsert,
     CannotJoin,
+    CannotJoinLines,
     CannotReplace,
+    CannotSplit,
     CannotTag,
     InvalidTei,
     TextChanged,
     insert_text_at,
+    join_lines_at,
     join_text_range,
     mark_section,
     replace_text_range,
+    split_line_at,
     tag_text_range,
     tei_xml_entities,
     tei_xml_sections,
@@ -1509,6 +1513,40 @@ class TestInsertTextAt:
         with pytest.raises(InvalidTei):
             insert_text_at("<a/>", 0, "X")
 
+    def test_an_empty_page_takes_the_token_as_its_first_line(self):
+        result = insert_text_at(generated(""), 0, "LIST SZÓSTY")
+
+        assert tei_xml_to_text(result) == "LIST SZÓSTY"
+        assert "<p>LIST SZÓSTY</p>" in result
+
+    def test_a_page_of_whitespace_only_takes_the_token_too(self):
+        xml = generated("").replace("<p/>", "<p>  \n </p>")
+
+        assert tei_xml_to_text(insert_text_at(xml, 0, "X")) == "X"
+
+    def test_an_empty_page_without_a_paragraph_gets_one(self):
+        xml = generated("").replace("<body><p/></body>", "<body/>")
+
+        result = insert_text_at(xml, 0, "X")
+
+        assert "<body><p>X</p></body>" in result
+
+    def test_an_empty_page_without_a_body_gets_one(self):
+        xml = generated("").replace("<body><p/></body>", "")
+
+        result = insert_text_at(xml, 0, "X")
+
+        assert "<body><p>X</p></body>" in result
+        assert tei_xml_to_text(result) == "X"
+
+    def test_the_token_of_an_empty_page_is_still_checked(self):
+        with pytest.raises(CannotInsert):
+            insert_text_at(generated(""), 0, " X")
+
+    def test_a_position_after_the_text_of_an_empty_page_is_refused(self):
+        with pytest.raises(CannotInsert):
+            insert_text_at(generated(""), 1, "X")
+
 
 class TestJoinTextRange:
     TEXT = "Ala jest abso lutely tu\nnoc"
@@ -1578,6 +1616,214 @@ class TestJoinTextRange:
     def test_rejects_xml_that_is_not_tei(self):
         with pytest.raises(InvalidTei):
             join_text_range("<a/>", 0, 3, "a b")
+
+
+class TestSplitLineAt:
+    TEXT = "Ala ma kota\nA kot ma Ale\n\nNowy akapit"
+
+    def split(self, text, source=TEXT, xml=None, start=None):
+        if start is None:
+            start = source.index(text)
+        return split_line_at(xml or generated(source), start, start + len(text), text)
+
+    def test_the_space_becomes_a_line_break(self):
+        result = self.split("ma kota")
+
+        assert tei_xml_to_text(result) == "Ala ma\nkota\nA kot ma Ale\n\nNowy akapit"
+        assert "<p>Ala ma<lb/>kota<lb/>A kot ma Ale</p>" in result
+
+    def test_the_rest_of_the_text_is_the_same(self):
+        result = tei_xml_to_text(self.split("kot ma"))
+
+        assert result == "Ala ma kota\nA kot\nma Ale\n\nNowy akapit"
+        assert result.replace("kot\nma", "kot ma") == self.TEXT
+
+    def test_a_token_put_at_the_end_of_a_line_can_be_given_a_line_of_its_own(self):
+        with_token = insert_text_at(generated("Ala ma kota"), 11, "XXX")
+
+        result = split_line_at(with_token, 7, 15, "kota XXX")
+
+        assert tei_xml_to_text(result) == "Ala ma kota\nXXX"
+
+    def test_the_whole_run_of_whitespace_goes(self):
+        xml = generated("Ala ma kota").replace("Ala ma", "Ala \n   ma")
+
+        result = split_line_at(xml, 0, 6, "Ala ma")
+
+        assert tei_xml_to_text(result) == "Ala\nma kota"
+        assert "<p>Ala<lb/>ma kota</p>" in result
+
+    def test_the_markup_around_stays(self):
+        xml = tag_text_range(
+            generated("Ala Jan Kowalski ma"), 4, 16, "persName", "Jan Kowalski"
+        )
+
+        result = self.split("Jan Kowalski", "Ala Jan Kowalski ma", xml)
+
+        assert "<persName>Jan<lb/>Kowalski</persName>" in result
+        assert tei_xml_to_text(result) == "Ala Jan\nKowalski ma"
+
+    def test_a_space_between_two_elements_becomes_the_line_break(self):
+        xml = generated("Ala ma kota")
+        xml = tag_text_range(xml, 0, 3, "persName", "Ala")
+        xml = tag_text_range(xml, 4, 6, "placeName", "ma")
+
+        result = split_line_at(xml, 0, 6, "Ala ma")
+
+        assert "<persName>Ala</persName><lb/><placeName>ma</placeName>" in result
+
+    def test_a_hyphen_before_the_break_makes_it_a_break_inside_a_word(self):
+        result = self.split("kro- kodyl", "Ala kro- kodyl")
+
+        assert '<lb break="no"/>' in result
+        assert tei_xml_to_text(result) == "Ala kro-\nkodyl"
+
+    def test_a_line_break_without_a_hyphen_is_a_plain_one(self):
+        assert '<lb break="no"/>' not in self.split("ma kota")
+
+    def test_counts_code_points_after_emoji(self):
+        source = "😀 Ala ma kota"
+
+        result = self.split("ma kota", source)
+
+        assert tei_xml_to_text(result) == "😀 Ala ma\nkota"
+
+    def test_the_text_must_be_what_is_there(self):
+        with pytest.raises(TextChanged):
+            split_line_at(generated(self.TEXT), 4, 11, "ma kotu")
+
+    @pytest.mark.parametrize("start, end", [(-1, 7), (4, 99), (7, 4)])
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            split_line_at(generated(self.TEXT), start, end, "ma kota")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "ma",  # one token
+            "ma  kota",  # two spaces
+            " ma kota",  # a space at the start
+            "ma kota ",  # a space at the end
+            "ma kota tu",  # three tokens
+            "kota\nA",  # a line break is not a space
+            "ma\tkota",
+        ],
+    )
+    def test_the_text_must_be_two_tokens_with_one_space(self, text):
+        with pytest.raises(CannotSplit):
+            split_line_at(generated(self.TEXT), 4, 4 + len(text), text)
+
+    def test_rejects_xml_that_is_not_tei(self):
+        with pytest.raises(InvalidTei):
+            split_line_at("<a/>", 0, 3, "a b")
+
+
+class TestJoinLinesAt:
+    TEXT = "Ala ma kota\nA kot ma Ale\n\nNowy akapit"
+
+    def join(self, text="kota\nA", source=TEXT, xml=None):
+        start = source.index(text)
+        return join_lines_at(xml or generated(source), start, start + len(text), text)
+
+    def test_the_line_break_becomes_a_space(self):
+        result = self.join()
+
+        assert tei_xml_to_text(result) == "Ala ma kota A kot ma Ale\n\nNowy akapit"
+        assert "<p>Ala ma kota A kot ma Ale</p>" in result
+
+    def test_it_undoes_a_split(self):
+        split = split_line_at(generated("Ala ma kota"), 4, 11, "ma kota")
+        assert tei_xml_to_text(split) == "Ala ma\nkota"
+
+        joined = join_lines_at(split, 4, 11, "ma\nkota")
+
+        assert tei_xml_to_text(joined) == "Ala ma kota"
+
+    def test_the_markup_around_stays(self):
+        xml = split_line_at(
+            tag_text_range(
+                generated("Ala Jan Kowalski ma"), 4, 16, "persName", "Jan Kowalski"
+            ),
+            4,
+            16,
+            "Jan Kowalski",
+        )
+        assert "<persName>Jan<lb/>Kowalski</persName>" in xml
+
+        result = join_lines_at(xml, 4, 16, "Jan\nKowalski")
+
+        assert "<persName>Jan Kowalski</persName>" in result
+        assert "<lb" not in result
+
+    def test_a_break_between_two_elements_becomes_a_space_between_them(self):
+        xml = generated("Ala ma kota")
+        xml = tag_text_range(xml, 0, 3, "persName", "Ala")
+        xml = tag_text_range(xml, 4, 6, "placeName", "ma")
+        xml = split_line_at(xml, 0, 6, "Ala ma")
+
+        result = join_lines_at(xml, 0, 6, "Ala\nma")
+
+        assert "<persName>Ala</persName> <placeName>ma</placeName>" in result
+
+    def test_a_break_inside_a_word_becomes_a_space_too(self):
+        xml = split_line_at(generated("Ala kro- kodyl"), 4, 14, "kro- kodyl")
+        assert '<lb break="no"/>' in xml
+
+        result = join_lines_at(xml, 4, 14, "kro-\nkodyl")
+
+        assert tei_xml_to_text(result) == "Ala kro- kodyl"
+        assert "<lb" not in result
+
+    def test_only_the_chosen_line_break_goes(self):
+        source = "a b\nc d\ne f"
+
+        result = self.join("d\ne", source)
+
+        assert tei_xml_to_text(result) == "a b\nc d e f"
+
+    def test_counts_code_points_after_emoji(self):
+        source = "😀 Ala\nma"
+
+        assert tei_xml_to_text(self.join("Ala\nma", source)) == "😀 Ala ma"
+
+    def test_the_text_must_be_what_is_there(self):
+        with pytest.raises(TextChanged):
+            join_lines_at(generated(self.TEXT), 7, 13, "kota\nB")
+
+    @pytest.mark.parametrize("start, end", [(-1, 6), (7, 99), (13, 7)])
+    def test_offsets_outside_the_text(self, start, end):
+        with pytest.raises(TextChanged):
+            join_lines_at(generated(self.TEXT), start, end, "kota\nA")
+
+    def test_two_paragraphs_are_not_joined(self):
+        with pytest.raises(CannotJoinLines):
+            self.join("Ale\n\nNowy")
+
+    def test_the_end_of_an_l_is_not_a_plain_line_break(self):
+        xml = generated("x").replace("<p>x</p>", "<lg><l>Ala</l><l>ma</l></lg>")
+        assert tei_xml_to_text(xml) == "Ala\nma"
+
+        with pytest.raises(CannotJoinLines):
+            join_lines_at(xml, 0, 6, "Ala\nma")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "kota",  # one token
+            "kota A",  # a space is not a line break
+            "kota\n\nA",  # a blank line
+            "kota\nA kot",  # three tokens
+            "\nkota\nA",
+            "kota\tA",
+        ],
+    )
+    def test_the_text_must_be_two_tokens_with_one_line_break(self, text):
+        with pytest.raises(CannotJoinLines):
+            join_lines_at(generated(self.TEXT), 7, 7 + len(text), text)
+
+    def test_rejects_xml_that_is_not_tei(self):
+        with pytest.raises(InvalidTei):
+            join_lines_at("<a/>", 0, 3, "a\nb")
 
 
 class TestReferencesBibliographyAndQuotations:

@@ -437,6 +437,19 @@ button {
   white-space: normal;
 }
 
+.empty-page {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.empty-page .structure-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .legal-button,
 .join-button {
   padding: 0.1rem 0.45rem;

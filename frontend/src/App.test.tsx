@@ -110,6 +110,16 @@ interface Options {
     body: { start: number; end: number; text: string },
     page: Page,
   ) => Partial<Page> | Error
+  /** Answer of POST .../line-splits; defaults to a line break at the space. */
+  split?: (
+    body: { start: number; end: number; text: string },
+    page: Page,
+  ) => Partial<Page> | Error
+  /** Answer of POST .../line-joins; defaults to a space instead of the line break. */
+  joinLines?: (
+    body: { start: number; end: number; text: string },
+    page: Page,
+  ) => Partial<Page> | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -234,12 +244,16 @@ function fakeBackend(options: Options = {}) {
     const sectioning = url.match(/\/pages\/(\d+)\/sections$/)
     const adding = url.match(/\/pages\/(\d+)\/tokens$/)
     const joining = url.match(/\/pages\/(\d+)\/joins$/)
+    const splitting = url.match(/\/pages\/(\d+)\/line-splits$/)
+    const lineJoining = url.match(/\/pages\/(\d+)\/line-joins$/)
     const number = Number(
       tagging?.[1] ??
         correcting?.[1] ??
         sectioning?.[1] ??
         adding?.[1] ??
         joining?.[1] ??
+        splitting?.[1] ??
+        lineJoining?.[1] ??
         url.split('/').pop(),
     )
     const page = pageFor(number)
@@ -259,6 +273,26 @@ function fakeBackend(options: Options = {}) {
       const changes = options.join
         ? options.join(body, current)
         : { content: current.content.replace(body.text, body.text.replace(/ /g, '')) }
+      if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    if (lineJoining) {
+      const current = pages.get(number) ?? page
+      const changes = options.joinLines
+        ? options.joinLines(body, current)
+        : { content: current.content.replace(body.text, body.text.replace('\n', ' ')) }
+      if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
+    if (splitting) {
+      const current = pages.get(number) ?? page
+      const changes = options.split
+        ? options.split(body, current)
+        : { content: current.content.replace(body.text, body.text.replace(' ', '\n')) }
       if (changes instanceof Error) return failure(409, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
@@ -3384,6 +3418,279 @@ describe('joining two tokens that the OCR split', () => {
 
     expect(document.querySelectorAll('.word')).toHaveLength(0)
     expect(next()).toBeNull()
+  })
+})
+
+describe('starting a new line', () => {
+  const TEXT = 'Ala jest abso lutely tu, a\nnoc'
+  const splitCalls = () => calls.filter((c) => c.url.endsWith('/line-splits'))
+  const newLine = () => screen.queryByRole('button', { name: /New line here/ })
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text),
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  const edit = (word: string) => userEvent.click(screen.getByText(word, { selector: '.word' }))
+
+  it('is offered for a word that has another one before it on the line', async () => {
+    await open()
+
+    await edit('abso')
+
+    expect(newLine()).toBeInTheDocument()
+  })
+
+  it('sends the word before and the word, and shows the text with the new line', async () => {
+    await open()
+    await edit('lutely')
+
+    await userEvent.click(newLine()!)
+
+    await waitFor(() => expect(splitCalls()).toHaveLength(1))
+    expect(splitCalls()[0].method).toBe('POST')
+    expect(splitCalls()[0].url).toBe(`/editions/${UUID}/pages/0/line-splits`)
+    expect(splitCalls()[0].body).toEqual({ start: 9, end: 20, text: 'abso lutely' })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('Ala jest abso\nlutely tu, a\nnoc'),
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('records no correction', async () => {
+    await open()
+    await edit('lutely')
+    await userEvent.click(newLine()!)
+
+    await waitFor(() => expect(splitCalls()).toHaveLength(1))
+    expect(calls.filter((c) => c.url.endsWith('/corrections'))).toHaveLength(0)
+  })
+
+  it('checks the spelling again for the new text', async () => {
+    await open()
+    await edit('lutely')
+    const before = calls.filter((c) => c.url === '/spellcheck').length
+
+    await userEvent.click(newLine()!)
+
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url === '/spellcheck')).toHaveLength(before + 1),
+    )
+  })
+
+  it('is not offered for the first word of a line, or after punctuation', async () => {
+    await open()
+
+    await edit('Ala') // the first word of the page
+    expect(newLine()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('a') // after "tu, ": punctuation is between
+    expect(newLine()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('noc') // the first word of the second line
+    expect(newLine()).toBeNull()
+  })
+
+  it('shows the error when the backend refuses, and keeps the text', async () => {
+    await open({ split: () => new Error('The page has changed') })
+    await edit('lutely')
+
+    await userEvent.click(newLine()!)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('is not offered outside the correction view', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+    expect(document.querySelectorAll('.word')).toHaveLength(0)
+    expect(newLine()).toBeNull()
+  })
+})
+
+describe('removing a line break', () => {
+  const TEXT = 'Ala jest abso\nlutely tu, a\nnoc\n\nNowy akapit'
+  const joinCalls = () => calls.filter((c) => c.url.endsWith('/line-joins'))
+  const before = () => screen.queryByRole('button', { name: /↑ Remove line break/ })
+  const after = () => screen.queryByRole('button', { name: /Remove line break ↓/ })
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text),
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  const edit = (word: string) => userEvent.click(screen.getByText(word, { selector: '.word' }))
+
+  it('is offered before the first word of a line, and after the last one', async () => {
+    await open()
+
+    await edit('lutely') // the first word of the second line
+    expect(before()).toBeInTheDocument()
+    expect(after()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('abso') // the last word of the first line
+    expect(after()).toBeInTheDocument()
+    expect(before()).toBeNull()
+  })
+
+  it('is not offered for a word in the middle of a line', async () => {
+    await open()
+
+    await edit('jest')
+
+    expect(before()).toBeNull()
+    expect(after()).toBeNull()
+  })
+
+  it('is not offered across a blank line between paragraphs', async () => {
+    await open()
+
+    await edit('noc') // followed by a blank line
+    expect(after()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('Nowy') // preceded by one
+    expect(before()).toBeNull()
+  })
+
+  it('sends the two words with the line break, and shows the joined line', async () => {
+    await open()
+    await edit('lutely')
+
+    await userEvent.click(before()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].method).toBe('POST')
+    expect(joinCalls()[0].url).toBe(`/editions/${UUID}/pages/0/line-joins`)
+    expect(joinCalls()[0].body).toEqual({ start: 9, end: 20, text: 'abso\nlutely' })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('Ala jest abso lutely tu, a\nnoc\n\nNowy akapit'),
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('does the same from the last word of the line above', async () => {
+    await open()
+    await edit('abso')
+
+    await userEvent.click(after()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].body).toEqual({ start: 9, end: 20, text: 'abso\nlutely' })
+  })
+
+  it('records no correction', async () => {
+    await open()
+    await edit('lutely')
+    await userEvent.click(before()!)
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(calls.filter((c) => c.url.endsWith('/corrections'))).toHaveLength(0)
+  })
+
+  it('shows the error when the backend refuses, and keeps the text', async () => {
+    await open({ joinLines: () => new Error('The page has changed') })
+    await edit('lutely')
+
+    await userEvent.click(before()!)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('is not offered outside the correction view', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+    expect(document.querySelectorAll('.word')).toHaveLength(0)
+    expect(before()).toBeNull()
+  })
+})
+
+describe('a page without text', () => {
+  const field = () => screen.getByRole('textbox', { name: 'Text to add to the empty page' })
+  const addButton = () => screen.getByRole('button', { name: 'Add text' })
+  const tokenCalls = () => calls.filter((c) => c.url.endsWith('/tokens'))
+
+  async function open(extra: Options = {}) {
+    await openPage({ page: () => ({ content: xmlOf('') }), ...extra })
+    await screen.findByRole('textbox', { name: 'Text to add to the empty page' })
+  }
+
+  it('has a field and an Add text button instead of the double-click hint', async () => {
+    await open()
+
+    expect(addButton()).toBeDisabled()
+    expect(screen.getByText(/This page has no text/)).toBeInTheDocument()
+    expect(screen.queryByText(/Double-click a place/)).toBeNull()
+  })
+
+  it('sends the text as a token at position 0, and shows it as the first line', async () => {
+    await open()
+
+    await userEvent.type(field(), 'LIST   SZÓSTY')
+    await userEvent.click(addButton())
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].method).toBe('POST')
+    expect(tokenCalls()[0].url).toBe(`/editions/${UUID}/pages/0/tokens`)
+    expect(tokenCalls()[0].body).toEqual({ position: 0, text: 'LIST SZÓSTY' })
+    await waitFor(() => expect(pageText().textContent).toBe('LIST SZÓSTY'))
+    expect(screen.queryByRole('textbox', { name: 'Text to add to the empty page' })).toBeNull()
+    expect(screen.getByText(/Double-click a place/)).toBeInTheDocument()
+  })
+
+  it('adds with Enter too', async () => {
+    await open()
+
+    await userEvent.type(field(), 'X{Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({ position: 0, text: 'X' })
+  })
+
+  it('sends nothing for a field with only spaces', async () => {
+    await open()
+
+    await userEvent.type(field(), '   ')
+
+    expect(addButton()).toBeDisabled()
+    expect(tokenCalls()).toHaveLength(0)
+  })
+
+  it('shows the error when the backend refuses, and keeps the field', async () => {
+    await open({ token: () => new Error('There is no place for text') })
+
+    await userEvent.type(field(), 'X')
+    await userEvent.click(addButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('There is no place for text')
+    expect(field()).toBeInTheDocument()
+  })
+
+  it('is not offered for a page whose text could not be read', async () => {
+    await openPage({ page: () => ({ content: xmlOf('') }), tei: () => new Error('The XML is empty') })
+    await screen.findByText(/The text of this page cannot be shown/)
+
+    expect(screen.queryByRole('textbox', { name: 'Text to add to the empty page' })).toBeNull()
+  })
+
+  it('is not offered for a page that has text', async () => {
+    await openPage({ page: () => ({ content: xmlOf('Ala') }), spell: (text) => wordsOf(text) })
+    await waitFor(() => expect(pageText().textContent).toBe('Ala'))
+
+    expect(screen.queryByRole('textbox', { name: 'Text to add to the empty page' })).toBeNull()
   })
 })
 

@@ -651,6 +651,37 @@ class CannotInsert(ValueError):
     """The text cannot be inserted into the XML; the message says why."""
 
 
+def _insert_into_empty_page(root: TagNode, token: str, xml: str) -> str:
+    """Put `token` into a document that has no text at all (an empty page, the
+    OCR found nothing): into its first <p>, which is made if there is none (in
+    the <body>, which is made too if needed). It is the first line of the page."""
+    text_element = _text_element(root)
+    paragraph = next(
+        (
+            node
+            for node in text_element.iterate_descendants()
+            if isinstance(node, TagNode) and node.local_name == "p"
+        ),
+        None,
+    )
+    if paragraph is None:
+        body = next(
+            (
+                node
+                for node in text_element.iterate_descendants()
+                if isinstance(node, TagNode) and node.local_name == "body"
+            ),
+            None,
+        )
+        if body is None:
+            body = TagNode("body", namespace=TEI_NAMESPACE)
+            text_element.append_children(body)
+        paragraph = TagNode("p", namespace=TEI_NAMESPACE)
+        body.append_children(paragraph)
+    paragraph.append_children(token)
+    return _serialise(root, xml)
+
+
 def insert_text_at(xml: str, position: int, token: str) -> str:
     """Insert `token`, a piece of text that the OCR missed, at `position` of the
     text of a TEI document, and return the changed XML.
@@ -670,6 +701,9 @@ def insert_text_at(xml: str, position: int, token: str) -> str:
     characters. Raises InvalidTei if the XML is not TEI, CannotInsert if the
     token is not acceptable or the position is not in the text, or is where no
     text node can take it (the empty line between two paragraphs).
+
+    A document without any text (an empty page) takes the token as its first
+    line: there is no other place for it (position 0 is the only one).
     """
     if not token or token != token.strip():
         raise CannotInsert("The token must not be empty or start or end with a space")
@@ -685,6 +719,8 @@ def insert_text_at(xml: str, position: int, token: str) -> str:
     extracted, sources = _extract(_text_element(root))
     if not 0 <= position <= len(extracted):
         raise CannotInsert(f"There is no place {position} in the text")
+    if not extracted:
+        return _insert_into_empty_page(root, token, xml)
 
     before = extracted[position - 1] if position > 0 else None
     after = extracted[position] if position < len(extracted) else None
@@ -767,6 +803,154 @@ def join_text_range(xml: str, start: int, end: int, text: str) -> str:
             node.content = content
         else:
             node.detach()
+    return _serialise(root, xml)
+
+
+class CannotSplit(ValueError):
+    """The line cannot be split in the XML; the message says why."""
+
+
+def split_line_at(xml: str, start: int, end: int, text: str) -> str:
+    """Start a new line at the space between two tokens of the same line: the
+    space, in the characters `start` to `end` of the text of a TEI document, is
+    replaced with a line break (<lb/>), and the changed XML is returned.
+
+    `text` is the two tokens as the client saw them, separated by one space, and
+    the characters `start` to `end` of the text must be that (TextChanged if they
+    are not: the page has changed). The whole run of whitespace of the space in
+    the XML goes, and the <lb/> is put where it was, so the markup around stays
+    as it is (a line may be split inside a <persName>). A token before the break
+    that ends with a hyphen continues a word on the next line: the break is then
+    <lb break="no"/>, as text_to_tei_xml makes it.
+
+    There are two tokens on one line, so the new line is never empty: the
+    start or the end of a line, a line break and a paragraph break are not places
+    for it. Raises InvalidTei if the XML is not TEI, TextChanged if the text at
+    the offsets is not `text`, and CannotSplit for the other problems.
+    """
+    tokens = text.split(" ")
+    if (
+        len(tokens) != 2
+        or not all(tokens)
+        or any(c.isspace() and c != " " for c in text)
+    ):
+        raise CannotSplit("There must be two tokens, separated by one space")
+    root = _parse_tei(xml)
+    text_element = _text_element(root)
+    extracted, sources = _extract(text_element)
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {text!r}: the page has changed"
+        )
+
+    # the whole run of whitespace of the space, in the raw characters
+    raw: list[_Char] = []
+    _flatten(text_element, raw)
+    where = {
+        (id(source[0]), source[1]): position
+        for position, (_, source) in enumerate(raw)
+        if source is not None
+    }
+    source = sources[start + len(tokens[0])]
+    assert source is not None  # a space between two tokens is in the XML
+    position = where[(id(source[0]), source[1])]
+    run: list[tuple[TextNode, int]] = []
+    while position < len(raw) and raw[position][0].isspace():
+        run.append(raw[position][1])  # type: ignore[arg-type]
+        position += 1
+
+    first_node, first_index = run[0]
+    doomed: dict[int, tuple[TextNode, set[int]]] = {}
+    for node, index in run:
+        doomed.setdefault(id(node), (node, set()))[1].add(index)
+    for node, indexes in doomed.values():
+        if node is first_node:
+            continue
+        content = "".join(c for i, c in enumerate(node.content) if i not in indexes)
+        if content:
+            node.content = content
+        else:
+            node.detach()
+
+    # the line break goes where the first whitespace character was
+    content = first_node.content
+    left = content[:first_index]
+    right = "".join(
+        c
+        for i, c in enumerate(content)
+        if i >= first_index and i not in doomed[id(first_node)][1]
+    )
+    attributes = {"break": "no"} if tokens[0].endswith("-") else {}
+    line_break = TagNode("lb", attributes, namespace=TEI_NAMESPACE)
+    if left:
+        first_node.content = left
+        first_node.add_following_siblings(line_break)
+        if right:
+            line_break.add_following_siblings(right)
+    else:
+        first_node.add_preceding_siblings(line_break)
+        if right:
+            first_node.content = right
+        else:
+            first_node.detach()
+    return _serialise(root, xml)
+
+
+class CannotJoinLines(ValueError):
+    """The lines cannot be joined in the XML; the message says why."""
+
+
+def join_lines_at(xml: str, start: int, end: int, text: str) -> str:
+    """Remove the line break between two lines of a TEI document: the line break
+    (<lb/>) between the last token of a line and the first token of the next one,
+    in the characters `start` to `end` of the text, is replaced with a space. It
+    undoes `split_line_at`. The changed XML is returned.
+
+    `text` is the two tokens as the client saw them, separated by one line break
+    ("kota\nA"), and the characters `start` to `end` of the text must be that
+    (TextChanged if they are not: the page has changed). The markup around stays
+    as it is (a line break inside a <persName> goes, and the element stays). The
+    line break is replaced with one space, also where it was <lb break="no"/>
+    (the hyphen stays in the text: "Join with next" takes the space away).
+
+    Only a plain <lb/> is removed: the end of an <l> or an <item>, and a break
+    between two paragraphs, are not. Raises InvalidTei if the XML is not TEI,
+    TextChanged if the text at the offsets is not `text`, and CannotJoinLines for
+    the other problems.
+    """
+    tokens = text.split("\n")
+    if (
+        len(tokens) != 2
+        or not all(tokens)
+        or any(c.isspace() for token in tokens for c in token)
+    ):
+        raise CannotJoinLines("There must be two tokens, separated by one line break")
+    root = _parse_tei(xml)
+    text_element = _text_element(root)
+    extracted, sources = _extract(text_element)
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {text!r}: the page has changed"
+        )
+
+    newline = start + len(tokens[0])
+    before, after = sources[newline - 1], sources[newline + 1]
+    assert before is not None and after is not None  # real text on both sides
+    # the <lb/> is between the two text nodes, in the order of the document
+    nodes = list(text_element.iterate_descendants())
+    first = next(i for i, node in enumerate(nodes) if node is before[0])
+    last = next(i for i, node in enumerate(nodes) if node is after[0])
+    breaks = [
+        node
+        for node in nodes[first + 1 : last]
+        if isinstance(node, TagNode) and node.local_name == "lb"
+    ]
+    if len(breaks) != 1:
+        raise CannotJoinLines(
+            "The line break is not a plain <lb/>: it cannot be removed"
+        )
+    breaks[0].add_preceding_siblings(" ")
+    breaks[0].detach()
     return _serialise(root, xml)
 
 
