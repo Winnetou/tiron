@@ -900,31 +900,51 @@ class CannotJoinLines(ValueError):
     """The lines cannot be joined in the XML; the message says why."""
 
 
+_LINE_GAP = re.compile(r"(\S+)(\n{1,2})(\S+)")
+
+
+def _block_of(node: Any, text_element: TagNode) -> TagNode | None:
+    """The nearest block element (<p>, <head>, ...) that holds the node."""
+    parent = node.parent
+    while parent is not None and parent is not text_element:
+        if parent.local_name in _BLOCK_ELEMENTS:
+            return parent
+        parent = parent.parent
+    return None
+
+
 def join_lines_at(xml: str, start: int, end: int, text: str) -> str:
-    """Remove the line break between two lines of a TEI document: the line break
-    (<lb/>) between the last token of a line and the first token of the next one,
-    in the characters `start` to `end` of the text, is replaced with a space. It
-    undoes `split_line_at`. The changed XML is returned.
+    """Remove a line break of a TEI document: the one between the last token of a
+    line and the first token of the next one, in the characters `start` to `end`
+    of the text, or the empty line between two paragraphs. It undoes
+    `split_line_at`. The changed XML is returned.
 
     `text` is the two tokens as the client saw them, separated by one line break
-    ("kota\nA"), and the characters `start` to `end` of the text must be that
-    (TextChanged if they are not: the page has changed). The markup around stays
-    as it is (a line break inside a <persName> goes, and the element stays). The
-    line break is replaced with one space, also where it was <lb break="no"/>
-    (the hyphen stays in the text: "Join with next" takes the space away).
+    ("kota\nA") or by an empty line ("315\n\nbłędy"), and the characters `start`
+    to `end` of the text must be that (TextChanged if they are not: the page has
+    changed). The markup around stays as it is.
 
-    Only a plain <lb/> is removed: the end of an <l> or an <item>, and a break
-    between two paragraphs, are not. Raises InvalidTei if the XML is not TEI,
-    TextChanged if the text at the offsets is not `text`, and CannotJoinLines for
-    the other problems.
+    - A line break (<lb/>) is replaced with one space (also where it was
+      <lb break="no"/>: the hyphen stays in the text, and "Join with next" takes
+      the space away). A break inside a <persName> goes and the element stays.
+    - An empty line is the end of one <p> and the start of the next: the two
+      paragraphs become one, with a line break (<lb/>) between them, so the empty
+      line is gone and the two lines stay lines. That is "one line break less",
+      as the text goes from "\n\n" to "\n": a second removal joins the lines.
+      The two must be paragraphs (<p>) next to each other, with nothing between
+      them but empty elements. A hyphen at the end of the first one makes the
+      break <lb break="no"/>, as in `split_line_at`.
+
+    Only a plain <lb/> goes: the end of an <l> or an <item> is not removed.
+    Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
+    offsets is not `text`, and CannotJoinLines for the other problems.
     """
-    tokens = text.split("\n")
-    if (
-        len(tokens) != 2
-        or not all(tokens)
-        or any(c.isspace() for token in tokens for c in token)
-    ):
-        raise CannotJoinLines("There must be two tokens, separated by one line break")
+    match = _LINE_GAP.fullmatch(text)
+    if match is None:
+        raise CannotJoinLines(
+            "There must be two tokens, separated by one line break or an empty line"
+        )
+    first_token, gap, _ = match.groups()
     root = _parse_tei(xml)
     text_element = _text_element(root)
     extracted, sources = _extract(text_element)
@@ -933,9 +953,13 @@ def join_lines_at(xml: str, start: int, end: int, text: str) -> str:
             f"The text at {start}-{end} is not {text!r}: the page has changed"
         )
 
-    newline = start + len(tokens[0])
-    before, after = sources[newline - 1], sources[newline + 1]
+    first_at = start + len(first_token)  # the first character of the gap
+    before, after = sources[first_at - 1], sources[first_at + len(gap)]
     assert before is not None and after is not None  # real text on both sides
+    if len(gap) == 2:
+        _merge_paragraphs(text_element, before[0], after[0], first_token)
+        return _serialise(root, xml)
+
     # the <lb/> is between the two text nodes, in the order of the document
     nodes = list(text_element.iterate_descendants())
     first = next(i for i, node in enumerate(nodes) if node is before[0])
@@ -952,6 +976,50 @@ def join_lines_at(xml: str, start: int, end: int, text: str) -> str:
     breaks[0].add_preceding_siblings(" ")
     breaks[0].detach()
     return _serialise(root, xml)
+
+
+def _merge_paragraphs(
+    text_element: TagNode, before: Any, after: Any, first_token: str
+) -> None:
+    """Make the paragraph of the node `before` and the one of `after`, which
+    follows it, one paragraph, with an <lb/> between the two."""
+    upper = _block_of(before, text_element)
+    lower = _block_of(after, text_element)
+    if (
+        upper is None
+        or lower is None
+        or upper.local_name != "p"
+        or lower.local_name != "p"
+        or upper is lower
+        or upper.parent is not lower.parent
+    ):
+        raise CannotJoinLines(
+            "The empty line is between two paragraphs (<p>) that are next to each "
+            "other: it cannot be removed here"
+        )
+    siblings = list(upper.parent.iterate_children())
+    between = siblings[
+        next(i for i, node in enumerate(siblings) if node is upper) + 1 : next(
+            i for i, node in enumerate(siblings) if node is lower
+        )
+    ]
+    for node in between:
+        if isinstance(node, TextNode):
+            holds_text = bool(node.content.strip())
+        else:
+            holds_text = isinstance(node, TagNode) and any(
+                n.content.strip() for n in _text_nodes(node)
+            )
+        if holds_text:
+            raise CannotJoinLines("There is other text between the two paragraphs")
+
+    attributes = {"break": "no"} if first_token.endswith("-") else {}
+    upper.append_children(TagNode("lb", attributes, namespace=TEI_NAMESPACE))
+    for child in list(lower.iterate_children()):
+        upper.append_children(child.detach())
+    for node in between:
+        node.detach()
+    lower.detach()
 
 
 # The sections of a page that can be marked, by the name the API gives them: the

@@ -235,10 +235,10 @@ class LineSplit(BaseModel):
 
 
 class LineJoin(BaseModel):
-    """Two lines of the text of a page to be joined into one: the characters
-    `start` to `end`, which are `text` (the last token of a line and the first
-    token of the next one, separated by one line break), and the line break
-    between them is removed."""
+    """Two lines of the text of a page to be joined: the characters `start` to
+    `end`, which are `text` (the last token of a line and the first token of the
+    next one, separated by one line break or an empty line), and the line break
+    between them is removed (an empty line is reduced to a line break)."""
 
     model_config = ConfigDict(extra="forbid")
 

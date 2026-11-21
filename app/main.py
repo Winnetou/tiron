@@ -685,17 +685,21 @@ def split_line(
 def join_lines(
     edition_id: UUID, number: Annotated[int, Path(ge=0)], join: LineJoin
 ) -> PageView:
-    """Remove a line break of a stored page, so that two lines become one: the
-    line break (`<lb/>`) between the last token of a line and the first token of
-    the next one, in the characters `start` to `end` of the page's text, is
-    replaced with a space in the page's TEI XML. It undoes `POST .../line-splits`.
+    """Remove a line break of a stored page: the line break (`<lb/>`) between the
+    last token of a line and the first token of the next one, in the characters
+    `start` to `end` of the page's text, is replaced with a space in the page's
+    TEI XML, so that two lines become one. It undoes `POST .../line-splits`. Or
+    the empty line between two paragraphs: the two `<p>` become one, with a line
+    break between them, so one more removal joins the lines.
 
-    The body is `{"start": 25, "end": 31, "text": "kota\nA"}`. The offsets are
-    those of the text that `POST /tei/text` gives for this page. `text` is the
-    two tokens as the client saw them, separated by one line break; the backend
-    checks that it is what is at those offsets. The markup around stays; the
-    frontend never has to read the XML. Only a plain `<lb/>` goes: not the end of
-    an `<l>` or an `<item>`, and not a break between two paragraphs.
+    The body is `{"start": 25, "end": 31, "text": "kota\nA"}`, or `{"start": 0,
+    "end": 10, "text": "315\n\nbłędy"}` for an empty line. The offsets are those
+    of the text that `POST /tei/text` gives for this page. `text` is the two
+    tokens as the client saw them, separated by one line break or by an empty
+    line; the backend checks that it is what is at those offsets. The markup
+    around stays; the frontend never has to read the XML. Only a plain `<lb/>`
+    goes: not the end of an `<l>` or an `<item>`. Empty lines are only removed
+    between two `<p>` next to each other.
 
     The new XML is saved as the page's corrected content. No Correction is
     recorded: joining lines is not correcting a word. The text of the page
@@ -704,8 +708,9 @@ def join_lines(
 
     404 if the page is not stored. 409 if the text at the offsets is not `text`,
     because the page has changed since. 422 if the page has no valid TEI XML,
-    `text` is not two tokens separated by one line break, or the break is not a
-    plain `<lb/>`. Returns the updated page as a PageView.
+    `text` is not two tokens separated by one line break or an empty line, or the
+    break is not a plain `<lb/>`, or the paragraphs cannot be merged. Returns the
+    updated page as a PageView.
     """
 
     def join_in_xml(xml: str) -> str:

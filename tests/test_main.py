@@ -1488,6 +1488,33 @@ class TestJoinLines:
 
         assert self.post(stored).status_code == 422
 
+    def test_removes_the_empty_line_below_a_page_number(self, stored):
+        text = "315\n\nbłędy zbyt rzeczywiste"
+        stored["page"] = stored["page"].model_copy(
+            update={"xml_content_corrected": str(text_to_tei_xml(text))}
+        )
+
+        response = self.post(stored, {"start": 0, "end": 10, "text": "315\n\nbłędy"})
+
+        assert response.status_code == 200
+        assert tei_xml_to_text(response.json()["content"]) == (
+            "315\nbłędy zbyt rzeczywiste"
+        )
+        assert stored["recorded"] == []
+
+    def test_an_empty_line_between_a_head_and_a_paragraph_is_422(self, stored):
+        xml = str(text_to_tei_xml("Ala\n\nma")).replace(
+            "<p>Ala</p>", "<head>Ala</head>"
+        )
+        stored["page"] = stored["page"].model_copy(
+            update={"xml_content_corrected": xml}
+        )
+
+        response = self.post(stored, {"start": 0, "end": 7, "text": "Ala\n\nma"})
+
+        assert response.status_code == 422
+        assert stored["page"].xml_content_corrected == xml
+
     def test_undoes_a_line_split(self, stored):
         stored["page"] = stored["page"].model_copy(
             update={

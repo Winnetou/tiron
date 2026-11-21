@@ -440,16 +440,23 @@ A split is undone with the next section.
 "end": 31, "text": "kota\nA"}` removes the line break between the last token of a
 line and the first token of the next one, so the two lines become one. It undoes a
 line split. `start` to `end` are characters of the text that `POST /tei/text` gives
-for the page, and `text` is the two tokens, separated by one line break, as the
-client saw them.
+for the page, and `text` is the two tokens, separated by one line break or by an
+empty line, as the client saw them.
 
 - The `<lb/>` between them is replaced with a space, and the markup around stays:
   a break inside a `<persName>` goes and the element stays
   (`<persName>Jan Kowalski</persName>`). A break inside a word
   (`<lb break="no"/>`, after a hyphen) becomes a space too; the hyphen stays in the
   text, and "Join with next" takes the space away if it is wanted.
-- Only a plain `<lb/>` goes. The end of an `<l>` or an `<item>`, and the break
-  between two paragraphs, are not removed (422).
+- **An empty line** (`"text": "315\n\nbłędy"`) is the end of one `<p>` and the start
+  of the next one. The two paragraphs become one, with a line break (`<lb/>`) between
+  them: the empty line is gone and the two lines stay lines, one line break less
+  (`315⏎⏎błędy` becomes `315⏎błędy`). A second removal joins the lines. The two must
+  be `<p>` next to each other, with nothing but empty elements between them (422
+  otherwise, for example for a `<head>` and a `<p>`, or paragraphs in different
+  `<div>`s). A hyphen at the end of the first one makes the break
+  `<lb break="no"/>`.
+- Only a plain `<lb/>` goes. The end of an `<l>` or an `<item>` is not removed (422).
 - `text` is checked against what is at the offsets: 409 if the page has changed
   since. 422 if `text` is not two tokens with one line break between them, or the
   page has no valid TEI XML; 404 if the page is not stored.
@@ -659,10 +666,11 @@ token at the end of a line, click it and choose "New line here".
 
 "↑ Remove line break" and "Remove line break ↓" are the way back: for the first word
 of a line, the first one joins the line to the one above; for the last word of a
-line, the second joins the line below to it (only a single line break, not the blank
-line between two paragraphs). They send the two words, separated by a line break,
-to `POST .../line-joins`; the page is shown again with its new text, and the
-spelling is checked again.
+line, the second joins the line below to it. Where there is an empty line between two
+paragraphs (a page number alone on the first line, for example), the buttons say
+"Remove empty line" and take it away, leaving a line break; a second click joins the
+lines. They send the two words, with what is between them, to `POST .../line-joins`;
+the page is shown again with its new text, and the spelling is checked again.
 
 A page that has no text at all (the OCR found nothing) has nothing to double-click.
 Instead of the hint, the correction view shows a field and an "Add text" button:

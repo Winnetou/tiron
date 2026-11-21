@@ -1795,9 +1795,55 @@ class TestJoinLinesAt:
         with pytest.raises(TextChanged):
             join_lines_at(generated(self.TEXT), start, end, "kota\nA")
 
-    def test_two_paragraphs_are_not_joined(self):
+    def test_an_empty_line_between_two_paragraphs_is_removed(self):
+        result = self.join("Ale\n\nNowy")
+
+        assert tei_xml_to_text(result) == "Ala ma kota\nA kot ma Ale\nNowy akapit"
+        assert "<p>Ala ma kota<lb/>A kot ma Ale<lb/>Nowy akapit</p>" in result
+
+    def test_removing_an_empty_line_twice_joins_the_lines(self):
+        source = "315\n\nbłędy zbyt"
+        once = join_lines_at(generated(source), 0, 10, "315\n\nbłędy")
+        assert tei_xml_to_text(once) == "315\nbłędy zbyt"
+
+        twice = join_lines_at(once, 0, 9, "315\nbłędy")
+
+        assert tei_xml_to_text(twice) == "315 błędy zbyt"
+
+    def test_the_markup_of_the_second_paragraph_comes_along(self):
+        xml = tag_text_range(generated("315\n\nAla Jan ma"), 9, 12, "persName", "Jan")
+
+        result = join_lines_at(xml, 0, 8, "315\n\nAla")
+
+        assert tei_xml_to_text(result) == "315\nAla Jan ma"
+        assert "<p>315<lb/>Ala <persName>Jan</persName> ma</p>" in result
+
+    def test_a_hyphen_before_an_empty_line_makes_the_break_one_inside_a_word(self):
+        result = join_lines_at(generated("kro-\n\nkodyl"), 0, 11, "kro-\n\nkodyl")
+
+        assert '<lb break="no"/>' in result
+
+    def test_empty_paragraphs_between_are_dropped(self):
+        xml = generated("Ala\n\nma").replace("</p><p>", "</p><p/><p>")
+
+        result = join_lines_at(xml, 0, 7, "Ala\n\nma")
+
+        assert tei_xml_to_text(result) == "Ala\nma"
+        assert "<p/>" not in result
+
+    def test_a_head_is_not_merged_with_a_paragraph(self):
+        xml = generated("Ala\n\nma").replace("<p>Ala</p>", "<head>Ala</head>")
+
         with pytest.raises(CannotJoinLines):
-            self.join("Ale\n\nNowy")
+            join_lines_at(xml, 0, 7, "Ala\n\nma")
+
+    def test_paragraphs_in_different_divs_are_not_merged(self):
+        xml = generated("Ala\n\nma").replace(
+            "<p>Ala</p><p>ma</p>", "<div><p>Ala</p></div><div><p>ma</p></div>"
+        )
+
+        with pytest.raises(CannotJoinLines):
+            join_lines_at(xml, 0, 7, "Ala\n\nma")
 
     def test_the_end_of_an_l_is_not_a_plain_line_break(self):
         xml = generated("x").replace("<p>x</p>", "<lg><l>Ala</l><l>ma</l></lg>")
@@ -1811,7 +1857,8 @@ class TestJoinLinesAt:
         [
             "kota",  # one token
             "kota A",  # a space is not a line break
-            "kota\n\nA",  # a blank line
+            "kota\n\n\nA",  # more than one empty line
+            "kota \nA",  # a space next to the break
             "kota\nA kot",  # three tokens
             "\nkota\nA",
             "kota\tA",

@@ -146,6 +146,12 @@ function EntityMark({
   )
 }
 
+/** What is between two words on different lines: a line break, or an empty line. */
+type LineGap = 'break' | 'empty'
+
+const lineGapName = (kind: LineGap) =>
+  kind === 'empty' ? 'empty line' : 'line break'
+
 interface WordEditorProps {
   word: Word
   busy: boolean
@@ -155,9 +161,14 @@ interface WordEditorProps {
   onJoinNext?: () => void
   /** Start a new line before the word (only if the word has one before it). */
   onSplitLine?: () => void
-  /** Remove the line break before / after the word (only if there is one). */
+  /**
+   * Remove the line break before / after the word (only if there is one). The
+   * kind says what is there: a line break, or an empty line.
+   */
   onJoinPreviousLine?: () => void
   onJoinNextLine?: () => void
+  previousLineKind?: LineGap
+  nextLineKind?: LineGap
   /** The spelling is legal in this edition (only offered for a misspelled word). */
   onLegal: () => void
   onCancel: () => void
@@ -173,7 +184,9 @@ interface WordEditorProps {
  * OCR split a word in two). "New line here" starts a new line before the word,
  * if the word has another one right before it on the line, and "Remove line
  * break" joins the line with the one before or after it, if the word is the
- * first or the last of its line. While a request is running the field is disabled
+ * first or the last of its line ("Remove empty line" if there is an empty line
+ * between: the paragraphs become one, with a line break). While a request is
+ * running the field is disabled
  * and cannot be left.
  */
 function WordEditor({
@@ -185,6 +198,8 @@ function WordEditor({
   onSplitLine,
   onJoinPreviousLine,
   onJoinNextLine,
+  previousLineKind = 'break',
+  nextLineKind = 'break',
   onLegal,
   onCancel,
 }: WordEditorProps) {
@@ -285,24 +300,32 @@ function WordEditor({
         <button
           type="button"
           className="join-button"
-          title="Remove the line break before the word: the line joins the one above"
+          title={
+            previousLineKind === 'empty'
+              ? 'Remove the empty line above the word'
+              : 'Remove the line break before the word: the line joins the one above'
+          }
           disabled={busy}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onJoinPreviousLine}
         >
-          ↑ Remove line break
+          ↑ Remove {lineGapName(previousLineKind)}
         </button>
       )}
       {onJoinNextLine && (
         <button
           type="button"
           className="join-button"
-          title="Remove the line break after the word: the line below joins this one"
+          title={
+            nextLineKind === 'empty'
+              ? 'Remove the empty line below the word'
+              : 'Remove the line break after the word: the line below joins this one'
+          }
           disabled={busy}
           onMouseDown={(event) => event.preventDefault()}
           onClick={onJoinNextLine}
         >
-          Remove line break ↓
+          Remove {lineGapName(nextLineKind)} ↓
         </button>
       )}
     </span>
@@ -514,9 +537,12 @@ export default function PageText({
   const codePoints = Array.from(text)
   const apart = (before: Word, after: Word) =>
     codePoints.slice(before.end, after.start).join('') === ' '
-  // Words on two lines, with only a line break between them (not a blank line)
-  const lineApart = (before: Word, after: Word) =>
-    codePoints.slice(before.end, after.start).join('') === '\n'
+  // Words on two lines, with only a line break between them, or an empty line
+  // (a paragraph break): what is between them, or null
+  const lineGap = (before: Word, after: Word): LineGap | null => {
+    const between = codePoints.slice(before.end, after.start).join('')
+    return between === '\n' ? 'break' : between === '\n\n' ? 'empty' : null
+  }
   const sorted = [...(words ?? [])].sort((a, b) => a.start - b.start)
   const editorAt = segments.findIndex((segment) => segment.word === editedWord)
   function render(segment: Segment, index: number): ReactNode {
@@ -562,15 +588,17 @@ export default function PageText({
               : undefined
           }
           onJoinPreviousLine={
-            onJoinLines && previous && lineApart(previous, word)
+            onJoinLines && previous && lineGap(previous, word)
               ? joinLinesOf([previous, word])
               : undefined
           }
+          previousLineKind={previous ? (lineGap(previous, word) ?? undefined) : undefined}
           onJoinNextLine={
-            onJoinLines && next && lineApart(word, next)
+            onJoinLines && next && lineGap(word, next)
               ? joinLinesOf([word, next])
               : undefined
           }
+          nextLineKind={next ? (lineGap(word, next) ?? undefined) : undefined}
           onLegal={() => onLegalSpelling(word)}
           onCancel={() => setEditing(null)}
         />

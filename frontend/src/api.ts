@@ -307,21 +307,26 @@ export function splitLine(
 /**
  * Calls POST /editions/{editionId}/pages/{number}/line-joins: the backend removes
  * the line break between `words` (the last word of a line and the first one of
- * the next line) in the XML of the page, and returns the updated page. No
- * correction is recorded for it.
+ * the next line) in the XML of the page, or the empty line between two
+ * paragraphs (which becomes a line break), and returns the updated page. No
+ * correction is recorded for it. `pageText` is the text the offsets are in.
  */
 export function joinLines(
   editionId: string,
   number: number,
   words: Word[],
+  pageText: string,
 ): Promise<Page> {
+  const start = words[0].start
+  const end = words[words.length - 1].end
   return request<Page>(`${pageUrl(editionId, number)}/line-joins`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      start: words[0].start,
-      end: words[words.length - 1].end,
-      text: words.map((word) => word.text).join('\n'),
+      start,
+      end,
+      // the two words with what is between them: a line break, or an empty line
+      text: Array.from(pageText).slice(start, end).join(''),
     }),
   })
 }

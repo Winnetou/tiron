@@ -372,7 +372,7 @@ export default function App() {
           run(splitLine(page.edition_id, page.number, words))
         }
         onJoinLines={(words) =>
-          run(joinLines(page.edition_id, page.number, words))
+          run(joinLines(page.edition_id, page.number, words, text))
         }
         onAddToken={(position, token) =>
           run(addToken(page.edition_id, page.number, position, token))

@@ -282,7 +282,15 @@ function fakeBackend(options: Options = {}) {
       const current = pages.get(number) ?? page
       const changes = options.joinLines
         ? options.joinLines(body, current)
-        : { content: current.content.replace(body.text, body.text.replace('\n', ' ')) }
+        : {
+            // an empty line is reduced to a line break, a line break to a space
+            content: current.content.replace(
+              body.text,
+              body.text.includes('\n\n')
+                ? body.text.replace('\n\n', '\n')
+                : body.text.replace('\n', ' '),
+            ),
+          }
       if (changes instanceof Error) return failure(409, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
@@ -3553,15 +3561,46 @@ describe('removing a line break', () => {
     expect(after()).toBeNull()
   })
 
-  it('is not offered across a blank line between paragraphs', async () => {
+  it('is called "Remove empty line" across an empty line between paragraphs', async () => {
     await open()
 
-    await edit('noc') // followed by a blank line
+    await edit('noc') // followed by an empty line
     expect(after()).toBeNull()
+    expect(screen.getByRole('button', { name: /Remove empty line ↓/ })).toBeInTheDocument()
     await userEvent.keyboard('{Escape}')
 
     await edit('Nowy') // preceded by one
     expect(before()).toBeNull()
+    expect(screen.getByRole('button', { name: /↑ Remove empty line/ })).toBeInTheDocument()
+  })
+
+  it('sends the two words with the empty line, and shows one line break less', async () => {
+    await open()
+    await edit('Nowy')
+
+    await userEvent.click(screen.getByRole('button', { name: /↑ Remove empty line/ }))
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].body).toEqual({ start: 27, end: 36, text: 'noc\n\nNowy' })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe(
+        'Ala jest abso\nlutely tu, a\nnoc\nNowy akapit',
+      ),
+    )
+  })
+
+  it('removes the empty line below a page that starts with one token', async () => {
+    await openPage({
+      page: () => ({ content: xmlOf('315\n\nbłędy zbyt') }),
+      spell: (text) => wordsOf(text),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    await edit('315')
+
+    await userEvent.click(screen.getByRole('button', { name: /Remove empty line ↓/ }))
+
+    await waitFor(() => expect(joinCalls()).toHaveLength(1))
+    expect(joinCalls()[0].body).toEqual({ start: 0, end: 10, text: '315\n\nbłędy' })
   })
 
   it('sends the two words with the line break, and shows the joined line', async () => {
