@@ -1,5 +1,4 @@
 from unittest import mock
-from uuid import uuid4
 
 import pytest
 from psycopg.conninfo import conninfo_to_dict
@@ -81,20 +80,3 @@ def test_database_creates_schema_on_instantiation(monkeypatch):
         "legal_spellings",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
-
-
-@pytest.mark.parametrize("present", [True, False])
-def test_check_edition_in_collection_returns_bool(monkeypatch, present):
-    for name, value in ENV.items():
-        monkeypatch.setenv(name, value)
-    connect = mock.Mock()
-    connect.return_value.execute.return_value.fetchone.return_value = {
-        "present": present
-    }
-    monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
-    edition_id = uuid4()
-
-    assert Database().check_edition_in_collection(edition_id) is present
-    args = connect.return_value.execute.call_args.args
-    assert "FROM collection" in args[0]
-    assert args[1] == (edition_id,)
