@@ -164,6 +164,12 @@ export default function App() {
     }
   }
 
+  /** Leave the page for the main page, the list of the editions. */
+  function backToEditions() {
+    window.history.replaceState(null, '', '/')
+    setStatus({ kind: 'idle' })
+  }
+
   /** Show another page of the same edition and reflect it in the URL. */
   function goToPage(editionId: string, number: number) {
     return run(getPage(editionId, number), () => {
@@ -352,6 +358,7 @@ export default function App() {
         error={actionError}
         onPrevious={() => goToPage(page.edition_id, page.number - 1)}
         onNext={() => goToPage(page.edition_id, page.number + 1)}
+        onBackToEditions={backToEditions}
         entities={withMarked(
           recognized?.text === text ? recognized.entities : null,
           markedHere,

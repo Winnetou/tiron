@@ -551,6 +551,10 @@ first page of its edition, `/editions/{uuid}/pages/0`: the address of a page in
 the browser is the same as the endpoint's, and opening it shows that page. If the
 page cannot be loaded, the reason is shown with a link back to the main page.
 
+On a page, a round **house** button ("Back to the editions", at the left of the
+Previous button) goes back to the main page: the frontend shows the list again
+and the address becomes `/`, with no reload.
+
 A page's `content` is TEI XML, but the frontend never shows it, and it never
 reads it either. As soon as it gets a page, it sends the `content` back to
 `POST /tei/text` and shows the text that comes back (in a read-only text box).
