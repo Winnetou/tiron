@@ -37,8 +37,9 @@ def polona(monkeypatch):
     )
     monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
     monkeypatch.setattr(db, "get_page_by_number", mock.Mock(return_value=None))
+    monkeypatch.setattr(db, "create_work", mock.Mock(side_effect=lambda work: work))
     monkeypatch.setattr(
-        db, "upsert_edition", mock.Mock(side_effect=lambda work, edition: edition)
+        db, "create_edition", mock.Mock(side_effect=lambda edition: edition)
     )
     monkeypatch.setattr(db, "save_fetched_page", mock.Mock(side_effect=lambda p: p))
     fetch = mock.Mock(
@@ -167,8 +168,10 @@ def test_get_page_creates_work_and_edition_when_missing(polona):
 
     client.get(f"/editions/{edition_id}/pages/1")
 
-    db.upsert_edition.assert_called_once()
-    work, edition = db.upsert_edition.call_args.args
+    db.create_work.assert_called_once()
+    db.create_edition.assert_called_once()
+    (work,) = db.create_work.call_args.args
+    (edition,) = db.create_edition.call_args.args
     assert work.author == META["author"]
     assert work.title == "Lalka"
     assert edition.id == edition_id
@@ -183,7 +186,7 @@ def test_get_page_skips_metadata_when_edition_exists(polona):
     response = client.get(f"/editions/{edition_id}/pages/1")
 
     assert response.status_code == 200
-    db.upsert_edition.assert_not_called()
+    db.create_edition.assert_not_called()
     page_provider.fetch_edition_metadata.assert_not_called()
 
 
@@ -191,7 +194,7 @@ def test_get_page_metadata_errors(polona):
     page_provider.fetch_edition_metadata.side_effect = PolonaError("down")
 
     assert client.get(f"/editions/{uuid4()}/pages/1").status_code == 502
-    db.upsert_edition.assert_not_called()
+    db.create_edition.assert_not_called()
 
 
 def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(polona):
@@ -254,7 +257,7 @@ def test_get_page_returns_stored_page_without_calling_polona(polona):
     db.get_page_by_number.assert_called_once_with(edition_id, 7)
     polona.assert_not_called()
     page_provider.fetch_edition_metadata.assert_not_called()
-    db.upsert_edition.assert_not_called()
+    db.create_edition.assert_not_called()
     db.save_fetched_page.assert_not_called()
 
 
@@ -1603,7 +1606,8 @@ class TestAddLegalSpelling:
             "update_page",
             "save_fetched_page",
             "apply_correction",
-            "upsert_edition",
+            "create_work",
+            "create_edition",
         ):
             monkeypatch.setattr(db, name, mock.Mock())
 
@@ -1613,7 +1617,8 @@ class TestAddLegalSpelling:
             "update_page",
             "save_fetched_page",
             "apply_correction",
-            "upsert_edition",
+            "create_work",
+            "create_edition",
         ):
             getattr(db, name).assert_not_called()
 

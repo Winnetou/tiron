@@ -124,9 +124,8 @@ raw OCR text is never served.
 2. **Otherwise the page is fetched from Polona and saved**
    (`idempotent_fetch_page` in `app/page_provider.py`). The edition comes first,
    because the page belongs to it (`idempotent_fetch_edition`): if it is not
-   stored yet, its metadata is fetched and it is saved (`upsert_edition` keeps
-   an edition that is stored already, so two requests for the same new edition
-   store it once). Then the page is requested from Polona
+   stored yet, its metadata is fetched and a work and the edition are created
+   (`create_work`, `create_edition`). Then the page is requested from Polona
    (`request_polona_edition_page` in `app/polona/polona_connector.py`), saved
    (`fetch_page_from_known_edition`) and returned. The next request for it is
    served from the database. A page that Polona does not have therefore leaves

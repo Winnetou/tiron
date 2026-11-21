@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS editions (
     id uuid PRIMARY KEY,
     work_id uuid NOT NULL REFERENCES works (id),
     place text,
-    year integer CHECK (year BETWEEN 1500 AND 2030),
-    fetched_completed boolean NOT NULL DEFAULT false,
+    year integer CHECK (year BETWEEN 1500 AND 2030)
+    fetched_completed boolean NOT NULL DEFAULT false
     page_count integer CHECK (page_count >= 1)
 );
 
@@ -138,57 +138,6 @@ class Database:
                 edition.page_count,
             ),
         ).fetchone()
-        return Edition.model_validate(row)
-
-    def _get_or_create_work(self, work: Work) -> Work:
-        """Return the stored work with the same (author, title), ignoring case,
-        or store the given one. Works with an unknown author or title never match."""
-        row = self.conn.execute(
-            "INSERT INTO works (id, author, title) VALUES (%s, %s, %s)"
-            " ON CONFLICT (lower(author), lower(title))"
-            " WHERE author IS NOT NULL AND title IS NOT NULL"
-            " DO NOTHING RETURNING *",
-            (work.id, work.author, work.title),
-        ).fetchone()
-        if row is None:
-            row = self.conn.execute(
-                "SELECT * FROM works WHERE lower(author) = lower(%s)"
-                " AND lower(title) = lower(%s)",
-                (work.author, work.title),
-            ).fetchone()
-        return Work.model_validate(row)
-
-    def upsert_edition(self, work: Work, edition: Edition) -> Edition:
-        """Store the edition unless it already exists, in which case the stored
-        edition is returned and nothing is written.
-
-        The edition is attached to the stored work with the same (author, title)
-        if there is one, so many editions share a work; `work` is stored only
-        when there is no such work. Atomic: a work is never stored without its
-        edition. The returned edition carries the work_id actually used."""
-        row = None
-        with self.conn.transaction():
-            if self.get_edition(edition.id) is not None:
-                raise psycopg.Rollback
-            stored_work = self._get_or_create_work(work)
-            row = self.conn.execute(
-                "INSERT INTO editions"
-                " (id, work_id, place, year, fetched_completed, page_count)"
-                " VALUES (%s, %s, %s, %s, %s, %s)"
-                " ON CONFLICT (id) DO NOTHING RETURNING *",
-                (
-                    edition.id,
-                    stored_work.id,
-                    edition.place,
-                    edition.year,
-                    edition.fetched_completed,
-                    edition.page_count,
-                ),
-            ).fetchone()
-            if row is None:
-                raise psycopg.Rollback  # created concurrently: discard our work
-        if row is None:
-            return self.get_edition(edition.id)
         return Edition.model_validate(row)
 
     def get_edition(self, edition_id: UUID) -> Edition | None:

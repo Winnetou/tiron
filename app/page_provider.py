@@ -87,9 +87,8 @@ def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     stored there yet.
 
     `edition_id` is the Polona object UUID. An unknown edition is fetched from
-    polona.pl (its metadata) and a Work and an Edition are created. Saving is
-    idempotent: `Database.upsert_edition` keeps a stored edition as it is, so two
-    requests for the same new edition at the same time store it once.
+    polona.pl (its metadata) and a Work and an Edition are created
+    (`Database.create_work` and `Database.create_edition`).
 
     Raises PolonaError, like fetch_edition_metadata, if the metadata cannot be
     fetched. Nothing is saved in that case.
@@ -98,14 +97,14 @@ def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     if edition_instance is None:
         metadata = fetch_edition_metadata(edition_id)
         work = Work(author=metadata["author"], title=metadata["title"])
-        edition_instance = db.upsert_edition(
-            work,
+        db.create_work(work)
+        edition_instance = db.create_edition(
             Edition(
                 id=edition_id,
                 work_id=work.id,
                 place=metadata["place"],
                 year=metadata["year"],
-            ),
+            )
         )
     return edition_instance
 
