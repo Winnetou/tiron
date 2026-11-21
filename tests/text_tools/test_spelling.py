@@ -107,7 +107,7 @@ class TestWords:
             "o’Hara",
         ]
 
-    def test_a_hyphen_at_the_end_of_a_line_does_not(self, fake):
+    def test_the_parts_of_a_word_split_over_lines_stay_tokens_of_their_own(self, fake):
         # "o-" / "wych": the two halves of a word split over two lines
         assert [(w.text, w.start, w.end) for w in check_words("o-\nwych")] == [
             ("o", 0, 1),
@@ -127,6 +127,131 @@ class TestWords:
 
     def test_underscores_are_not_letters(self, fake):
         assert [w.text for w in check_words("Ala_ma")] == ["Ala", "_", "ma"]
+
+
+class TestWordsSplitOverLines:
+    @pytest.fixture
+    def checker(self, monkeypatch):
+        known = FakeChecker("przeczytać", "ala", "ma", "biało-czerwony", "dom", "a")
+        monkeypatch.setattr(spelling, "get_checker", lambda: known)
+        return known
+
+    def test_a_word_that_is_right_joined_is_right_in_both_parts(self, checker):
+        assert words("przeczy-\ntać") == [
+            ("przeczy", True),
+            ("-", True),
+            ("tać", True),
+        ]
+
+    def test_without_the_split_the_parts_are_wrong(self, checker):
+        assert words("przeczy tać") == [("przeczy", False), ("tać", False)]
+
+    def test_a_word_that_is_wrong_joined_is_wrong_in_both_parts(self, checker):
+        assert words("przeczy-\ntaćx") == [
+            ("przeczy", False),
+            ("-", True),
+            ("taćx", False),
+        ]
+
+    def test_the_hyphen_is_a_sign_and_so_it_is_correct(self, checker):
+        assert [w.correct for w in check_words("przeczy-\ntaćx") if w.text == "-"] == [
+            True
+        ]
+
+    def test_a_hyphen_that_belongs_to_the_word_is_kept_when_that_is_the_right_one(
+        self, checker
+    ):
+        # "biało-czerwony" is the word, "białoczerwony" is not
+        assert words("biało-\nczerwony") == [
+            ("biało", True),
+            ("-", True),
+            ("czerwony", True),
+        ]
+
+    def test_the_offsets_of_the_parts_are_their_own(self, checker):
+        text = "Ala ma przeczy-\ntać."
+
+        for word in check_words(text):
+            assert text[word.start : word.end] == word.text
+
+    def test_the_text_around_is_checked_as_always(self, checker):
+        assert words("Ala jey przeczy-\ntać ma") == [
+            ("Ala", True),
+            ("jey", False),
+            ("przeczy", True),
+            ("-", True),
+            ("tać", True),
+            ("ma", True),
+        ]
+
+    def test_the_whole_word_is_looked_up_not_the_parts(self, checker):
+        check_words("przeczy-\ntać")
+
+        assert checker.asked == ["przeczytać"]
+
+    def test_a_legal_spelling_is_matched_as_the_whole_word(self, checker):
+        assert [w.correct for w in check_words("je-\ny", {"jey"})] == [True] * 3
+
+    def test_a_legal_spelling_with_the_hyphen_kept_too(self, checker):
+        assert [w.correct for w in check_words("tey-\njey", {"tey-jey"})] == [True] * 3
+
+    def test_a_word_split_over_three_lines_that_is_wrong_is_wrong_in_all_parts(
+        self, checker
+    ):
+        assert [w.correct for w in check_words("prze-\nczy-\ntaćx")] == [
+            False,
+            True,
+            False,
+            True,
+            False,
+        ]
+
+    def test_a_word_split_over_three_lines_is_checked_as_one(self, monkeypatch):
+        known = FakeChecker("przeczytać")
+        monkeypatch.setattr(spelling, "get_checker", lambda: known)
+
+        assert [w.correct for w in check_words("prze-\nczy-\ntać")] == [True] * 5
+
+    def test_an_empty_line_is_not_a_line_break(self, checker):
+        # a paragraph break: the two words are not one
+        assert words("przeczy-\n\ntać") == [
+            ("przeczy", False),
+            ("-", True),
+            ("tać", False),
+        ]
+
+    def test_a_space_after_the_hyphen_is_not_a_line_break(self, checker):
+        assert words("przeczy- tać") == [
+            ("przeczy", False),
+            ("-", True),
+            ("tać", False),
+        ]
+
+    def test_a_hyphen_that_is_not_right_after_the_word_is_not_a_split(self, checker):
+        assert words("przeczy -\ntać") == [
+            ("przeczy", False),
+            ("-", True),
+            ("tać", False),
+        ]
+
+    def test_a_hyphen_before_a_sign_is_not_a_split(self, checker):
+        assert [w.correct for w in check_words("przeczy-\n,tać")] == [
+            False,
+            True,
+            True,
+            False,
+        ]
+
+    def test_a_word_before_a_hyphen_at_the_end_of_the_text_is_alone(self, checker):
+        assert words("przeczy-") == [("przeczy", False), ("-", True)]
+
+    def test_a_hyphen_line_between_two_words_that_are_right_alone(self, checker):
+        assert [w.correct for w in check_words("ala-\nma")] == [True] * 3
+
+    def test_each_distinct_whole_word_is_looked_up_once(self, checker):
+        check_words("przeczy-\ntać przeczy-\ntać")
+
+        assert checker.asked == ["przeczytać"]
 
 
 class TestVerdicts:
@@ -328,6 +453,16 @@ class TestWithTheRealDictionary:
 
     def test_compounds_with_a_hyphen(self):
         assert all(w.correct for w in check_words("biało-czerwony Biało-czerwony"))
+
+    def test_words_split_over_lines_are_checked_as_whole_words(self):
+        text = "Wielu Biskupów przeczy-\ntać dawnieyszych biało-\nczerwony"
+
+        assert [w.text for w in check_words(text) if not w.correct] == ["dawnieyszych"]
+
+    def test_a_split_word_that_is_wrong_joined_is_wrong(self):
+        result = check_words("Biskup przeczy-\ntaćx")
+
+        assert [w.text for w in result if not w.correct] == ["przeczy", "taćx"]
 
     def test_proper_names_are_checked_like_any_word(self):
         wrong = [
