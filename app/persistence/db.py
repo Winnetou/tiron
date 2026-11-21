@@ -337,7 +337,9 @@ class Database:
     # Legal spellings
 
     def add_legal_spelling(self, legal: LegalSpelling) -> bool:
-        """Store a spelling as legal in an edition.
+        """Store a spelling as legal in an edition ("legal", not "correct": what
+        was correct in the 19th century often is not anymore, and we have no
+        better word for it).
 
         Returns True if it was added, and False if the edition already had that
         spelling (the pair is unique), in which case nothing is changed. The

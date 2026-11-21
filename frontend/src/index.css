@@ -186,8 +186,14 @@ button {
   transition: opacity 0.1s;
 }
 
-/* kept inside the half: the previous one starts at its left edge, the next one
+.page-nav-start {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* kept inside the half: the first ones start at the left edge, the next one
    ends at its right edge */
+.page-nav-button.home::after,
 .page-nav-button.previous::after {
   left: 0;
 }

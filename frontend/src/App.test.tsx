@@ -4265,6 +4265,23 @@ describe('page view', () => {
 describe('page navigation', () => {
   const open = (number: number) => openPage({}, number)
 
+  it('has a button that goes back to the editions, the main page', async () => {
+    await open(1)
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+
+    const home = screen.getByRole('button', { name: 'Back to the editions' })
+    expect(home.querySelector('svg')).not.toBeNull()
+    expect(home).toHaveAttribute('data-tooltip', 'Back to the editions')
+    expect(getComputedStyle(home).borderRadius).toBe('50%')
+
+    await userEvent.click(home)
+
+    expect(await screen.findByRole('navigation', { name: 'Editions' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
+    expect(window.location.pathname).toBe('/')
+    expect(calledUrls()).toContain('GET /editions?page=1')
+  })
+
   it('has round buttons with an arrow, and the name only as a tooltip', async () => {
     await open(1)
     await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))

@@ -6,7 +6,11 @@ export interface Word {
   /** Character offsets, counted in code points (as Python does). */
   start: number
   end: number
-  /** False if the word is misspelled. */
+  /**
+   * The backend's verdict: false if the word is misspelled. The dictionary is a
+   * modern one, so a spelling of the edition that was made "legal" (see
+   * `addLegalSpelling`) counts as correct here.
+   */
   correct: boolean
 }
 

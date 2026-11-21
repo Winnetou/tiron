@@ -163,6 +163,8 @@ interface WordEditorProps {
  * (or leaving the field) cancels. Nothing is sent if the text is empty or is
  * the same as before. A misspelled word also has a "Legal spelling" button next
  * to the field, to say that the spelling as it is, is legal in the edition.
+ * ("Legal", not "correct": the dictionary is a modern one, and what was correct
+ * in the 19th century often is not anymore; we have no better word for it.)
  * Next to a word that has another one right before or after it, with only a
  * space between, "Join with previous" / "Join with next" remove that space (the
  * OCR split a word in two). While a request is running the field is disabled

@@ -69,7 +69,10 @@ Spelling = Annotated[
 class LegalSpelling(BaseModel):
     """A spelling that is legal in an edition, although the dictionary does not
     know it (old print uses spellings like "jey" and "tey"). A spelling is
-    legal for an edition, not everywhere, and each can be given once."""
+    legal for an edition, not everywhere, and each can be given once.
+
+    We say "legal", not "correct": the dictionary is a modern one, and what was
+    correct in the 19th century often is not anymore. We have no better word."""
 
     edition_id: UUID
     spelling: Spelling

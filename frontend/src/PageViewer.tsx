@@ -31,6 +31,26 @@ function Arrow({ direction }: { direction: 'left' | 'right' }) {
   )
 }
 
+/** The icon of the button that goes back to the editions: a house. */
+function HomeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 11l9-8 9 8" />
+      <path d="M5 10v10h5v-6h4v6h5V10" />
+    </svg>
+  )
+}
+
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
@@ -51,6 +71,8 @@ interface Props {
   error: string | null
   onPrevious: () => void
   onNext: () => void
+  /** The user wants the editions (the main page) back. */
+  onBackToEditions: () => void
   /** The named entities found in `text`; null if not recognized yet. */
   entities: Entity[] | null
   recognizing: boolean
@@ -84,7 +106,8 @@ interface Props {
 
 /**
  * Left half: the scan, with zoom buttons.
- * Right half: previous/next page buttons, and the page
+ * Right half: the buttons to go back to the editions and to the previous/next
+ * page, and the page
  * itself, read-only: its text as extracted by the backend, in which the
  * spelling is corrected, or (NER view) the named entities, recognized by the
  * backend. The Text button shows the text as it is, the XML button the page's
@@ -101,6 +124,7 @@ export default function PageViewer({
   error,
   onPrevious,
   onNext,
+  onBackToEditions,
   entities,
   recognizing,
   onRecognizeEntities,
@@ -222,16 +246,27 @@ export default function PageViewer({
         onScrollCapture={followText}
       >
         <nav className="page-nav">
-          <button
-            type="button"
-            className="page-nav-button previous"
-            aria-label="Previous page"
-            data-tooltip="Previous page"
-            onClick={onPrevious}
-            disabled={page.number === 0 || busy}
-          >
-            <Arrow direction="left" />
-          </button>
+          <span className="page-nav-start">
+            <button
+              type="button"
+              className="page-nav-button home"
+              aria-label="Back to the editions"
+              data-tooltip="Back to the editions"
+              onClick={onBackToEditions}
+            >
+              <HomeIcon />
+            </button>
+            <button
+              type="button"
+              className="page-nav-button previous"
+              aria-label="Previous page"
+              data-tooltip="Previous page"
+              onClick={onPrevious}
+              disabled={page.number === 0 || busy}
+            >
+              <Arrow direction="left" />
+            </button>
+          </span>
           <span>Page {page.number}</span>
           <button
             type="button"
