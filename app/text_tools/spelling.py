@@ -65,6 +65,12 @@ def _is_correct(word: str, checker: phunspell.Phunspell) -> bool:
     return len(parts) > 1 and all(checker.lookup(part) for part in parts)
 
 
+def tokenize(text: str) -> list[re.Match[str]]:
+    """The tokens of a text, in order: words and runs of signs (white space is
+    not a token). The match has the token as `group()` and its offsets."""
+    return list(_TOKEN.finditer(text))
+
+
 # The most parts of one word that are split over lines and checked as a whole
 # ("o-" / "wy-" / "ch"): a word on more lines than that is not looked for.
 _MOST_PARTS = 4
@@ -155,7 +161,7 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
             )
         return verdicts[word]
 
-    tokens = list(_TOKEN.finditer(text))
+    tokens = tokenize(text)
     split = _split_words(text, tokens)
     whole: dict[int, bool] = {}  # the verdict of each split word, by its first part
     for parts in split.values():

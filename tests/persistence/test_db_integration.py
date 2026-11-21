@@ -14,6 +14,7 @@ from fastapi_pagination import Params, set_page, set_params
 
 from app.persistence.db import Database, get_conninfo
 from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
+from app.text_tools.tei_xml import text_to_tei_xml
 from tests.conftest import real_connect
 
 pytestmark = pytest.mark.skipif(
@@ -692,3 +693,76 @@ def test_update_edition_can_clear_the_page_count(db, edition):
 
 def test_update_edition_of_an_unknown_edition_is_none(db):
     assert db.update_edition(uuid4(), page_count=3) is None
+
+
+class TestSimilarMisspellings:
+    def pages(self, db, edition, texts):
+        for number, text in texts.items():
+            db.create_page(
+                Page(
+                    edition_id=edition.id,
+                    number=number,
+                    raw_ocr_content=text,
+                    xml_content_corrected=str(text_to_tei_xml(text)),
+                )
+            )
+
+    def test_finds_the_same_mistake_in_every_page_of_the_edition(self, db, edition):
+        self.pages(
+            db,
+            edition,
+            {
+                0: "Ala ma kota",
+                1: "To samćj i jćj tu.",
+                2: "Nic tu nie ma\nale ćjx jest.",
+            },
+        )
+
+        found = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [(m.page_number, [t.text for t in m.tokens]) for m in found] == [
+            (1, ["samćj", "jćj"]),
+            (2, ["ćjx"]),
+        ]
+
+    def test_each_token_comes_with_the_corrected_one(self, db, edition):
+        self.pages(db, edition, {1: "To samćj i jćj, bardzićj tu."})
+
+        (match,) = db.get_similar_misspellings(edition.id, "jćj", "jéj")
+
+        assert [(t.text, t.suggestion) for t in match.tokens] == [
+            ("samćj", "saméj"),
+            ("jćj", "jéj"),
+            ("bardzićj", "bardziéj"),
+        ]
+
+    def test_the_offsets_are_those_of_the_text_of_the_page(self, db, edition):
+        text = "To samćj i jćj tu."
+        self.pages(db, edition, {1: text})
+
+        (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [text[t.start : t.end] for t in match.tokens] == ["samćj", "jćj"]
+
+    def test_pages_of_other_editions_are_not_looked_at(self, db, edition):
+        work = db.create_work(Work(author="Other"))
+        other = db.create_edition(Edition(work_id=work.id, year=1900))
+        self.pages(db, other, {0: "samćj"})
+        self.pages(db, edition, {0: "Ala ma kota"})
+
+        assert db.get_similar_misspellings(edition.id, "samćj", "saméj") == []
+
+    def test_an_edition_without_pages_has_no_matches(self, db, edition):
+        assert db.get_similar_misspellings(edition.id, "samćj", "saméj") == []
+
+    def test_a_page_without_corrected_content_is_left_out(self, db, edition):
+        db.create_page(Page(edition_id=edition.id, number=0, raw_ocr_content="samćj"))
+
+        assert db.get_similar_misspellings(edition.id, "samćj", "saméj") == []
+
+    def test_the_pages_are_in_the_order_of_their_numbers(self, db, edition):
+        self.pages(db, edition, {5: "jćj", 2: "jćj", 9: "jćj"})
+
+        found = db.get_similar_misspellings(edition.id, "jćj", "jéj")
+
+        assert [m.page_number for m in found] == [2, 5, 9]

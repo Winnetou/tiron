@@ -555,3 +555,124 @@ button {
   content: attr(data-close);
   margin-left: 0.2em;
 }
+
+/* After a correction: the small box that offers to apply it to the edition. */
+.offer-box {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  max-width: 22rem;
+  padding: 0.75rem 1rem;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 0.4rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-family: system-ui, sans-serif;
+  font-size: 0.9rem;
+}
+
+.offer-box p {
+  margin: 0 0 0.6rem;
+}
+
+.offer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The big box with the places of the edition that have the same mistake. */
+.review-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.review-box {
+  display: flex;
+  flex-direction: column;
+  width: min(60rem, 92vw);
+  height: 88vh;
+  background: #fff;
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  font-family: system-ui, sans-serif;
+}
+
+.review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #ccc;
+}
+
+.review-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.review-body {
+  flex: 1;
+  padding: 0.5rem 1rem 1rem;
+  overflow-y: auto;
+}
+
+.review-body h3 {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.95rem;
+  color: #555;
+}
+
+.review-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.review-row .misspelling {
+  color: #b00020;
+  text-decoration: underline wavy;
+}
+
+.review-row .suggestion {
+  color: #1b6b2a;
+  font-weight: 600;
+}
+
+.review-place {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #777;
+}
+
+.review-done {
+  color: #1b6b2a;
+  font-size: 0.85rem;
+}
+
+.review-error {
+  font-size: 0.8rem;
+}
+
+.review-row.approved {
+  opacity: 0.6;
+}
+
+.review-warning {
+  font-size: 0.8rem;
+  color: #8a5a00;
+}

@@ -376,6 +376,41 @@ correction:
   before are no longer valid: check the spelling again (the frontend does).
 - This replaces the earlier `POST /corrections` stub (which returned 501).
 
+### The same mistake in the rest of the edition
+
+The OCR makes the same mistake again and again: it reads the old Polish "é" as "ć",
+so `jéj` comes out as `jćj`, `samćj` and `bardzićj` for `saméj` and `bardziéj`.
+`GET /editions/{edition_id}/similar-misspellings?incorrect_spelling=jćj&corrected_spelling=jéj`
+lists where the rest of the edition has the same mistake, so that a correction can be
+offered for the whole edition. It changes nothing.
+
+- **The mistake is a cluster of letters**: from the first letter that differs between
+  the two spellings to the end of the word. `jćj` corrected to `jéj` is the cluster
+  `ćj`; `tćgo` corrected to `tégo` is `ćgo`. The letters before it are not part of the
+  mistake, and differ from word to word (`jćj`, `samćj`). It is at least two letters
+  long: a single wrong letter at the end is taken with the letter before it, because
+  one letter (`ć`) is in far too many words that are right. If the wrong spelling is
+  only the beginning of the corrected one (letters are missing), only that spelling
+  itself is looked for.
+- **A match is any word token that contains the cluster**, whatever its case:
+  `jćj`, `samćj`, `bardzićj`, `tćjże`. Every page of the edition is looked at, in its
+  corrected content (`xml_content_corrected`, the text that the user sees, as
+  `POST /tei/text` gives it). A page without corrected content, or whose XML cannot
+  be read, is left out.
+- **The response** is a list with an item for each page that has matches, in the
+  order of the page numbers: `{"page_number": 8, "tokens": [{"text": "jćj", "start":
+  383, "end": 386, "suggestion": "jéj"}, ...]}`. `start` and `end` are offsets in
+  that text, counted in code points like the offsets of a correction, so
+  `text[start:end]` is the token. The `suggestion` is the token with the mistake
+  corrected in it, every occurrence of the cluster and with the capital letters kept
+  (`samćj` gives `saméj`, `Ćj` gives `Éj`): it is the `after` of the correction
+  (`POST .../corrections`) that applies it, with the token as `before` and these
+  offsets. A page without matches is not in the list, and an edition without matches
+  gets `[]`.
+- **404** if the edition is not stored, **422** if a spelling is empty or longer than
+  100 characters, if one is missing, or if the two are the same. Polona is not called.
+  The search is `Database.get_similar_misspellings`.
+
 ### Adding a token that the OCR missed
 
 `POST /editions/{edition_id}/pages/{number}/tokens` with `{"position": 25, "text":
@@ -762,6 +797,55 @@ backend answers, the page is shown with its new text, and the spelling is
 checked again. While the request runs the field is disabled; if it fails, the
 reason is shown and the field is kept so it can be tried again. The misspelled
 words can also be reached with the Tab key, and Enter on one starts editing.
+
+**Applying a correction to the entire edition.** The OCR makes the same mistake
+again and again, so when a word was corrected (the backend has answered, and the
+page is shown), a small box comes up at the bottom right: "You corrected `jćj` to
+`jéj`", with two buttons: **Apply it to the entire edition** and **Nein Danke**.
+It does not come up for a removed word (an empty field), for a word left as it
+was, for a correction that failed, or for a spelling of more than 100 characters,
+and not when the correction only adds a hyphen to the last word of a line
+(`abso` to `abso-`, the sign that the word goes on in the next line, which is
+nothing the rest of the edition has to be told); the last word of the page ends a
+line too. A hyphen added in the middle of a line, or together with another change,
+is a correction like any other. Nor is that hyphen made a legal spelling of the
+edition, as the new spelling of a misspelled word is otherwise (see "Legal
+spellings"): `abso-` is not a spelling. A new correction replaces the box, and so does
+leaving for the editions. Nothing is
+asked of the backend until the user answers; "Nein Danke" (or Escape) closes the
+box.
+
+"Apply it to the entire edition" opens a big box over the page, which asks
+`GET /editions/{id}/similar-misspellings` (see "The same mistake in the rest of
+the edition") and lists what it finds, by page: the misspelling, the correction
+the backend suggests, and its offsets, with an **Approve** button for each. The
+button carries what it is about as `data-edition-id`, `data-page`, `data-start`
+and `data-end`. Approving sends that place alone to `POST .../corrections`
+(`before` the token, `after` its suggestion, with the offsets), like the correction
+of a word, and the place is marked "✓ Approved". Nothing is applied by opening the
+list. Some details:
+
+- One approval is made at a time (the other buttons are disabled meanwhile),
+  because a correction that changes the length of the text moves the places that
+  follow it on its page: the offsets of those are moved by the difference, so
+  they stay right. Other pages are not touched.
+- If the place is on the page on the screen, that page is shown again with its
+  new text, and its spelling is checked again. A place on another page changes
+  that page in the backend only.
+- If the backend refuses a place (for example the 409 when the page has changed
+  since), the reason is shown in its row, the place stays, and it can be approved
+  again. The other places are not affected.
+- The box says "No other place in the edition has this mistake" when there is
+  none, shows the backend's reason if the search fails, and is closed with
+  **Close** or Escape.
+- Approving also makes the corrected spelling a legal spelling of the edition
+  (`POST /editions/{id}/legal-spellings`, after the correction), as editing a
+  misspelled word does, so that `saméj` is not red afterwards even if the
+  dictionary does not know it. Each spelling is sent once, however many places
+  have it, and none is sent for a suggestion of several words (a spelling is one
+  word). The page on the screen is checked again after that. If only the legal
+  spelling is refused, the place stays corrected and is marked approved, with the
+  reason as a warning in its row.
 
 **Legal spellings.** A misspelled (red) word may be a spelling that is right in
 this edition, as old print has many. Click the word, and next to its field there

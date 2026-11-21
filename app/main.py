@@ -6,12 +6,12 @@ from typing import Annotated
 from uuid import UUID
 
 import psycopg.errors
-from fastapi import FastAPI, HTTPException, Path, Response, status
+from fastapi import FastAPI, HTTPException, Path, Query, Response, status
 from fastapi_pagination import add_pagination
 
 from app import page_provider
 from app.persistence.db import Database
-from app.persistence.ontology import LegalSpelling
+from app.persistence.ontology import LegalSpelling, PageMatches
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
@@ -432,6 +432,58 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
             "Spellcheck requested, but the dictionary is not available: %s", exc
         )
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@app.get(
+    "/editions/{edition_id}/similar-misspellings", response_model=list[PageMatches]
+)
+def get_similar_misspellings(
+    edition_id: UUID,
+    incorrect_spelling: Annotated[str, Query(min_length=1, max_length=100)],
+    corrected_spelling: Annotated[str, Query(min_length=1, max_length=100)],
+) -> list[PageMatches]:
+    """List the places in the edition that have the same OCR mistake as a
+    correction that was made, so that the correction can be applied to the whole
+    edition: `incorrect_spelling` was corrected to `corrected_spelling`.
+
+    The mistake is the cluster of letters from the first one that differs to the
+    end of the word: "jćj" corrected to "jéj" is "ćj" (the OCR reads the old Polish
+    "é" as "ć"), and every token with that cluster in it is a match, "jćj" and
+    also "samćj" or "bardzićj" (case does not matter). The letters before the
+    mistake are not part of it. A cluster is at least two letters long.
+
+    The response is a list with an item for each page of the edition that has
+    matches, in the order of the page numbers: `{"page_number": 8, "tokens":
+    [{"text": "jćj", "start": 383, "end": 386, "suggestion": "jéj"}, ...]}`.
+    `start` and `end` are offsets in the text of the page that `POST /tei/text`
+    gives (counted in code points, like the offsets of a correction), so
+    text[start:end] is the token. The `suggestion` is the token with the mistake
+    corrected in it (`samćj` gives `saméj`), which is what a correction of it
+    (`POST .../corrections`, with `before` the token and `after` the suggestion)
+    would be.
+    The pages are searched in their corrected content, as the user sees them, and
+    a page without matches, or whose XML cannot be read, is left out. Nothing is
+    changed, and Polona is not called.
+
+    404 if the edition is not stored. 422 if a spelling is empty or longer than
+    100 characters, or the two are the same.
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        found = db.get_similar_misspellings(
+            edition_id, incorrect_spelling, corrected_spelling
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    logger.info(
+        "%s pages of edition %s have misspellings like %r",
+        len(found),
+        edition_id,
+        incorrect_spelling,
+    )
+    return found
 
 
 @app.post("/editions/{edition_id}/pages/{number}/corrections", response_model=PageView)
