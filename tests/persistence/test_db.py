@@ -5,6 +5,8 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from app.persistence.db import Database, get_conninfo
+from app.persistence.ontology import PageMatches, TokenMatch
+from app.text_tools.tei_xml import text_to_tei_xml
 
 ENV = {
     "POSTGRES_DB": "tiron",
@@ -94,3 +96,40 @@ def test_update_edition_needs_exactly_one_column(monkeypatch, changes):
 
     with pytest.raises(ValueError, match="exactly one"):
         db.update_edition(uuid4(), **changes)
+
+
+def test_get_similar_misspellings_looks_at_the_text_of_each_page(monkeypatch):
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    connect = mock.Mock()
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
+    xml = lambda text: str(text_to_tei_xml(text))  # noqa: E731
+    connect.return_value.execute.return_value.fetchall.return_value = [
+        {"number": 0, "xml_content_corrected": xml("Ala ma kota")},
+        {"number": 1, "xml_content_corrected": xml("To samćj i jćj tu.")},
+        {"number": 2, "xml_content_corrected": None},
+        {"number": 3, "xml_content_corrected": "<not tei/>"},
+    ]
+    edition_id = uuid4()
+
+    found = Database().get_similar_misspellings(edition_id, "samćj", "saméj")
+
+    assert found == [
+        PageMatches(
+            page_number=1,
+            tokens=[
+                TokenMatch(text="samćj", start=3, end=8, suggestion="saméj"),
+                TokenMatch(text="jćj", start=11, end=14, suggestion="jéj"),
+            ],
+        )
+    ]
+    assert connect.return_value.execute.call_args.args[1] == (edition_id,)
+
+
+def test_get_similar_misspellings_refuses_the_same_spelling(monkeypatch):
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", mock.Mock())
+
+    with pytest.raises(ValueError, match="same"):
+        Database().get_similar_misspellings(uuid4(), "kot", "kot")

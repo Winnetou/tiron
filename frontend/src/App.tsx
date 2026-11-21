@@ -7,6 +7,7 @@ import {
   joinTokens,
   splitLine,
   getPage,
+  type TokenMatch,
   markSection,
   pageFromPath,
   pageUrl,
@@ -18,6 +19,11 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import {
+  ApplyOffer,
+  SimilarMisspellings,
+  type EditionCorrection,
+} from './EditionWideCorrection'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
 import type { Word } from './segments'
@@ -99,6 +105,18 @@ function withMarked(found: Entity[] | null, marked: Entity[]): Entity[] | null {
   ]
 }
 
+/**
+ * Does the correction only put a hyphen after the last word of a line? That is
+ * how a line continuation is marked ("abso" to "abso-", with "lutely" on the next
+ * line): the word is not wrong anywhere else, so it is not offered to the entire
+ * edition. The last word of the page ends a line too. `text` is the text of the
+ * page before the correction, in which the word is at its offsets (code points).
+ */
+function addsLineContinuation(text: string, word: Word, after: string): boolean {
+  const next = Array.from(text)[word.end]
+  return after === `${word.text}-` && (next === undefined || next === '\n')
+}
+
 export default function App() {
   // An address that names a page (/editions/{uuid}/pages/{number}) opens it.
   const fromPath = pageFromPath(window.location.pathname)
@@ -120,6 +138,13 @@ export default function App() {
     null,
   )
   const [recognizing, setRecognizing] = useState(false)
+  // A correction that the user made, which they may apply to the whole edition:
+  // first the offer (a small box), then, if they accept it, the list of the places.
+  const [offer, setOffer] = useState<EditionCorrection | null>(null)
+  const [reviewing, setReviewing] = useState<EditionCorrection | null>(null)
+  // The spellings that were made legal by approving places of the edition, so
+  // that each is sent once.
+  const legalized = useRef(new Set<string>())
   // What was done last, to tell the user (not an error): cleared by the next request.
   const [notice, setNotice] = useState<string | null>(null)
   // What the user decided about the entities of a text. Like `recognized`, it
@@ -169,7 +194,51 @@ export default function App() {
   /** Leave the page for the main page, the list of the editions. */
   function backToEditions() {
     window.history.replaceState(null, '', '/')
+    setOffer(null)
+    setReviewing(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Apply the correction of one place of the edition: the token of a page, at
+   * its offsets, becomes its suggestion (the same request as the correction of a
+   * word), and the suggestion is made a legal spelling of the edition too, so
+   * that it is not red afterwards (once for each spelling: it is the same for the
+   * next place). If it is a place of the page on the screen, that page is shown
+   * again with its new text, after that. A refusal of the correction rejects, with
+   * its reason, for the list to show; if only the legal spelling is refused, the
+   * place is corrected, and the reason comes back as a warning.
+   */
+  async function approveMisspelling(
+    editionId: string,
+    pageNumber: number,
+    token: TokenMatch,
+  ): Promise<string | undefined> {
+    const updated = await correctWord(
+      editionId,
+      pageNumber,
+      { text: token.text, start: token.start, end: token.end, correct: false },
+      token.suggestion,
+    )
+    let warning: string | undefined
+    // (a spelling is one word, so a suggestion of several words has none)
+    const legal = `${editionId} ${token.suggestion}`
+    if (!/\s/.test(token.suggestion) && !legalized.current.has(legal)) {
+      try {
+        await addLegalSpelling(editionId, token.suggestion)
+        legalized.current.add(legal)
+      } catch (error) {
+        warning = `Corrected, but not saved as a legal spelling: ${errorMessage(error)}`
+      }
+    }
+    if (
+      status.kind === 'done' &&
+      status.page.edition_id === editionId &&
+      status.page.number === pageNumber
+    ) {
+      setStatus({ kind: 'done', ...(await withText(updated)) })
+    }
+    return warning
   }
 
   /** Show another page of the same edition and reflect it in the URL. */
@@ -252,9 +321,12 @@ export default function App() {
    * spelling is then also sent as a legal spelling of the edition, so that it is
    * not red afterwards, even if the dictionary does not know it. The text
    * changes, so the page is shown again with its new text, and its spelling is
-   * checked again (once both requests are done).
+   * checked again (once both requests are done). Neither a legal spelling nor an
+   * offer for the whole edition comes of a hyphen that only marks the word as
+   * continued in the next line. `text` is the text of the page as
+   * it was shown, in which the word is at its offsets.
    */
-  async function correct(page: Page, word: Word, after: string) {
+  async function correct(page: Page, word: Word, after: string, text: string) {
     setBusy(true)
     setActionError(null)
     try {
@@ -266,9 +338,11 @@ export default function App() {
         return
       }
       let legalError: string | null = null
-      // (a spelling is one word, so an edit into several words has none, and a
-      // removed token is not a spelling)
-      if (!word.correct && after !== '' && !/\s/.test(after)) {
+      const continued = addsLineContinuation(text, word, after)
+      // (a spelling is one word, so an edit into several words has none, a
+      // removed token is not a spelling, and neither is the hyphen that says that
+      // a word goes on in the next line)
+      if (!word.correct && after !== '' && !/\s/.test(after) && !continued) {
         try {
           await addLegalSpelling(page.edition_id, after)
         } catch (error) {
@@ -277,6 +351,22 @@ export default function App() {
       }
       // The word is corrected either way, so that is what is shown.
       setStatus({ kind: 'done', ...(await withText(corrected)) })
+      // A word that became another one may be wrong in other places too (the
+      // backend takes the spellings of 1 to 100 characters). Not so for a hyphen
+      // that marks the word as continued on the next line.
+      if (
+        after !== '' &&
+        after !== word.text &&
+        !continued &&
+        word.text.length <= 100 &&
+        after.length <= 100
+      ) {
+        setOffer({
+          editionId: page.edition_id,
+          incorrect: word.text,
+          corrected: after,
+        })
+      }
       if (legalError) {
         setActionError(
           `The word was corrected, but not saved as a legal spelling: ${legalError}`,
@@ -350,50 +440,71 @@ export default function App() {
       ),
     }
     return (
-      <PageViewer
-        page={page}
-        text={text}
-        textError={textError}
-        words={words}
-        spellError={spellError}
-        busy={busy}
-        error={actionError}
-        onPrevious={() => goToPage(page.edition_id, page.number - 1)}
-        onNext={() => goToPage(page.edition_id, page.number + 1)}
-        onBackToEditions={backToEditions}
-        entities={withMarked(
-          recognized?.text === text ? recognized.entities : null,
-          markedHere,
+      <>
+        <PageViewer
+          page={page}
+          text={text}
+          textError={textError}
+          words={words}
+          spellError={spellError}
+          busy={busy}
+          error={actionError}
+          onPrevious={() => goToPage(page.edition_id, page.number - 1)}
+          onNext={() => goToPage(page.edition_id, page.number + 1)}
+          onBackToEditions={backToEditions}
+          entities={withMarked(
+            recognized?.text === text ? recognized.entities : null,
+            markedHere,
+          )}
+          recognizing={recognizing}
+          onRecognizeEntities={() => recognize(page, text)}
+          decisions={decisionsHere}
+          onConfirmEntity={(entity, label) =>
+            confirmEntity(page, text, entity, label)
+          }
+          onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
+          onCorrectWord={(word, after) => correct(page, word, after, text)}
+          onLegalSpelling={(word) => legalize(page, text, word)}
+          onJoinWords={(words) =>
+            run(joinTokens(page.edition_id, page.number, words))
+          }
+          onSplitLine={(words) =>
+            run(splitLine(page.edition_id, page.number, words))
+          }
+          onJoinLines={(words) =>
+            run(joinLines(page.edition_id, page.number, words, text))
+          }
+          onAddToken={(position, token) =>
+            run(addToken(page.edition_id, page.number, position, token))
+          }
+          onCreateEntity={(selection, label) =>
+            createEntity(page, selection, label)
+          }
+          onMarkSection={(selection, section, n) =>
+            markPageSection(page, selection, section, n)
+          }
+          notice={notice}
+        />
+        {offer && !reviewing && (
+          <ApplyOffer
+            correction={offer}
+            onApply={() => {
+              setReviewing(offer)
+              setOffer(null)
+            }}
+            onDismiss={() => setOffer(null)}
+          />
         )}
-        recognizing={recognizing}
-        onRecognizeEntities={() => recognize(page, text)}
-        decisions={decisionsHere}
-        onConfirmEntity={(entity, label) =>
-          confirmEntity(page, text, entity, label)
-        }
-        onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
-        onCorrectWord={(word, after) => correct(page, word, after)}
-        onLegalSpelling={(word) => legalize(page, text, word)}
-        onJoinWords={(words) =>
-          run(joinTokens(page.edition_id, page.number, words))
-        }
-        onSplitLine={(words) =>
-          run(splitLine(page.edition_id, page.number, words))
-        }
-        onJoinLines={(words) =>
-          run(joinLines(page.edition_id, page.number, words, text))
-        }
-        onAddToken={(position, token) =>
-          run(addToken(page.edition_id, page.number, position, token))
-        }
-        onCreateEntity={(selection, label) =>
-          createEntity(page, selection, label)
-        }
-        onMarkSection={(selection, section, n) =>
-          markPageSection(page, selection, section, n)
-        }
-        notice={notice}
-      />
+        {reviewing && (
+          <SimilarMisspellings
+            correction={reviewing}
+            onApprove={(pageNumber, token) =>
+              approveMisspelling(reviewing.editionId, pageNumber, token)
+            }
+            onClose={() => setReviewing(null)}
+          />
+        )}
+      </>
     )
   }
 

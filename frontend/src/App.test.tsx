@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Page, SectionSpan } from './api'
+import type { Page, PageMatches, SectionSpan } from './api'
 import App from './App'
 import type { Entity } from './entities'
 import './index.css'
@@ -120,6 +120,11 @@ interface Options {
     body: { start: number; end: number; text: string },
     page: Page,
   ) => Partial<Page> | Error
+  /** Answer of GET .../similar-misspellings; defaults to no place. */
+  similar?: (query: {
+    incorrect_spelling: string
+    corrected_spelling: string
+  }) => PageMatches[] | Error
   /** Answer of PATCH; defaults to applying the changes. */
   patch?: Error
   /** Answer of POST /ner; defaults to no entities. */
@@ -190,6 +195,11 @@ function fakeBackend(options: Options = {}) {
       return answer instanceof Error
         ? failure(500, answer)
         : reply(true, 200, { total: 250, page, size: 100, ...answer })
+    }
+    if (url.includes('/similar-misspellings?')) {
+      const query = Object.fromEntries(new URLSearchParams(url.split('?')[1]))
+      const answer = options.similar ? options.similar(query as never) : []
+      return answer instanceof Error ? failure(404, answer) : reply(true, 200, answer)
     }
     if (url === '/spellcheck') {
       const answer = options.spell ? options.spell(body.text) : []
@@ -2370,6 +2380,598 @@ describe('spell check', () => {
     expect(pageText().querySelector('.word:not(.misspelled)')).not.toHaveAttribute(
       'tabindex',
     )
+  })
+})
+
+describe('applying a correction to the entire edition', () => {
+  const TEXT = 'Ala ma kota, a jćj tćj nie ma.'
+  const similarCalls = () => calls.filter((c) => c.url.includes('/similar-misspellings'))
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+  const offer = () =>
+    screen.queryByRole('dialog', { name: 'Apply the correction to the entire edition' })
+  const review = () => screen.queryByRole('dialog', { name: 'The same mistake in the edition' })
+  const applyButton = () => screen.getByRole('button', { name: 'Apply it to the entire edition' })
+
+  const PLACES: PageMatches[] = [
+    {
+      page_number: 1,
+      tokens: [
+        { text: 'samćj', start: 4, end: 9, suggestion: 'saméj' },
+        { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+      ],
+    },
+    { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj' }] },
+  ]
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: (number) =>
+        number === 1
+          ? { content: xmlOf('To samćj i tćj tu') }
+          : number === 3
+            ? { content: xmlOf('To bardzićj tu') }
+            : { content: xmlOf(TEXT) },
+      spell: (text) => wordsOf(text, ['jćj', 'tćj']),
+      similar: () => PLACES,
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  const correct = async (from = 'jćj', to = 'jéj') => {
+    await userEvent.click(screen.getByText(from, { selector: '.word' }))
+    await userEvent.keyboard(`${to}{Enter}`)
+  }
+  /** Correct a word, accept the offer, and wait for the list. */
+  async function openReview(extra: Options = {}) {
+    await open(extra)
+    await correct()
+    await userEvent.click(await screen.findByRole('button', { name: 'Apply it to the entire edition' }))
+    await screen.findByRole('dialog', { name: 'The same mistake in the edition' })
+  }
+
+  describe('the offer', () => {
+    it('comes up when a word was corrected, with the two buttons', async () => {
+      await open()
+
+      await correct()
+
+      expect(await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })).toBeInTheDocument()
+      expect(within(offer()!).getByText('jćj')).toBeInTheDocument()
+      expect(within(offer()!).getByText('jéj')).toBeInTheDocument()
+      expect(applyButton()).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Nein Danke' })).toBeInTheDocument()
+    })
+
+    describe('a hyphen that continues a word on the next line', () => {
+      const OCR = 'Ala ma abso\nlutely tu'
+      const openOcr = () =>
+        open({
+          page: () => ({ content: xmlOf(OCR) }),
+          spell: (text) => wordsOf(text, ['abso', 'lutely']),
+        })
+
+      it('is no reason for an offer: the last word of a line gets a "-"', async () => {
+        await openOcr()
+
+        await correct('abso', 'abso-')
+
+        await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+        expect(correctionCalls()[0].body).toMatchObject({ before: 'abso', after: 'abso-' })
+        await waitFor(() => expect(pageText().textContent).toBe('Ala ma abso-\nlutely tu'))
+        expect(offer()).toBeNull()
+        expect(similarCalls()).toHaveLength(0)
+      })
+
+      it('is not made a legal spelling either', async () => {
+        await openOcr()
+
+        await correct('abso', 'abso-')
+
+        await waitFor(() => expect(pageText().textContent).toBe('Ala ma abso-\nlutely tu'))
+        expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))).toHaveLength(0)
+      })
+
+      it('is still a legal spelling when the hyphen is in the middle of a line', async () => {
+        await openOcr()
+
+        await correct('lutely', 'lutely-') // "lutely" is followed by " tu"
+
+        await waitFor(() =>
+          expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))).toHaveLength(1),
+        )
+        expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))[0].body).toEqual({
+          spelling: 'lutely-',
+        })
+      })
+
+      it('is made a legal spelling, as always, when the word changes with the hyphen', async () => {
+        await openOcr()
+
+        await correct('abso', 'abzo-')
+
+        await waitFor(() =>
+          expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))).toHaveLength(1),
+        )
+        expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))[0].body).toEqual({
+          spelling: 'abzo-',
+        })
+      })
+
+      it('is still corrected, as always', async () => {
+        await openOcr()
+
+        await correct('abso', 'abso-')
+
+        await waitFor(() => expect(pageText().textContent).toContain('abso-'))
+        expect(screen.queryByRole('alert')).toBeNull()
+      })
+
+      it('is an offer in the middle of a line: it is not the end of one', async () => {
+        await openOcr()
+
+        await correct('Ala', 'Ala-')
+
+        expect(await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })).toBeInTheDocument()
+      })
+
+      it('is an offer for another change of the last word of a line', async () => {
+        await openOcr()
+
+        await correct('abso', 'absoo')
+
+        expect(await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })).toBeInTheDocument()
+      })
+
+      it('is an offer when the hyphen comes with another change', async () => {
+        await openOcr()
+
+        await correct('abso', 'abzo-')
+
+        expect(await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })).toBeInTheDocument()
+      })
+
+      it('is no reason for an offer for the last word of the page, which ends a line too', async () => {
+        await open({
+          page: () => ({ content: xmlOf('Ala ma abso') }),
+          spell: (text) => wordsOf(text, ['abso']),
+        })
+
+        await correct('abso', 'abso-')
+
+        await waitFor(() => expect(pageText().textContent).toBe('Ala ma abso-'))
+        expect(offer()).toBeNull()
+      })
+
+      it('does not take away an offer that is open: it is just not made', async () => {
+        await openOcr()
+        await correct('Ala', 'Alę')
+        await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+
+        await correct('abso', 'abso-')
+
+        await waitFor(() => expect(pageText().textContent).toContain('abso-'))
+        expect(within(offer()!).getByText('Alę')).toBeInTheDocument()
+      })
+    })
+
+    it('asks nothing and calls nothing until the user answers', async () => {
+      await open()
+      await correct()
+
+      await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+      expect(similarCalls()).toHaveLength(0)
+      expect(review()).toBeNull()
+    })
+
+    it('is not there before a word was corrected, or if the correction is cancelled', async () => {
+      await open()
+      expect(offer()).toBeNull()
+
+      await userEvent.click(screen.getByText('jćj', { selector: '.word' }))
+      await userEvent.keyboard('X{Escape}')
+
+      expect(offer()).toBeNull()
+    })
+
+    it('is not there when the word is removed, or the text is the same', async () => {
+      await open()
+
+      await userEvent.click(screen.getByText('jćj', { selector: '.word' }))
+      await userEvent.keyboard('{Backspace}{Enter}') // removes the token
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(offer()).toBeNull()
+    })
+
+    it('is not there when the correction fails', async () => {
+      await open({ correct: () => new Error('The page has changed') })
+
+      await correct()
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      expect(offer()).toBeNull()
+    })
+
+    it('"Nein Danke" closes it, and nothing is asked of the backend', async () => {
+      await open()
+      await correct()
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Nein Danke' }))
+
+      expect(offer()).toBeNull()
+      expect(review()).toBeNull()
+      expect(similarCalls()).toHaveLength(0)
+    })
+
+    it('Escape closes it too', async () => {
+      await open()
+      await correct()
+      await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(offer()).toBeNull()
+    })
+
+    it('a new correction replaces the offer', async () => {
+      await open()
+      await correct('jćj', 'jéj')
+      await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+
+      await correct('tćj', 'téj')
+
+      await waitFor(() => expect(within(offer()!).getByText('téj')).toBeInTheDocument())
+      expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    })
+
+    it('goes with the page when the user leaves for the editions', async () => {
+      await open()
+      await correct()
+      await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+      expect(offer()).toBeNull()
+    })
+  })
+
+  describe('the list of the places', () => {
+    it('opens with "Apply it to the entire edition" and asks the backend', async () => {
+      await openReview()
+
+      expect(similarCalls()).toHaveLength(1)
+      expect(similarCalls()[0].method).toBe('GET')
+      expect(similarCalls()[0].url).toBe(
+        `/editions/${UUID}/similar-misspellings?incorrect_spelling=j%C4%87j&corrected_spelling=j%C3%A9j`,
+      )
+      expect(offer()).toBeNull() // the small box gives way to the big one
+    })
+
+    it('shows the places by page, each misspelling with its suggestion', async () => {
+      await openReview()
+
+      expect(await screen.findByText('3 places on 2 pages')).toBeInTheDocument()
+      const first = within(screen.getByRole('region', { name: 'Page 1' }))
+      expect(first.getByText('samćj')).toBeInTheDocument()
+      expect(first.getByText('saméj')).toBeInTheDocument()
+      expect(first.getByText('tćj')).toBeInTheDocument()
+      expect(first.getByText('téj')).toBeInTheDocument()
+      const third = within(screen.getByRole('region', { name: 'Page 3' }))
+      expect(third.getByText('bardzićj')).toBeInTheDocument()
+      expect(third.getByText('bardziéj')).toBeInTheDocument()
+    })
+
+    it('has an Approve button for each place, with its edition, page and offsets', async () => {
+      await openReview()
+
+      const button = await screen.findByRole('button', {
+        name: 'Approve samćj → saméj on page 1',
+      })
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '1')
+      expect(button).toHaveAttribute('data-start', '4')
+      expect(button).toHaveAttribute('data-end', '9')
+      expect(screen.getAllByRole('button', { name: /^Approve / })).toHaveLength(3)
+    })
+
+    it('says so when it is loading, and when there is no place', async () => {
+      await openReview({ similar: () => [] })
+
+      expect(await screen.findByText('No other place in the edition has this mistake.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Approve / })).toBeNull()
+    })
+
+    it('shows the reason when the backend refuses', async () => {
+      await openReview({ similar: () => new Error('Edition not found') })
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
+    })
+
+    it('Close, and Escape, close it', async () => {
+      await openReview()
+      await screen.findByText('3 places on 2 pages')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+    })
+
+    it('Escape closes it', async () => {
+      await openReview()
+      await screen.findByText('3 places on 2 pages')
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(review()).toBeNull()
+    })
+
+    it('changes nothing by itself', async () => {
+      await openReview()
+      await screen.findByText('3 places on 2 pages')
+
+      expect(correctionCalls()).toHaveLength(1) // the user's own correction
+    })
+  })
+
+  describe('approving', () => {
+    it('applies the correction to that place alone, with its offsets', async () => {
+      await openReview()
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(2))
+      expect(correctionCalls()[1].method).toBe('POST')
+      expect(correctionCalls()[1].url).toBe(`/editions/${UUID}/pages/1/corrections`)
+      expect(correctionCalls()[1].body).toEqual({
+        start: 4,
+        end: 9,
+        before: 'samćj',
+        after: 'saméj',
+      })
+    })
+
+    it('marks the place as approved, and the others stay', async () => {
+      await openReview()
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Approve samćj/ })).toBeNull()
+      expect(screen.getByRole('button', { name: /Approve tćj/ })).toBeEnabled()
+      expect(screen.getByRole('button', { name: /Approve bardzićj/ })).toBeEnabled()
+      expect(correctionCalls()).toHaveLength(2) // nothing else was applied
+    })
+
+    it('a place on another page does not change the page on the screen', async () => {
+      await openReview()
+      const text = pageText().textContent
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve bardzićj/ }))
+      await screen.findByText('✓ Approved')
+
+      expect(pageText().textContent).toBe(text)
+      expect(calls.filter((c) => c.url === `/editions/${UUID}/pages/3`)).toHaveLength(0)
+    })
+
+    it('a place on the page on the screen shows the page again with its new text', async () => {
+      await openReview({
+        similar: () => [
+          { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj' }] },
+        ],
+      })
+      expect(pageText().textContent).toContain('tćj')
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve tćj/ }))
+
+      await screen.findByText('✓ Approved')
+      await waitFor(() => expect(pageText().textContent).toContain('téj'))
+      expect(pageText().textContent).not.toContain('tćj')
+    })
+
+    describe('the legal spelling', () => {
+      const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+
+      it('makes the suggestion a legal spelling of the edition too', async () => {
+        await openReview()
+        const before = legalCalls().length
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+        await screen.findByText('✓ Approved')
+        expect(legalCalls()).toHaveLength(before + 1)
+        expect(legalCalls().at(-1)!.method).toBe('POST')
+        expect(legalCalls().at(-1)!.url).toBe(`/editions/${UUID}/legal-spellings`)
+        expect(legalCalls().at(-1)!.body).toEqual({ spelling: 'saméj' })
+      })
+
+      it('comes after the correction', async () => {
+        await openReview()
+        const from = calls.length
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+        await screen.findByText('✓ Approved')
+
+        expect(
+          calls.slice(from).map((c) => `${c.method} ${c.url}`).filter((c) => /corrections|legal/.test(c)),
+        ).toEqual([
+          `POST /editions/${UUID}/pages/1/corrections`,
+          `POST /editions/${UUID}/legal-spellings`,
+        ])
+      })
+
+      it('sends each spelling once, however many places have it', async () => {
+        await openReview({
+          similar: () => [
+            {
+              page_number: 1,
+              tokens: [
+                { text: 'tćj', start: 4, end: 7, suggestion: 'téj' },
+                { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+              ],
+            },
+          ],
+        })
+        const before = legalCalls().length
+
+        const [first] = await screen.findAllByRole('button', { name: /Approve tćj/ })
+        await userEvent.click(first)
+        await screen.findByText('✓ Approved')
+        await userEvent.click(screen.getByRole('button', { name: /Approve tćj/ }))
+        await waitFor(() => expect(screen.getAllByText('✓ Approved')).toHaveLength(2))
+
+        expect(legalCalls()).toHaveLength(before + 1)
+      })
+
+      it('sends none for a suggestion of several words, which is not one spelling', async () => {
+        await openReview({
+          similar: () => [
+            { page_number: 1, tokens: [{ text: 'wcałćj', start: 4, end: 10, suggestion: 'w całéj' }] },
+          ],
+        })
+        const before = legalCalls().length
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve wcałćj/ }))
+
+        await screen.findByText('✓ Approved')
+        expect(legalCalls()).toHaveLength(before)
+      })
+
+      it('sends none when the correction is refused', async () => {
+        await openReview({
+          correct: (body, current) =>
+            body.before === 'samćj'
+              ? new Error('The page has changed')
+              : { content: current.content.replace(body.before, body.after) },
+        })
+        const before = legalCalls().length
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+        await screen.findByRole('alert')
+
+        expect(legalCalls()).toHaveLength(before)
+      })
+
+      it('keeps the place corrected when only the legal spelling fails, and says so', async () => {
+        await openReview({ legal: (body) => (body.spelling === 'saméj' ? new Error('Edition not found') : undefined) })
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+        expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+        expect(
+          screen.getByText('Corrected, but not saved as a legal spelling: Edition not found'),
+        ).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Approve samćj/ })).toBeNull()
+      })
+
+      it('shows a place of the page on the screen without red for the new spelling', async () => {
+        await openReview({
+          spell: (text) => wordsOf(text, ['jćj', 'tćj', 'téj']), // the dictionary does not know it
+          similar: () => [
+            { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj' }] },
+          ],
+        })
+
+        await userEvent.click(await screen.findByRole('button', { name: /Approve tćj/ }))
+
+        await waitFor(() => expect(pageText().textContent).toContain('téj'))
+        expect(
+          Array.from(pageText().querySelectorAll('.word.misspelled')).map((w) => w.textContent),
+        ).not.toContain('téj')
+      })
+    })
+
+    it('moves the places that follow it on the same page by the change in length', async () => {
+      await openReview({
+        similar: () => [
+          {
+            page_number: 1,
+            tokens: [
+              { text: 'samćj', start: 4, end: 9, suggestion: 'samejej' }, // 2 longer
+              { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+            ],
+          },
+          { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj' }] },
+        ],
+      })
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+      await screen.findByText('✓ Approved')
+
+      const next = screen.getByRole('button', { name: /Approve tćj/ })
+      expect(next).toHaveAttribute('data-start', '22')
+      expect(next).toHaveAttribute('data-end', '25')
+      // another page is not moved
+      expect(screen.getByRole('button', { name: /Approve bardzićj/ })).toHaveAttribute(
+        'data-start',
+        '7',
+      )
+      await userEvent.click(next)
+      await waitFor(() => expect(correctionCalls()).toHaveLength(3))
+      expect(correctionCalls()[2].body).toEqual({
+        start: 22,
+        end: 25,
+        before: 'tćj',
+        after: 'téj',
+      })
+    })
+
+    it('shows why a place was refused, and it can be tried again', async () => {
+      let refuse = true
+      await openReview({
+        correct: (body, current) =>
+          body.before === 'samćj' && refuse
+            ? new Error('The page has changed')
+            : { content: current.content.replace(body.before, body.after) },
+      })
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      expect(screen.queryByText('✓ Approved')).toBeNull()
+      refuse = false
+      await userEvent.click(screen.getByRole('button', { name: /Approve samćj/ }))
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+    })
+
+    it('a refused place does not move the places after it', async () => {
+      await openReview({
+        correct: (body, current) =>
+          body.before === 'samćj'
+            ? new Error('The page has changed')
+            : { content: current.content.replace(body.before, body.after) },
+      })
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+      await screen.findByRole('alert')
+
+      expect(screen.getByRole('button', { name: /Approve tćj/ })).toHaveAttribute('data-start', '20')
+    })
+
+    it('does one approval at a time: the others wait for it', async () => {
+      await openReview()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/pages/1/corrections')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+
+      await userEvent.click(await screen.findByRole('button', { name: /Approve samćj/ }))
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /Approve tćj/ })).toBeDisabled(),
+      )
+      expect(screen.getByRole('button', { name: /Approve bardzićj/ })).toBeDisabled()
+      finish()
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Approve tćj/ })).toBeEnabled()
+    })
   })
 })
 

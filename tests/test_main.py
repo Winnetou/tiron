@@ -1539,6 +1539,142 @@ class TestJoinLines:
         assert "LineJoin" in schema["components"]["schemas"]
 
 
+class TestSimilarMisspellings:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/similar-misspellings"
+
+    PARAMS = {"incorrect_spelling": "jćj", "corrected_spelling": "jéj"}
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        """An edition that is stored, and pages that the database holds."""
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        rows = [
+            {"number": 0, "xml_content_corrected": str(text_to_tei_xml("Ala ma kota"))},
+            {
+                "number": 3,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("To jćj i samćj, bardzićj tu.")
+                ),
+            },
+            {"number": 4, "xml_content_corrected": None},
+        ]
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(
+                **{"execute.return_value.fetchall.return_value": rows},
+            ),
+        )
+        return edition_id
+
+    def get(self, edition_id, **params):
+        return client.get(self.url(edition_id), params=params or self.PARAMS)
+
+    def test_lists_the_pages_with_the_tokens_that_have_the_same_mistake(self, stored):
+        response = self.get(stored)
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "page_number": 3,
+                "tokens": [
+                    {"text": "jćj", "start": 3, "end": 6, "suggestion": "jéj"},
+                    {"text": "samćj", "start": 9, "end": 14, "suggestion": "saméj"},
+                    {
+                        "text": "bardzićj",
+                        "start": 16,
+                        "end": 24,
+                        "suggestion": "bardziéj",
+                    },
+                ],
+            }
+        ]
+
+    def test_the_offsets_point_at_the_tokens_in_the_text_of_the_page(self, stored):
+        text = "To jćj i samćj, bardzićj tu."
+
+        (page,) = self.get(stored).json()
+
+        assert [text[t["start"] : t["end"]] for t in page["tokens"]] == [
+            t["text"] for t in page["tokens"]
+        ]
+
+    def test_asks_the_database_for_the_edition_and_the_two_spellings(
+        self, stored, monkeypatch
+    ):
+        search = mock.Mock(return_value=[])
+        monkeypatch.setattr(db, "get_similar_misspellings", search)
+
+        response = self.get(stored)
+
+        assert response.json() == []
+        search.assert_called_once_with(stored, "jćj", "jéj")
+
+    def test_no_matches_is_an_empty_list(self, stored):
+        assert (
+            self.get(stored, incorrect_spelling="xyz", corrected_spelling="xyw").json()
+            == []
+        )
+
+    def test_edition_not_stored(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = self.get(uuid4())
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    def test_never_calls_polona(self, stored, polona):
+        self.get(stored)
+
+        polona.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"incorrect_spelling": "jćj"},
+            {"corrected_spelling": "jéj"},
+            {},
+            {"incorrect_spelling": "", "corrected_spelling": "jéj"},
+            {"incorrect_spelling": "jćj", "corrected_spelling": ""},
+            {"incorrect_spelling": "j" * 101, "corrected_spelling": "jéj"},
+            {"incorrect_spelling": "jćj", "corrected_spelling": "é" * 101},
+        ],
+    )
+    def test_both_spellings_are_needed_and_must_be_short(self, stored, params):
+        response = client.get(self.url(stored), params=params)
+
+        assert response.status_code == 422
+
+    def test_the_same_spelling_twice_is_422(self, stored):
+        response = self.get(stored, incorrect_spelling="jćj", corrected_spelling="jćj")
+
+        assert response.status_code == 422
+        assert "same" in response.json()["detail"]
+
+    def test_changes_nothing(self, stored, monkeypatch):
+        for name in ("update_page", "apply_correction", "save_fetched_page"):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        self.get(stored)
+
+        for name in ("update_page", "apply_correction", "save_fetched_page"):
+            getattr(db, name).assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        path = "/editions/{edition_id}/similar-misspellings"
+        assert "get" in schema["paths"][path]
+        assert {"PageMatches", "TokenMatch"} <= schema["components"]["schemas"].keys()
+
+
 class TestCorrectWord:
     TEXT = "Wielu Biskupów krak., że dawnieyszych kościół.\nTo jey tey."
     XML = str(text_to_tei_xml(TEXT))

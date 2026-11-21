@@ -31,6 +31,24 @@ class Page(BaseModel):
     ready: bool = False
 
 
+class TokenMatch(BaseModel):
+    """A token of a page's text: `start` to `end` are offsets in the text, counted
+    in code points, so text[start:end] is `text`. `suggestion` is what the token
+    would be corrected to (the same mistake corrected in it)."""
+
+    text: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    suggestion: str = Field(min_length=1)
+
+
+class PageMatches(BaseModel):
+    """The tokens of one page that match something, in the order of the text."""
+
+    page_number: int = Field(ge=0)
+    tokens: list[TokenMatch]
+
+
 class Correction(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     page_id: UUID

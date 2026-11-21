@@ -284,6 +284,42 @@ export function joinTokens(
   })
 }
 
+/** A token of a page's text that has the mistake of a correction (TokenMatch). */
+export interface TokenMatch {
+  text: string
+  /** Offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  /** The token with the mistake corrected: what a correction of it would be. */
+  suggestion: string
+}
+
+/** The tokens of one page of the edition that have the mistake (PageMatches). */
+export interface PageMatches {
+  page_number: number
+  tokens: TokenMatch[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/similar-misspellings: the backend finds the
+ * places of the edition that have the same OCR mistake as a correction of
+ * `incorrect` to `corrected`, page by page, with the token's offsets and what it
+ * would be corrected to. Nothing is changed.
+ */
+export function getSimilarMisspellings(
+  editionId: string,
+  incorrect: string,
+  corrected: string,
+): Promise<PageMatches[]> {
+  const query = new URLSearchParams({
+    incorrect_spelling: incorrect,
+    corrected_spelling: corrected,
+  })
+  return request<PageMatches[]>(
+    `/editions/${editionId}/similar-misspellings?${query}`,
+  )
+}
+
 /**
  * Calls POST /editions/{editionId}/pages/{number}/line-splits: the backend turns
  * the space between `words` (two neighbouring words of one line) into a line

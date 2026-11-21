@@ -21,7 +21,17 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
+from app.persistence.ontology import (
+    Correction,
+    Edition,
+    LegalSpelling,
+    Page,
+    PageMatches,
+    TokenMatch,
+    Work,
+)
+from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
+from app.text_tools.tei_xml import InvalidTei, tei_xml_to_text
 
 
 def get_conninfo() -> str:
@@ -283,6 +293,49 @@ class Database:
             query, (*changes.values(), edition_id, number)
         ).fetchone()
         return Page.model_validate(row) if row else None
+
+    def get_similar_misspellings(
+        self, edition_id: UUID, incorrect_spelling: str, corrected_spelling: str
+    ) -> list[PageMatches]:
+        """The tokens in the pages of an edition that have the same mistake as
+        `incorrect_spelling`, which is corrected to `corrected_spelling`: the
+        same OCR mistake in other words, so that the correction can be offered
+        for the whole edition. Each token comes with a `suggestion`: itself with
+        the mistake corrected ("jćj" and "samćj" become "jéj" and "saméj").
+
+        The mistake is the cluster of letters from the first one that differs to
+        the end of the word (see `wrong_cluster`): "samćj" corrected to "saméj"
+        finds "samćj" and also "jćj" and every other token with "ćj" in it, case
+        does not matter. Every page of the edition is looked at, in the text of
+        its corrected content (what the user sees). A page that has matches comes
+        back with its number and the tokens, with their offsets in that text; a
+        page without matches is left out, and so is one whose XML cannot be read.
+        The pages are in the order of their numbers.
+
+        Raises ValueError if the two spellings are the same, or the incorrect one
+        is empty.
+        """
+        fix = cluster_fix(incorrect_spelling, corrected_spelling)
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        found = []
+        for row in rows:
+            if not row["xml_content_corrected"]:
+                continue
+            try:
+                text = tei_xml_to_text(row["xml_content_corrected"])
+            except InvalidTei:
+                continue
+            tokens = [
+                TokenMatch(text=token, start=start, end=end, suggestion=suggestion)
+                for token, start, end, suggestion in tokens_with_cluster(text, fix)
+            ]
+            if tokens:
+                found.append(PageMatches(page_number=row["number"], tokens=tokens))
+        return found
 
     def get_page_by_number(self, edition_id: UUID, number: int) -> Page | None:
         row = self.conn.execute(
