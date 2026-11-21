@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 LANGUAGE = "pl_PL"
 
 # A word: letters and digits, with single hyphens or apostrophes inside it
-# ("biało-czerwony"). A hyphen at the end of a line ("o-" / "wych") is not part
-# of a word, so the two halves are two words.
+# ("biało-czerwony").
 _WORD = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 # A sign: a run of other characters that are not white space ("$", "(|}", "..."),
 # on its own or glued to a word. It is not spelled, but it can be corrected.
