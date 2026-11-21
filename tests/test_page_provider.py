@@ -31,10 +31,10 @@ def polona(monkeypatch):
 
 
 def database(known: Edition | None, stored: Edition | None = None):
-    """A database in which the edition is `known`; upsert_edition returns `stored`."""
+    """A database in which the edition is `known`; create_edition returns `stored`."""
     db = mock.Mock()
     db.get_edition.return_value = known
-    db.upsert_edition.return_value = stored
+    db.create_edition.return_value = stored
     db.save_fetched_page.side_effect = lambda page: page
     return db
 
@@ -49,7 +49,7 @@ class TestIdempotentFetchEdition:
 
         assert edition is known
         polona.metadata.assert_not_called()
-        db.upsert_edition.assert_not_called()
+        db.create_edition.assert_not_called()
 
     def test_an_unknown_edition_is_saved_with_its_metadata(self, polona):
         edition_id = uuid4()
@@ -60,7 +60,8 @@ class TestIdempotentFetchEdition:
 
         assert edition is stored
         polona.metadata.assert_called_once_with(edition_id)
-        work, saved = db.upsert_edition.call_args.args
+        (work,) = db.create_work.call_args.args
+        (saved,) = db.create_edition.call_args.args
         assert (work.author, work.title) == ("Jan Kowalski", "Dzieje")
         assert saved.id == edition_id
         assert saved.work_id == work.id
@@ -73,7 +74,7 @@ class TestIdempotentFetchEdition:
         with pytest.raises(PolonaError):
             page_provider.idempotent_fetch_edition(uuid4(), db=db)
 
-        db.upsert_edition.assert_not_called()
+        db.create_edition.assert_not_called()
 
 
 class TestFetchPageFromKnownEdition:
@@ -99,7 +100,7 @@ class TestFetchPageFromKnownEdition:
         page_provider.fetch_page_from_known_edition(edition, 3, db=db)
 
         polona.metadata.assert_not_called()
-        db.upsert_edition.assert_not_called()
+        db.create_edition.assert_not_called()
 
     def test_the_saved_page_that_comes_back_is_the_stored_one(self, polona):
         edition = Edition(id=uuid4(), work_id=uuid4())
@@ -136,7 +137,7 @@ class TestIdempotentFetchPage:
         db.get_page_by_number.assert_called_once_with(edition_id, 3)
         polona.page.assert_not_called()
         polona.metadata.assert_not_called()
-        db.upsert_edition.assert_not_called()
+        db.create_edition.assert_not_called()
 
     def test_a_page_that_is_not_stored_is_fetched_and_saved(self, polona):
         edition_id = uuid4()
@@ -156,14 +157,14 @@ class TestIdempotentFetchPage:
 
         page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
-        db.upsert_edition.assert_called_once()
+        db.create_edition.assert_called_once()
 
     def test_the_page_is_fetched_after_the_edition_is_saved(self, polona):
         edition_id = uuid4()
         db = database(None, Edition(id=edition_id, work_id=uuid4()))
         db.get_page_by_number.return_value = None
         order = mock.Mock()
-        order.attach_mock(db.upsert_edition, "save")
+        order.attach_mock(db.create_edition, "save")
         order.attach_mock(polona.page, "fetch")
 
         page_provider.idempotent_fetch_page(edition_id, 3, db=db)
@@ -237,19 +238,6 @@ class TestConcurrentFirstFetch:
         assert db.saves == 1
         assert all(page is results[0] for page in results)
 
-    def test_a_new_edition_is_saved_once(self, slow_polona):
-        edition_id = uuid4()
-        db = self.FakeDatabase(None)
-        db.upsert_edition = mock.Mock(
-            side_effect=lambda work, edition: setattr(db, "edition", edition) or edition
-        )
-        db.get_edition = lambda edition_id: db.edition
-
-        self.run_requests(db, edition_id, [3] * 5)
-
-        db.upsert_edition.assert_called_once()
-        slow_polona.metadata.assert_called_once()
-
     def test_different_pages_do_not_wait_for_each_other(self, slow_polona):
         edition_id = uuid4()
         db = self.FakeDatabase(Edition(id=edition_id, work_id=uuid4()))
@@ -278,3 +266,33 @@ class TestConcurrentFirstFetch:
         self.run_requests(db, edition_id, [3] * 3 + [4])
 
         assert page_provider._fetching == {}
+
+
+class TestFireEvent:
+    def test_a_new_edition_fires_the_event(self, polona, no_broker):
+        edition_id = uuid4()
+        db = database(None, Edition(id=edition_id, work_id=uuid4()))
+
+        page_provider.idempotent_fetch_edition(edition_id, db=db)
+
+        no_broker.assert_called_once_with({"edition_id": str(edition_id)})
+
+    def test_a_known_edition_fires_nothing(self, polona, no_broker):
+        edition_id = uuid4()
+        db = database(Edition(id=edition_id, work_id=uuid4()))
+
+        page_provider.idempotent_fetch_edition(edition_id, db=db)
+
+        no_broker.assert_not_called()
+
+    def test_the_task_hands_the_event_to_the_consumer(self, monkeypatch):
+        from app import celery_app
+
+        handle = mock.Mock()
+        monkeypatch.setattr(celery_app.NewEditionCreatedEventConsumer, "handle", handle)
+        edition_id = uuid4()
+
+        celery_app.handle_new_edition_created({"edition_id": str(edition_id)})
+
+        (event,) = handle.call_args.args
+        assert event.edition_id == edition_id

@@ -1,9 +1,14 @@
-"""Domain events: things that happened in the backend that others may react to.
+"""Domain events: things that happened in the backend that others may react to."""
 
-A stub for now.
-"""
+from uuid import UUID
+
+from pydantic import BaseModel
 
 
-class DomainEvent:
-    """Stub: something that happened in the backend, which consumers may react
-    to (see `event_consumers`). It has no fields yet."""
+class NewEditionCreatedEvent(BaseModel):
+    """A new edition was saved in the database for the first time.
+
+    `edition_id` is the Polona object UUID of the edition.
+    """
+
+    edition_id: UUID

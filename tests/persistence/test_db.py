@@ -1,4 +1,5 @@
 from unittest import mock
+from uuid import uuid4
 
 import pytest
 from psycopg.conninfo import conninfo_to_dict
@@ -80,3 +81,16 @@ def test_database_creates_schema_on_instantiation(monkeypatch):
         "legal_spellings",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+
+
+@pytest.mark.parametrize(
+    "changes", [{}, {"fetched_completed": True, "page_count": 3}], ids=["none", "both"]
+)
+def test_update_edition_needs_exactly_one_column(monkeypatch, changes):
+    for name, value in ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", mock.Mock())
+    db = Database()
+
+    with pytest.raises(ValueError, match="exactly one"):
+        db.update_edition(uuid4(), **changes)

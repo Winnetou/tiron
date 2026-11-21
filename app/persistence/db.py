@@ -140,61 +140,44 @@ class Database:
         ).fetchone()
         return Edition.model_validate(row)
 
-    def _get_or_create_work(self, work: Work) -> Work:
-        """Return the stored work with the same (author, title), ignoring case,
-        or store the given one. Works with an unknown author or title never match."""
-        row = self.conn.execute(
-            "INSERT INTO works (id, author, title) VALUES (%s, %s, %s)"
-            " ON CONFLICT (lower(author), lower(title))"
-            " WHERE author IS NOT NULL AND title IS NOT NULL"
-            " DO NOTHING RETURNING *",
-            (work.id, work.author, work.title),
-        ).fetchone()
-        if row is None:
-            row = self.conn.execute(
-                "SELECT * FROM works WHERE lower(author) = lower(%s)"
-                " AND lower(title) = lower(%s)",
-                (work.author, work.title),
-            ).fetchone()
-        return Work.model_validate(row)
-
-    def upsert_edition(self, work: Work, edition: Edition) -> Edition:
-        """Store the edition unless it already exists, in which case the stored
-        edition is returned and nothing is written.
-
-        The edition is attached to the stored work with the same (author, title)
-        if there is one, so many editions share a work; `work` is stored only
-        when there is no such work. Atomic: a work is never stored without its
-        edition. The returned edition carries the work_id actually used."""
-        row = None
-        with self.conn.transaction():
-            if self.get_edition(edition.id) is not None:
-                raise psycopg.Rollback
-            stored_work = self._get_or_create_work(work)
-            row = self.conn.execute(
-                "INSERT INTO editions"
-                " (id, work_id, place, year, fetched_completed, page_count)"
-                " VALUES (%s, %s, %s, %s, %s, %s)"
-                " ON CONFLICT (id) DO NOTHING RETURNING *",
-                (
-                    edition.id,
-                    stored_work.id,
-                    edition.place,
-                    edition.year,
-                    edition.fetched_completed,
-                    edition.page_count,
-                ),
-            ).fetchone()
-            if row is None:
-                raise psycopg.Rollback  # created concurrently: discard our work
-        if row is None:
-            return self.get_edition(edition.id)
-        return Edition.model_validate(row)
-
     def get_edition(self, edition_id: UUID) -> Edition | None:
         row = self.conn.execute(
             "SELECT * FROM editions WHERE id = %s", (edition_id,)
         ).fetchone()
+        return Edition.model_validate(row) if row else None
+
+    def update_edition(
+        self,
+        edition_id: UUID,
+        *,
+        fetched_completed: bool = UNSET,
+        page_count: int | None = UNSET,
+    ) -> Edition | None:
+        """Change one of the fetch columns of an edition, `fetched_completed` or
+        `page_count`, and return the updated edition (None if there is no such
+        edition).
+
+        Exactly one of them is given, and the other is not touched; these are the
+        only two columns that can be changed. page_count=None clears the count.
+        Raises ValueError if none or both are given.
+        """
+        changes = {
+            column: value
+            for column, value in (
+                ("fetched_completed", fetched_completed),
+                ("page_count", page_count),
+            )
+            if value is not UNSET
+        }
+        if len(changes) != 1:
+            raise ValueError(
+                "Give exactly one of fetched_completed and page_count to update"
+            )
+        (column, value), *_ = changes.items()
+        query = sql.SQL("UPDATE editions SET {} = %s WHERE id = %s RETURNING *").format(
+            sql.Identifier(column)
+        )
+        row = self.conn.execute(query, (value, edition_id)).fetchone()
         return Edition.model_validate(row) if row else None
 
     # Pages
