@@ -396,10 +396,3 @@ class Database:
         ).fetchall()
         total = self.conn.execute("SELECT count(*) AS n FROM collection").fetchone()
         return create_page([row["id"] for row in rows], total=total["n"], params=params)
-
-    def check_edition_in_collection(self, edition_id: UUID) -> bool:
-        row = self.conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM collection WHERE id = %s) AS present",
-            (edition_id,),
-        ).fetchone()
-        return row["present"]

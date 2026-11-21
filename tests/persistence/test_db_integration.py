@@ -154,14 +154,6 @@ def test_collection_table_enforces_unique_ids(db):
         db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (uid,))
 
 
-def test_check_edition_in_collection(db):
-    present, absent = uuid4(), uuid4()
-    db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (present,))
-
-    assert db.check_edition_in_collection(present) is True
-    assert db.check_edition_in_collection(absent) is False
-
-
 def test_upsert_edition_creates_work_and_edition(db):
     work = Work(author=None)
     edition = Edition(work_id=work.id, place=None, year=None)

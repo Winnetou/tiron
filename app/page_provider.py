@@ -47,15 +47,16 @@ def _first_fetch_of(edition_id: UUID, page_number: int) -> Iterator[None]:
 
 def idempotent_fetch_page(edition_id: UUID, page_number: int, *, db: Database) -> Page:
     """Serve a page of an edition from the database if it is stored there, and
-    otherwise fetch it from polona.pl.
+    otherwise fetch it from polona.pl and save it.
 
     `edition_id` is the Polona object UUID and `page_number` is 0-based, as in
     request_polona_edition_page. `db` is the database to read and save in.
 
-    A stored page is returned as it is and Polona is not contacted. For a page
-    that is not stored, `fetch_unsaved_page_from_polona` is called, which saves
-    the edition and the page, and the saved page is returned. Either way the
-    result is the Page as it is stored.
+    The edition comes first (`idempotent_fetch_edition`), because the page
+    belongs to it: an edition that is not stored yet is fetched and saved. A
+    stored page is then returned as it is and its text is not fetched again;
+    otherwise `fetch_page_from_known_edition` fetches and saves it, and the saved
+    page is returned. Either way the result is the Page as it is stored.
 
     The first fetch of a page is safe against concurrent requests for it: they
     take turns (a lock for each page, in this process), and the ones that wait
@@ -65,38 +66,33 @@ def idempotent_fetch_page(edition_id: UUID, page_number: int, *, db: Database) -
     processes the page may still be fetched more than once, but the database
     (unique edition and number) keeps it stored once, with the first text.
 
-    Raises PolonaError for a page that has to be fetched, like
-    fetch_unsaved_page_from_polona.
+    Raises PolonaError for an edition or a page that has to be fetched, like
+    fetch_edition_metadata and request_polona_edition_page. Note that a page
+    that does not exist still leaves its new edition saved.
     """
-    stored = db.get_page_by_number(edition_id, page_number)
+    edition = idempotent_fetch_edition(edition_id, db=db)
+    stored = db.get_page_by_number(edition.id, page_number)
     if stored is not None:
         return stored
-    with _first_fetch_of(edition_id, page_number):
+    with _first_fetch_of(edition.id, page_number):
         # a request that held the lock before us may have saved the page
-        stored = db.get_page_by_number(edition_id, page_number)
+        stored = db.get_page_by_number(edition.id, page_number)
         if stored is not None:
             return stored
-        return fetch_unsaved_page_from_polona(edition_id, page_number, db=db)
+        return fetch_page_from_known_edition(edition, page_number, db=db)
 
 
-def fetch_unsaved_page_from_polona(
-    edition_id: UUID, page_number: int, *, db: Database
-) -> Page:
-    """Fetch a page of an edition from polona.pl that is not saved in the
-    database yet, and save it, and its edition if that is not saved either.
+def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
+    """Return the edition from the database, saving it first if it is not
+    stored there yet.
 
-    `edition_id` is the Polona object UUID and `page_number` is 0-based, as in
-    request_polona_edition_page. Returns the saved Page.
+    `edition_id` is the Polona object UUID. An unknown edition is fetched from
+    polona.pl (its metadata) and a Work and an Edition are created. Saving is
+    idempotent: `Database.upsert_edition` keeps a stored edition as it is, so two
+    requests for the same new edition at the same time store it once.
 
-    The edition comes first, because the page needs it: if it is not known
-    (stored) yet, its metadata is fetched and a Work and an Edition are created.
-    Saving the edition is idempotent: `Database.upsert_edition` keeps a stored
-    edition as it is, so two requests for the same new edition at the same time
-    store it once. Then the page is fetched from the known edition and saved.
-    Note that a page that does not exist still leaves its edition saved.
-
-    Raises PolonaError, like request_polona_edition_page and
-    fetch_edition_metadata.
+    Raises PolonaError, like fetch_edition_metadata, if the metadata cannot be
+    fetched. Nothing is saved in that case.
     """
     edition_instance = db.get_edition(edition_id)
     if edition_instance is None:
@@ -111,18 +107,16 @@ def fetch_unsaved_page_from_polona(
                 year=metadata["year"],
             ),
         )
-
-    edition_uuid = edition_instance.id
-    return _fetch_page_from_known_edition(edition_uuid, page_number, db=db)
+    return edition_instance
 
 
-def _fetch_page_from_known_edition(
-    edition_uuid: UUID, page_number: int, *, db: Database
+def fetch_page_from_known_edition(
+    edition: Edition, page_number: int, *, db: Database
 ) -> Page:
     """Fetch a page from polona.pl for an edition that is already known
     (stored in the database), and save it.
 
-    `edition_uuid` is the Polona object UUID and `page_number` is 0-based, as in
+    `edition` is the Edition instance and `page_number` is 0-based, as in
     request_polona_edition_page.
 
     The page is saved with the Polona text as `raw_ocr_content`, and that text
@@ -134,17 +128,17 @@ def _fetch_page_from_known_edition(
     Raises PolonaError, like request_polona_edition_page. The page is not saved
     in that case.
     """
-    logger.info("Fetching page %s of edition %s from Polona", page_number, edition_uuid)
-    polona_page = request_polona_edition_page(edition_uuid, page_number)
+    logger.info("Fetching page %s of edition %s from Polona", page_number, edition.id)
+    polona_page = request_polona_edition_page(edition.id, page_number)
     raw_ocr_content = polona_page["raw_ocr_content"]
     saved = db.save_fetched_page(
         Page(
-            edition_id=edition_uuid,
+            edition_id=edition.id,
             number=page_number,
             raw_ocr_content=raw_ocr_content,
             xml_content_corrected=str(text_to_tei_xml(raw_ocr_content)),
             scan_uri=polona_page["scan_uri"],
         )
     )
-    logger.info("Page %s of edition %s is saved", page_number, edition_uuid)
+    logger.info("Page %s of edition %s is saved", page_number, edition.id)
     return saved

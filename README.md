@@ -54,7 +54,7 @@ own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
   It only waits for the backend to be started, not healthy, so for the first
   minutes the main page shows an error until the backend has loaded its models.
   `make frontend` still runs the dev server on the host instead.
-- A new database is empty. Pages can only be opened for editions in the
+- A new database is empty, and the main page lists the editions of the
   `collection` table, so add one first, for example:
 
   ```
@@ -100,20 +100,17 @@ raw OCR text is never served.
 
 ### Where the page comes from
 
-1. **The edition must be in the collection.** Only editions whose UUID is in
-   the `collection` table can be opened; anything else gets a 404. This check
-   comes first, so it also applies to pages that are already stored.
-2. **The database is asked first.** If the page (edition + number) is already
+1. **The database is asked first.** If the page (edition + number) is already
    stored, it is returned from there and Polona is not contacted. Stored pages
    are never refreshed automatically.
-3. **Otherwise the page is fetched from Polona and saved**
-   (`idempotent_fetch_page` in `app/page_provider.py`, which calls
-   `fetch_unsaved_page_from_polona`). The edition comes first, because the page
-   belongs to it: if it is not stored yet, its metadata is fetched and it is
-   saved (`upsert_edition` keeps an edition that is stored already, so two
-   requests for the same new edition store it once). Then the page is requested
-   from Polona (`request_polona_edition_page` in `app/polona/polona_connector.py`), saved
-   (`_fetch_page_from_known_edition`) and returned. The next request for it is
+2. **Otherwise the page is fetched from Polona and saved**
+   (`idempotent_fetch_page` in `app/page_provider.py`). The edition comes first,
+   because the page belongs to it (`idempotent_fetch_edition`): if it is not
+   stored yet, its metadata is fetched and it is saved (`upsert_edition` keeps
+   an edition that is stored already, so two requests for the same new edition
+   store it once). Then the page is requested from Polona
+   (`request_polona_edition_page` in `app/polona/polona_connector.py`), saved
+   (`fetch_page_from_known_edition`) and returned. The next request for it is
    served from the database. A page that Polona does not have therefore leaves
    its (new) edition stored.
 
@@ -185,8 +182,8 @@ be null or an empty string. Any other field in the body (for example
 `raw_ocr_content` or `scan_uri`) is rejected with 422, and so is an empty body.
 
 The page must already be stored: open it with `GET` first. `PATCH` never
-fetches from Polona, and answers 404 if the page is not stored. It does not
-check the collection. It returns the updated `PageView`.
+fetches from Polona, and answers 404 if the page is not stored. It returns the
+updated `PageView`.
 
 ### Getting the text out of TEI XML
 
@@ -275,7 +272,7 @@ Kowalski</ref>`. TEI wants the text of a `<cit>` in a `<quote>`, so it becomes
   comment or processing instruction (they cannot be moved with it); all of those
   answer 422 with the reason.
 - 404 if the page is not stored, 422 if it has no valid TEI XML. Like `PATCH`,
-  it does not check the collection or fetch from Polona.
+  it does not fetch from Polona.
 
 ### Spell check
 
@@ -346,8 +343,8 @@ correction:
   must not be empty, start or end with a space, contain a line break or other
   control characters, or be the same as `before`. It may contain spaces inside
   (`wcałey` -> `w całej`). 422 otherwise, and for a page without valid TEI XML.
-  404 if the page is not stored. Like `PATCH`, it does not check the collection
-  or fetch from Polona.
+  404 if the page is not stored. Like `PATCH`, it does not fetch from
+  Polona.
 - The text of the page changes, so the offsets of its entities and words from
   before are no longer valid: check the spelling again (the frontend does).
 - This replaces the earlier `POST /corrections` stub (which returned 501).
@@ -414,8 +411,8 @@ added). Nothing else is changed: this only records the spelling.
   line breaks or control characters (422 otherwise). It is kept as it is, and
   case matters: `Jey` and `jey` are two spellings.
 - 404 if the edition is not stored, which it is once one of its pages has been
-  opened. Like the other editing endpoints it does not check the collection or
-  call Polona.
+  opened. Like the other editing endpoints it does not call
+  Polona.
 - The table is created when the backend starts, like the others, so an existing
   database gets it on the next start.
 - `POST /spellcheck` uses them: given the `edition_id`, a legal spelling is
@@ -502,8 +499,8 @@ if it is not what is at those offsets the page has changed, and the answer is
 - The documents this produces were checked against the official TEI schema
   (`tei_all`), including random pages with several marks one after the other.
 - 404 if the page is not stored, 422 if it has no valid TEI XML or the section
-  cannot be marked (with the reason). Like `PATCH`, it does not check the
-  collection or fetch from Polona.
+  cannot be marked (with the reason). Like `PATCH`, it does not fetch from
+  Polona.
 
 ### What the frontend shows
 
@@ -734,6 +731,5 @@ Polona fails (a new edition may be: it is saved before its page is fetched).
 
 | Situation | Response |
 |---|---|
-| Edition not in the collection | 404 `Edition not found` |
 | Polona has no such edition or page (out of range, no scans, HTTP 404) | 404 `Page not found` |
 | Polona is unreachable, times out, returns an HTTP error, or sends an invalid response | 502 |

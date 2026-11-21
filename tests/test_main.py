@@ -22,23 +22,6 @@ from app.view_models import Entity, PageView, Word
 client = TestClient(app)
 
 
-@pytest.fixture
-def in_collection(monkeypatch):
-    check = mock.Mock(return_value=True)
-    monkeypatch.setattr(db, "check_edition_in_collection", check)
-    return check
-
-
-def test_get_page_edition_not_in_collection(in_collection):
-    in_collection.return_value = False
-    edition_id = uuid4()
-
-    response = client.get(f"/editions/{edition_id}/pages/1")
-
-    assert response.status_code == 404
-    in_collection.assert_called_once_with(edition_id)
-
-
 META = {
     "author": "Prus, Bolesław (1847-1912)",
     "title": "Lalka",
@@ -68,15 +51,7 @@ def polona(monkeypatch):
     return fetch
 
 
-def test_get_page_edition_not_in_collection_skips_polona(in_collection, polona):
-    in_collection.return_value = False
-
-    client.get(f"/editions/{uuid4()}/pages/1")
-
-    polona.assert_not_called()
-
-
-def test_get_page_returns_polona_content(in_collection, polona):
+def test_get_page_returns_polona_content(polona):
     edition_id = uuid4()
 
     response = client.get(f"/editions/{edition_id}/pages/0")
@@ -100,7 +75,7 @@ def test_get_page_returns_polona_content(in_collection, polona):
         (PolonaError("Could not reach polona.pl"), 502),
     ],
 )
-def test_get_page_polona_errors(in_collection, polona, error, expected_status):
+def test_get_page_polona_errors(polona, error, expected_status):
     polona.side_effect = error
 
     response = client.get(f"/editions/{uuid4()}/pages/1")
@@ -187,7 +162,7 @@ def test_openapi_uses_ontology_models():
     assert {"PageView", "WordCorrection"} <= schemas.keys()
 
 
-def test_get_page_creates_work_and_edition_when_missing(in_collection, polona):
+def test_get_page_creates_work_and_edition_when_missing(polona):
     edition_id = uuid4()
 
     client.get(f"/editions/{edition_id}/pages/1")
@@ -201,7 +176,7 @@ def test_get_page_creates_work_and_edition_when_missing(in_collection, polona):
     assert (edition.place, edition.year) == ("Warszawa", 1890)
 
 
-def test_get_page_skips_metadata_when_edition_exists(in_collection, polona):
+def test_get_page_skips_metadata_when_edition_exists(polona):
     db.get_edition.return_value = Edition(work_id=uuid4())
     edition_id = uuid4()
 
@@ -212,16 +187,14 @@ def test_get_page_skips_metadata_when_edition_exists(in_collection, polona):
     page_provider.fetch_edition_metadata.assert_not_called()
 
 
-def test_get_page_metadata_errors(in_collection, polona):
+def test_get_page_metadata_errors(polona):
     page_provider.fetch_edition_metadata.side_effect = PolonaError("down")
 
     assert client.get(f"/editions/{uuid4()}/pages/1").status_code == 502
     db.upsert_edition.assert_not_called()
 
 
-def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(
-    in_collection, polona
-):
+def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(polona):
     edition_id = uuid4()
     stored = Page(
         edition_id=edition_id,
@@ -246,7 +219,7 @@ def test_get_page_persists_the_fetched_page_and_returns_the_stored_one(
     assert body["ready"] is True
 
 
-def test_get_page_does_not_persist_when_polona_fails(in_collection, polona):
+def test_get_page_does_not_persist_when_polona_fails(polona):
     polona.side_effect = PolonaError("down")
 
     client.get(f"/editions/{uuid4()}/pages/1")
@@ -254,7 +227,7 @@ def test_get_page_does_not_persist_when_polona_fails(in_collection, polona):
     db.save_fetched_page.assert_not_called()
 
 
-def test_get_page_returns_stored_page_without_calling_polona(in_collection, polona):
+def test_get_page_returns_stored_page_without_calling_polona(polona):
     edition_id = uuid4()
     stored = Page(
         edition_id=edition_id,
@@ -264,6 +237,7 @@ def test_get_page_returns_stored_page_without_calling_polona(in_collection, polo
         scan_uri="https://polona.pl/stored.jpg",
         ready=True,
     )
+    db.get_edition.return_value = Edition(id=edition_id, work_id=uuid4())
     db.get_page_by_number.return_value = stored
 
     response = client.get(f"/editions/{edition_id}/pages/7")
@@ -284,16 +258,7 @@ def test_get_page_returns_stored_page_without_calling_polona(in_collection, polo
     db.save_fetched_page.assert_not_called()
 
 
-def test_get_page_still_requires_the_edition_in_the_collection(in_collection, polona):
-    in_collection.return_value = False
-
-    response = client.get(f"/editions/{uuid4()}/pages/7")
-
-    assert response.status_code == 404
-    db.get_page_by_number.assert_not_called()
-
-
-def test_get_page_fetches_from_polona_when_not_stored(in_collection, polona):
+def test_get_page_fetches_from_polona_when_not_stored(polona):
     edition_id = uuid4()
 
     client.get(f"/editions/{edition_id}/pages/7")
@@ -392,16 +357,6 @@ class TestUpdatePage:
         assert response.status_code == 422
         update.assert_not_called()
 
-    def test_does_not_check_the_collection(self, update, monkeypatch):
-        check = mock.Mock(return_value=False)
-        monkeypatch.setattr(db, "check_edition_in_collection", check)
-
-        response = client.patch(f"/editions/{uuid4()}/pages/3", json={"ready": True})
-
-        assert response.status_code == 200
-        check.assert_not_called()
-        update.assert_called_once()
-
     def test_page_not_stored(self, update):
         update.side_effect = None
         update.return_value = None
@@ -429,7 +384,7 @@ class TestUpdatePage:
         )
 
 
-def test_get_page_saves_raw_text_and_its_tei_xml(in_collection, polona):
+def test_get_page_saves_raw_text_and_its_tei_xml(polona):
     edition_id = uuid4()
     polona.return_value = {
         "scan_uri": "https://polona.pl/s.jpg",
@@ -451,9 +406,7 @@ def test_get_page_saves_raw_text_and_its_tei_xml(in_collection, polona):
     assert not saved.ready
 
 
-def test_get_page_passes_the_raw_text_to_the_converter(
-    in_collection, polona, monkeypatch
-):
+def test_get_page_passes_the_raw_text_to_the_converter(polona, monkeypatch):
     seen = []
 
     def converter(text):
@@ -473,7 +426,7 @@ def test_get_page_passes_the_raw_text_to_the_converter(
     )
 
 
-def test_get_page_does_not_convert_a_stored_page(in_collection, polona, monkeypatch):
+def test_get_page_does_not_convert_a_stored_page(polona, monkeypatch):
     db.get_page_by_number.return_value = Page(
         edition_id=uuid4(),
         number=5,
@@ -942,18 +895,15 @@ class TestTagEntity:
         )
         assert client.post(self.url(number=-1), json=body).status_code == 422
 
-    def test_does_not_check_the_collection_or_call_polona(
-        self, polona, stored, monkeypatch
+    def test_does_not_call_polona(
+        self, polona, stored
     ):  # `stored` last: it replaces the database mock that `polona` sets
-        check = mock.Mock(return_value=False)
-        monkeypatch.setattr(db, "check_edition_in_collection", check)
 
         response = client.post(
             self.url(stored["page"].edition_id), json=self.body("Paryżu", "placeName")
         )
 
         assert response.status_code == 200
-        check.assert_not_called()
         polona.assert_not_called()
 
     def test_is_in_the_openapi_schema(self):
@@ -1513,16 +1463,11 @@ class TestCorrectWord:
         )
         assert client.post(self.url(number=-1), json=body).status_code == 422
 
-    def test_does_not_check_the_collection_or_call_polona(
-        self, polona, stored, monkeypatch
-    ):
-        check = mock.Mock(return_value=False)
-        monkeypatch.setattr(db, "check_edition_in_collection", check)
+    def test_does_not_call_polona(self, polona, stored):
 
         response = self.post(stored, self.body("jey", "jej"))
 
         assert response.status_code == 200
-        check.assert_not_called()
         polona.assert_not_called()
 
     def test_is_in_the_openapi_schema(self):
@@ -1646,16 +1591,11 @@ class TestAddLegalSpelling:
             == 422
         )
 
-    def test_does_not_check_the_collection_or_call_polona(
-        self, polona, stored, monkeypatch
-    ):
-        check = mock.Mock(return_value=False)
-        monkeypatch.setattr(db, "check_edition_in_collection", check)
+    def test_does_not_call_polona(self, polona, stored):
 
         response = self.post(stored, {"spelling": "jey"})
 
         assert response.status_code == 201
-        check.assert_not_called()
         polona.assert_not_called()
 
     def test_changes_nothing_but_the_spelling(self, stored, monkeypatch):
@@ -2012,16 +1952,11 @@ class TestMarkPageSection:
         )
         assert client.post(self.url(number=-1), json=body).status_code == 422
 
-    def test_does_not_check_the_collection_or_call_polona(
-        self, polona, stored, monkeypatch
-    ):
-        check = mock.Mock(return_value=False)
-        monkeypatch.setattr(db, "check_edition_in_collection", check)
+    def test_does_not_call_polona(self, polona, stored):
 
         response = self.post(stored, self.body("84 KATEDRA", "header"))
 
         assert response.status_code == 200
-        check.assert_not_called()
         polona.assert_not_called()
 
     def test_is_in_the_openapi_schema(self):

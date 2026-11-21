@@ -39,94 +39,94 @@ def database(known: Edition | None, stored: Edition | None = None):
     return db
 
 
-class TestFetchUnsavedPageFromPolona:
-    def test_a_known_edition_is_not_saved_again(self, polona):
+class TestIdempotentFetchEdition:
+    def test_a_known_edition_is_returned_and_not_saved_again(self, polona):
         edition_id = uuid4()
-        db = database(Edition(id=edition_id, work_id=uuid4()))
+        known = Edition(id=edition_id, work_id=uuid4())
+        db = database(known)
 
-        page = page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        edition = page_provider.idempotent_fetch_edition(edition_id, db=db)
 
-        assert page.raw_ocr_content == PAGE["raw_ocr_content"]
-        polona.page.assert_called_once_with(edition_id, 3)
+        assert edition is known
         polona.metadata.assert_not_called()
         db.upsert_edition.assert_not_called()
 
-    def test_the_page_is_saved_with_its_text_and_the_xml_made_of_it(self, polona):
-        edition_id = uuid4()
-        db = database(Edition(id=edition_id, work_id=uuid4()))
-
-        page = page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
-
-        (saved,) = db.save_fetched_page.call_args.args
-        assert page is saved
-        assert saved.edition_id == edition_id
-        assert saved.number == 3
-        assert saved.raw_ocr_content == "Ala ma kota"
-        assert saved.xml_content_corrected == str(text_to_tei_xml("Ala ma kota"))
-        assert saved.scan_uri == PAGE["scan_uri"]
-
-    def test_the_saved_page_that_comes_back_is_the_stored_one(self, polona):
-        edition_id = uuid4()
-        stored = Page(edition_id=edition_id, number=3, raw_ocr_content="earlier")
-        db = database(Edition(id=edition_id, work_id=uuid4()))
-        db.save_fetched_page.side_effect = None
-        db.save_fetched_page.return_value = stored
-
-        assert (
-            page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db) is stored
-        )
-
     def test_an_unknown_edition_is_saved_with_its_metadata(self, polona):
         edition_id = uuid4()
-        db = database(None, Edition(id=edition_id, work_id=uuid4()))
+        stored = Edition(id=edition_id, work_id=uuid4())
+        db = database(None, stored)
 
-        page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
+        edition = page_provider.idempotent_fetch_edition(edition_id, db=db)
 
+        assert edition is stored
         polona.metadata.assert_called_once_with(edition_id)
-        work, edition = db.upsert_edition.call_args.args
+        work, saved = db.upsert_edition.call_args.args
         assert (work.author, work.title) == ("Jan Kowalski", "Dzieje")
-        assert edition.id == edition_id
-        assert edition.work_id == work.id
-        assert (edition.place, edition.year) == ("Kraków", 1800)
-
-    def test_the_page_is_fetched_after_the_edition_is_saved(self, polona):
-        edition_id = uuid4()
-        db = database(None, Edition(id=edition_id, work_id=uuid4()))
-        order = mock.Mock()
-        order.attach_mock(db.upsert_edition, "save")
-        order.attach_mock(polona.page, "fetch")
-
-        page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
-
-        assert [call[0] for call in order.mock_calls] == ["save", "fetch"]
-
-    def test_a_page_polona_does_not_have_is_a_polona_error(self, polona):
-        edition_id = uuid4()
-        polona.page.side_effect = PolonaError("no such page", not_found=True)
-        db = database(Edition(id=edition_id, work_id=uuid4()))
-
-        with pytest.raises(PolonaError) as raised:
-            page_provider.fetch_unsaved_page_from_polona(edition_id, 3, db=db)
-
-        assert raised.value.not_found
-        db.save_fetched_page.assert_not_called()
+        assert saved.id == edition_id
+        assert saved.work_id == work.id
+        assert (saved.place, saved.year) == ("Kraków", 1800)
 
     def test_metadata_that_cannot_be_fetched_is_a_polona_error(self, polona):
         polona.metadata.side_effect = PolonaError("down")
         db = database(None)
 
         with pytest.raises(PolonaError):
-            page_provider.fetch_unsaved_page_from_polona(uuid4(), 3, db=db)
+            page_provider.idempotent_fetch_edition(uuid4(), db=db)
 
         db.upsert_edition.assert_not_called()
-        polona.page.assert_not_called()
+
+
+class TestFetchPageFromKnownEdition:
+    def test_the_page_is_saved_with_its_text_and_the_xml_made_of_it(self, polona):
+        edition = Edition(id=uuid4(), work_id=uuid4())
+        db = database(edition)
+
+        page = page_provider.fetch_page_from_known_edition(edition, 3, db=db)
+
+        polona.page.assert_called_once_with(edition.id, 3)
+        (saved,) = db.save_fetched_page.call_args.args
+        assert page is saved
+        assert saved.edition_id == edition.id
+        assert saved.number == 3
+        assert saved.raw_ocr_content == "Ala ma kota"
+        assert saved.xml_content_corrected == str(text_to_tei_xml("Ala ma kota"))
+        assert saved.scan_uri == PAGE["scan_uri"]
+
+    def test_the_edition_is_not_saved(self, polona):
+        edition = Edition(id=uuid4(), work_id=uuid4())
+        db = database(edition)
+
+        page_provider.fetch_page_from_known_edition(edition, 3, db=db)
+
+        polona.metadata.assert_not_called()
+        db.upsert_edition.assert_not_called()
+
+    def test_the_saved_page_that_comes_back_is_the_stored_one(self, polona):
+        edition = Edition(id=uuid4(), work_id=uuid4())
+        stored = Page(edition_id=edition.id, number=3, raw_ocr_content="earlier")
+        db = database(edition)
+        db.save_fetched_page.side_effect = None
+        db.save_fetched_page.return_value = stored
+
+        assert page_provider.fetch_page_from_known_edition(edition, 3, db=db) is stored
+
+    def test_a_page_polona_does_not_have_is_a_polona_error(self, polona):
+        edition = Edition(id=uuid4(), work_id=uuid4())
+        polona.page.side_effect = PolonaError("no such page", not_found=True)
+        db = database(edition)
+
+        with pytest.raises(PolonaError) as raised:
+            page_provider.fetch_page_from_known_edition(edition, 3, db=db)
+
+        assert raised.value.not_found
+        db.save_fetched_page.assert_not_called()
 
 
 class TestIdempotentFetchPage:
     def test_a_stored_page_is_served_without_contacting_polona(self, polona):
         edition_id = uuid4()
         stored = Page(edition_id=edition_id, number=3, raw_ocr_content="Ala")
-        db = database(None)
+        db = database(Edition(id=edition_id, work_id=uuid4()))
         db.get_page_by_number.return_value = stored
 
         page = page_provider.idempotent_fetch_page(edition_id, 3, db=db)
@@ -157,6 +157,18 @@ class TestIdempotentFetchPage:
         page_provider.idempotent_fetch_page(edition_id, 3, db=db)
 
         db.upsert_edition.assert_called_once()
+
+    def test_the_page_is_fetched_after_the_edition_is_saved(self, polona):
+        edition_id = uuid4()
+        db = database(None, Edition(id=edition_id, work_id=uuid4()))
+        db.get_page_by_number.return_value = None
+        order = mock.Mock()
+        order.attach_mock(db.upsert_edition, "save")
+        order.attach_mock(polona.page, "fetch")
+
+        page_provider.idempotent_fetch_page(edition_id, 3, db=db)
+
+        assert [call[0] for call in order.mock_calls] == ["save", "fetch"]
 
     def test_a_polona_error_is_not_caught(self, polona):
         edition_id = uuid4()

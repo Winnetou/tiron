@@ -112,11 +112,9 @@ def list_editions() -> CollectionPage:
 def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView:
     """Return a page of an edition, ready to display.
 
-    1. The edition must be in the collection, otherwise 404. This check comes
-       first, so it also guards pages that are already stored.
-    2. If the page is already in the database, it is returned from there and
+    1. If the page is already in the database, it is returned from there and
        Polona is not contacted.
-    3. Otherwise (see `page_provider.idempotent_fetch_page`) the edition is saved
+    2. Otherwise (see `page_provider.idempotent_fetch_page`) the edition is saved
        first, if it is not stored yet: its metadata is fetched and a Work and an
        Edition are created (the page needs its edition). The page is then
        fetched from Polona, saved and returned, so the next request is served
@@ -131,9 +129,6 @@ def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView
     The response is a PageView: its `content` is the page's TEI XML
     (`xml_content_corrected`). The raw OCR text is never served.
     """
-    if not db.check_edition_in_collection(edition_id):
-        logger.warning("Edition %s is not in the collection", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
     try:
         page = page_provider.idempotent_fetch_page(edition_id, number, db=db)
     except PolonaError as exc:
