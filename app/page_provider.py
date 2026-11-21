@@ -4,6 +4,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from uuid import UUID
 
+from app.async_tasking.domain_events import NewEditionCreatedEvent
+from app.celery_app import handle_new_edition_created
 from app.persistence.db import Database
 from app.persistence.ontology import Edition, Page, Work
 from app.polona.polona_connector import (
@@ -82,14 +84,20 @@ def idempotent_fetch_page(edition_id: UUID, page_number: int, *, db: Database) -
         return fetch_page_from_known_edition(edition, page_number, db=db)
 
 
+def fire_event(edition_id: UUID) -> None:
+    """Fire a `NewEditionCreatedEvent` for the edition: it is sent to the Celery
+    worker, where its consumer handles it (`handle_new_edition_created`)."""
+    event = NewEditionCreatedEvent(edition_id=edition_id)
+    handle_new_edition_created.delay(event.model_dump(mode="json"))
+
+
 def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     """Return the edition from the database, saving it first if it is not
     stored there yet.
 
     `edition_id` is the Polona object UUID. An unknown edition is fetched from
-    polona.pl (its metadata) and a Work and an Edition are created. Saving is
-    idempotent: `Database.upsert_edition` keeps a stored edition as it is, so two
-    requests for the same new edition at the same time store it once.
+    polona.pl (its metadata) and a Work and an Edition are created
+    (`Database.create_work` and `Database.create_edition`).
 
     Raises PolonaError, like fetch_edition_metadata, if the metadata cannot be
     fetched. Nothing is saved in that case.
@@ -98,15 +106,16 @@ def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     if edition_instance is None:
         metadata = fetch_edition_metadata(edition_id)
         work = Work(author=metadata["author"], title=metadata["title"])
-        edition_instance = db.upsert_edition(
-            work,
+        db.create_work(work)
+        edition_instance = db.create_edition(
             Edition(
                 id=edition_id,
                 work_id=work.id,
                 place=metadata["place"],
                 year=metadata["year"],
-            ),
+            )
         )
+        fire_event(edition_instance.id)
     return edition_instance
 
 

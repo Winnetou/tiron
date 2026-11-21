@@ -23,7 +23,8 @@ and **Frontend tests** (and that branches are up to date before merging).
 ## Running with Docker Compose
 
 `docker compose up --build` (or `make up`) starts the backend together with its
-own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
+own PostgreSQL 17 database, the frontend, and a RabbitMQ broker with a Celery
+worker (`docker-compose.yml`):
 
 - **`db`** keeps its data in the named volume `db-data`, so it survives
   `docker compose down`, rebuilding the image, and removing the containers. Only
@@ -54,7 +55,24 @@ own PostgreSQL 17 database and the frontend (`docker-compose.yml`):
   It only waits for the backend to be started, not healthy, so for the first
   minutes the main page shows an error until the backend has loaded its models.
   `make frontend` still runs the dev server on the host instead.
+<<<<<<< HEAD
 - A new database is empty, and the main page lists the editions of the
+=======
+- **`rabbitmq`** (RabbitMQ 4) is the message broker for the Celery worker. It keeps
+  its data in the named volume `rabbitmq-data` (and has a fixed hostname, because
+  RabbitMQ stores it under the node name), and waits for nobody. Its port is not
+  published: only the containers of the compose network reach it, as
+  `amqp://<user>:<password>@rabbitmq:5672//`. The user and password are
+  `RABBITMQ_USER` and `RABBITMQ_PASSWORD` from `.env`, `tiron` and `tiron` if not
+  set.
+- **`celery-worker`** is built from the same `Dockerfile` as the backend (the tasks
+  are part of the app) and runs `celery -A app.celery_app worker`. It waits until
+  RabbitMQ and the database are healthy, gets the broker address as
+  `CELERY_BROKER_URL` and reaches the database like the backend does. `app/` is
+  mounted, so restart the container after editing the tasks
+  (`docker compose restart celery-worker`).
+- A new database is empty. Pages can only be opened for editions in the
+>>>>>>> a6fbda1 (feat: add celery worked with container and rabbit container)
   `collection` table, so add one first, for example:
 
   ```
@@ -106,9 +124,8 @@ raw OCR text is never served.
 2. **Otherwise the page is fetched from Polona and saved**
    (`idempotent_fetch_page` in `app/page_provider.py`). The edition comes first,
    because the page belongs to it (`idempotent_fetch_edition`): if it is not
-   stored yet, its metadata is fetched and it is saved (`upsert_edition` keeps
-   an edition that is stored already, so two requests for the same new edition
-   store it once). Then the page is requested from Polona
+   stored yet, its metadata is fetched and a work and the edition are created
+   (`create_work`, `create_edition`). Then the page is requested from Polona
    (`request_polona_edition_page` in `app/polona/polona_connector.py`), saved
    (`fetch_page_from_known_edition`) and returned. The next request for it is
    served from the database. A page that Polona does not have therefore leaves
