@@ -18,14 +18,18 @@ from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_chec
 from app.text_tools.tei_xml import (
     CannotInsert,
     CannotJoin,
+    CannotJoinLines,
     CannotReplace,
+    CannotSplit,
     CannotTag,
     InvalidTei,
     TextChanged,
     insert_text_at,
+    join_lines_at,
     join_text_range,
     mark_section,
     replace_text_range,
+    split_line_at,
     tag_text_range,
     tei_xml_entities,
     tei_xml_sections,
@@ -34,6 +38,8 @@ from app.text_tools.tei_xml import (
 from app.view_models import (
     CollectionPage,
     EntityTag,
+    LineJoin,
+    LineSplit,
     NerRequest,
     NerResult,
     NewLegalSpelling,
@@ -527,6 +533,10 @@ def add_token(
     contain line breaks, tabs or other control characters, and the position must
     be in the text, and not on the empty line between two paragraphs. Returns the
     updated page as a PageView.
+
+    A page without any text (the OCR found nothing) takes the token as its first
+    line: the only position there is 0. The token always goes into an existing
+    line; to put it on a line of its own, split the line (`POST .../line-splits`).
     """
 
     def insert_in_xml(xml: str) -> str:
@@ -604,6 +614,125 @@ def join_tokens(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
     logger.info(
         "Tokens joined on page %s of %s (%s-%s)",
+        number,
+        edition_id,
+        join.start,
+        join.end,
+    )
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/pages/{number}/line-splits", response_model=PageView)
+def split_line(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], split: LineSplit
+) -> PageView:
+    """Start a new line in a stored page: the space between two tokens of the
+    same line, in the characters `start` to `end` of the page's text, becomes a
+    line break (`<lb/>`) in the page's TEI XML.
+
+    The body is `{"start": 25, "end": 36, "text": "kota Ala"}`. The offsets are
+    those of the text that `POST /tei/text` gives for this page. `text` is the
+    two tokens as the client saw them, separated by one space; the backend checks
+    that it is what is at those offsets. The whitespace goes and the `<lb/>` is
+    put where it was, so the markup around stays (a line may be split inside a
+    `<persName>`); the frontend never has to read the XML. If the token before
+    the break ends with a hyphen the break is `<lb break="no"/>`.
+
+    To put a token on a new line, add it to a neighbouring line (`POST .../tokens`)
+    and split the line before it. A page without any text takes the token as its
+    first line.
+
+    The new XML is saved as the page's corrected content. No Correction is
+    recorded: splitting a line is not correcting a word. The text of the page
+    changes, so the offsets of its entities and words from before are no longer
+    valid.
+
+    404 if the page is not stored. 409 if the text at the offsets is not `text`,
+    because the page has changed since. 422 if the page has no valid TEI XML, or
+    `text` is not two tokens separated by one space. Returns the updated page as
+    a PageView.
+    """
+
+    def split_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to split a line in")
+        return split_line_at(xml, split.start, split.end, split.text)
+
+    try:
+        page = db.apply_correction(
+            edition_id, number, split_in_xml, split.text, "", record=False
+        )
+    except TextChanged as exc:
+        logger.warning("Line not split on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotSplit) as exc:
+        logger.warning("Line not split on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Line split on page %s of %s (%s-%s)",
+        number,
+        edition_id,
+        split.start,
+        split.end,
+    )
+    return PageView.from_page(page)
+
+
+@app.post("/editions/{edition_id}/pages/{number}/line-joins", response_model=PageView)
+def join_lines(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], join: LineJoin
+) -> PageView:
+    """Remove a line break of a stored page: the line break (`<lb/>`) between the
+    last token of a line and the first token of the next one, in the characters
+    `start` to `end` of the page's text, is replaced with a space in the page's
+    TEI XML, so that two lines become one. It undoes `POST .../line-splits`. Or
+    the empty line between two paragraphs: the two `<p>` become one, with a line
+    break between them, so one more removal joins the lines.
+
+    The body is `{"start": 25, "end": 31, "text": "kota\nA"}`, or `{"start": 0,
+    "end": 10, "text": "315\n\nbłędy"}` for an empty line. The offsets are those
+    of the text that `POST /tei/text` gives for this page. `text` is the two
+    tokens as the client saw them, separated by one line break or by an empty
+    line; the backend checks that it is what is at those offsets. The markup
+    around stays; the frontend never has to read the XML. Only a plain `<lb/>`
+    goes: not the end of an `<l>` or an `<item>`. Empty lines are only removed
+    between two `<p>` next to each other.
+
+    The new XML is saved as the page's corrected content. No Correction is
+    recorded: joining lines is not correcting a word. The text of the page
+    changes, so the offsets of its entities and words from before are no longer
+    valid.
+
+    404 if the page is not stored. 409 if the text at the offsets is not `text`,
+    because the page has changed since. 422 if the page has no valid TEI XML,
+    `text` is not two tokens separated by one line break or an empty line, or the
+    break is not a plain `<lb/>`, or the paragraphs cannot be merged. Returns the
+    updated page as a PageView.
+    """
+
+    def join_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to join lines in")
+        return join_lines_at(xml, join.start, join.end, join.text)
+
+    try:
+        page = db.apply_correction(
+            edition_id, number, join_in_xml, join.text, "", record=False
+        )
+    except TextChanged as exc:
+        logger.warning("Lines not joined on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotJoinLines) as exc:
+        logger.warning("Lines not joined on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Lines joined on page %s of %s (%s-%s)",
         number,
         edition_id,
         join.start,

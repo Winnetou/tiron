@@ -384,6 +384,13 @@ the page's `xml_content_corrected`, in one transaction with the page locked. No
 Correction is recorded: adding a token is not correcting a word. The raw OCR text is
 not touched. The response is the updated `PageView`.
 
+The token always goes into an existing line: it never makes a new one. To put a
+token on a line of its own, add it to a neighbouring line and split the line before
+it (see "Starting a new line", below). A page without any text (the OCR found
+nothing, which happens) takes the token as its first line: the only position there
+is 0, and the token goes into the first `<p>` of the page (which is made, with the
+`<body>`, if the XML has none).
+
 ### Joining tokens that the OCR split
 
 Sometimes the OCR cuts one word in two ("abso lutely").
@@ -400,6 +407,61 @@ two or more tokens separated by single spaces, as the client saw them.
 - `text` is checked against what is at the offsets: 409 if the page has changed
   since. 422 if `text` is not tokens with single spaces between them, or the page
   has no valid TEI XML; 404 if the page is not stored.
+
+### Starting a new line
+
+`POST /editions/{edition_id}/pages/{number}/line-splits` with `{"start": 25,
+"end": 33, "text": "kota Ala"}` turns the space between two tokens of the same
+line into a line break. `start` to `end` are characters of the text that
+`POST /tei/text` gives for the page, and `text` is the two tokens, separated by one
+space, as the client saw them. It is the counterpart of adding a token: a token is
+added to a line, and the line is then split before it.
+
+- The whitespace of the space goes, and `<lb/>` is put where it was, so the markup
+  around stays: a line can be split inside a `<persName>`
+  (`<persName>Jan<lb/>Kowalski</persName>`), and a space between two elements
+  becomes the line break between them.
+- If the token before the break ends with a hyphen, it continues a word on the next
+  line, and the break is `<lb break="no"/>`, as in a page made from the OCR text.
+- Two tokens on one line are needed, so no line is ever empty: the start or the end
+  of a line, a line break and a paragraph break are not places for a split.
+- `text` is checked against what is at the offsets: 409 if the page has changed
+  since. 422 if `text` is not two tokens with one space between them, or the page
+  has no valid TEI XML; 404 if the page is not stored.
+- The new XML is saved as the page's `xml_content_corrected`. No Correction is
+  recorded: splitting a line is not correcting a word. The response is the updated
+  `PageView`.
+
+A split is undone with the next section.
+
+### Removing a line break
+
+`POST /editions/{edition_id}/pages/{number}/line-joins` with `{"start": 25,
+"end": 31, "text": "kota\nA"}` removes the line break between the last token of a
+line and the first token of the next one, so the two lines become one. It undoes a
+line split. `start` to `end` are characters of the text that `POST /tei/text` gives
+for the page, and `text` is the two tokens, separated by one line break or by an
+empty line, as the client saw them.
+
+- The `<lb/>` between them is replaced with a space, and the markup around stays:
+  a break inside a `<persName>` goes and the element stays
+  (`<persName>Jan Kowalski</persName>`). A break inside a word
+  (`<lb break="no"/>`, after a hyphen) becomes a space too; the hyphen stays in the
+  text, and "Join with next" takes the space away if it is wanted.
+- **An empty line** (`"text": "315\n\nbłędy"`) is the end of one `<p>` and the start
+  of the next one. The two paragraphs become one, with a line break (`<lb/>`) between
+  them: the empty line is gone and the two lines stay lines, one line break less
+  (`315⏎⏎błędy` becomes `315⏎błędy`). A second removal joins the lines. The two must
+  be `<p>` next to each other, with nothing but empty elements between them (422
+  otherwise, for example for a `<head>` and a `<p>`, or paragraphs in different
+  `<div>`s). A hyphen at the end of the first one makes the break
+  `<lb break="no"/>`.
+- Only a plain `<lb/>` goes. The end of an `<l>` or an `<item>` is not removed (422).
+- `text` is checked against what is at the offsets: 409 if the page has changed
+  since. 422 if `text` is not two tokens with one line break between them, or the
+  page has no valid TEI XML; 404 if the page is not stored.
+- The new XML is saved as the page's `xml_content_corrected`. No Correction is
+  recorded. The response is the updated `PageView`.
 - Like adding a token, no Correction is recorded (it is not the correction of a
   word), the raw OCR text is not touched, and the response is the updated
   `PageView`. The text changes, so check the spelling again (the frontend does).
@@ -610,6 +672,28 @@ line break or punctuation), the editor has "← Join with previous" and "Join wi
 next →" buttons, for a word that the OCR split in two ("abso lutely"). They send
 the two words to `POST .../joins`, which removes the space; the page is shown
 again with its new text, and the spelling is checked again.
+
+The same editor has a "↵ New line here" button for a word that has another one right
+before it with only a space between (the same rule as "Join with previous"): it
+starts a new line before the word. It sends the word before and the word to
+`POST .../line-splits`, which turns the space into a line break; the page is shown
+again with its new text, and the spelling is checked again. Together with a
+double click that adds a token, it puts a token on a line of its own: add the
+token at the end of a line, click it and choose "New line here".
+
+"↑ Remove line break" and "Remove line break ↓" are the way back: for the first word
+of a line, the first one joins the line to the one above; for the last word of a
+line, the second joins the line below to it. Where there is an empty line between two
+paragraphs (a page number alone on the first line, for example), the buttons say
+"Remove empty line" and take it away, leaving a line break; a second click joins the
+lines. They send the two words, with what is between them, to `POST .../line-joins`;
+the page is shown again with its new text, and the spelling is checked again.
+
+A page that has no text at all (the OCR found nothing) has nothing to double-click.
+Instead of the hint, the correction view shows a field and an "Add text" button:
+the text typed there is sent as a token at position 0 (`POST .../tokens`) and
+becomes the first line of the page. It is not shown when the page's XML could not be
+read (then the reason is shown instead).
 
 In the NER view the user can also mark an entity that the recognition missed:
 select some of the text, as in the Structure view, and a dialog appears next to

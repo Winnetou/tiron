@@ -146,6 +146,12 @@ function EntityMark({
   )
 }
 
+/** What is between two words on different lines: a line break, or an empty line. */
+type LineGap = 'break' | 'empty'
+
+const lineGapName = (kind: LineGap) =>
+  kind === 'empty' ? 'empty line' : 'line break'
+
 interface WordEditorProps {
   word: Word
   busy: boolean
@@ -153,6 +159,16 @@ interface WordEditorProps {
   /** Join the word with the previous / next one (only if there is a place). */
   onJoinPrevious?: () => void
   onJoinNext?: () => void
+  /** Start a new line before the word (only if the word has one before it). */
+  onSplitLine?: () => void
+  /**
+   * Remove the line break before / after the word (only if there is one). The
+   * kind says what is there: a line break, or an empty line.
+   */
+  onJoinPreviousLine?: () => void
+  onJoinNextLine?: () => void
+  previousLineKind?: LineGap
+  nextLineKind?: LineGap
   /** The spelling is legal in this edition (only offered for a misspelled word). */
   onLegal: () => void
   onCancel: () => void
@@ -167,7 +183,12 @@ interface WordEditorProps {
  * in the 19th century often is not anymore; we have no better word for it.)
  * Next to a word that has another one right before or after it, with only a
  * space between, "Join with previous" / "Join with next" remove that space (the
- * OCR split a word in two). While a request is running the field is disabled
+ * OCR split a word in two). "New line here" starts a new line before the word,
+ * if the word has another one right before it on the line, and "Remove line
+ * break" joins the line with the one before or after it, if the word is the
+ * first or the last of its line ("Remove empty line" if there is an empty line
+ * between: the paragraphs become one, with a line break). While a request is
+ * running the field is disabled
  * and cannot be left.
  */
 function WordEditor({
@@ -176,6 +197,11 @@ function WordEditor({
   onSubmit,
   onJoinPrevious,
   onJoinNext,
+  onSplitLine,
+  onJoinPreviousLine,
+  onJoinNextLine,
+  previousLineKind = 'break',
+  nextLineKind = 'break',
   onLegal,
   onCancel,
 }: WordEditorProps) {
@@ -260,6 +286,50 @@ function WordEditor({
           Join with next →
         </button>
       )}
+      {onSplitLine && (
+        <button
+          type="button"
+          className="join-button"
+          title="Start a new line before the word"
+          disabled={busy}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onSplitLine}
+        >
+          ↵ New line here
+        </button>
+      )}
+      {onJoinPreviousLine && (
+        <button
+          type="button"
+          className="join-button"
+          title={
+            previousLineKind === 'empty'
+              ? 'Remove the empty line above the word'
+              : 'Remove the line break before the word: the line joins the one above'
+          }
+          disabled={busy}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onJoinPreviousLine}
+        >
+          ↑ Remove {lineGapName(previousLineKind)}
+        </button>
+      )}
+      {onJoinNextLine && (
+        <button
+          type="button"
+          className="join-button"
+          title={
+            nextLineKind === 'empty'
+              ? 'Remove the empty line below the word'
+              : 'Remove the line break after the word: the line below joins this one'
+          }
+          disabled={busy}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onJoinNextLine}
+        >
+          Remove {lineGapName(nextLineKind)} ↓
+        </button>
+      )}
     </span>
   )
 }
@@ -299,6 +369,24 @@ interface Props {
    * view) the words cannot be joined.
    */
   onJoinWords?: (words: Word[]) => void
+  /**
+   * The user chose to start a new line before a word: between it and the word
+   * before it, two words of one line, the space becomes a line break. Without it
+   * (outside the correction view) the line cannot be split.
+   */
+  onSplitLine?: (words: Word[]) => void
+  /**
+   * The user chose to remove the line break between a word and the one before
+   * or after it, on another line: the two lines become one. Without it (outside
+   * the correction view) a line break cannot be removed.
+   */
+  onJoinLines?: (words: Word[]) => void
+  /**
+   * The page has no text (the OCR found nothing): there is no place to
+   * double-click, so a field and an "Add text" button take the place of the
+   * hint. The text is sent as a token at position 0, like any other token.
+   */
+  emptyPage?: boolean
 }
 
 /**
@@ -320,6 +408,9 @@ export default function PageText({
   onCreateEntity,
   onAddToken,
   onJoinWords,
+  onSplitLine,
+  onJoinLines,
+  emptyPage,
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -332,6 +423,14 @@ export default function PageText({
   const [tokenAt, setTokenAt] = useState<TokenPending | null>(null)
   const [token, setToken] = useState('')
   const addingAt = tokenAt && tokenAt.forText === text ? tokenAt : null
+  // The first text of a page that has none
+  const [firstText, setFirstText] = useState('')
+  function addFirstText() {
+    const typed = firstText.trim().replace(/\s+/g, ' ')
+    if (!onAddToken || typed === '') return
+    onAddToken(0, typed)
+    setFirstText('')
+  }
 
   function clear() {
     setPending(null)
@@ -440,6 +539,12 @@ export default function PageText({
   const codePoints = Array.from(text)
   const apart = (before: Word, after: Word) =>
     codePoints.slice(before.end, after.start).join('') === ' '
+  // Words on two lines, with only a line break between them, or an empty line
+  // (a paragraph break): what is between them, or null
+  const lineGap = (before: Word, after: Word): LineGap | null => {
+    const between = codePoints.slice(before.end, after.start).join('')
+    return between === '\n' ? 'break' : between === '\n\n' ? 'empty' : null
+  }
   const sorted = [...(words ?? [])].sort((a, b) => a.start - b.start)
   const editorAt = segments.findIndex((segment) => segment.word === editedWord)
   function render(segment: Segment, index: number): ReactNode {
@@ -454,6 +559,14 @@ export default function PageText({
       const joinWith = (pair: Word[]) => () => {
         setEditing(null)
         onJoinWords?.(pair)
+      }
+      const splitAt = (pair: Word[]) => () => {
+        setEditing(null)
+        onSplitLine?.(pair)
+      }
+      const joinLinesOf = (pair: Word[]) => () => {
+        setEditing(null)
+        onJoinLines?.(pair)
       }
       return (
         <WordEditor
@@ -471,6 +584,23 @@ export default function PageText({
               ? joinWith([word, next])
               : undefined
           }
+          onSplitLine={
+            onSplitLine && previous && apart(previous, word)
+              ? splitAt([previous, word])
+              : undefined
+          }
+          onJoinPreviousLine={
+            onJoinLines && previous && lineGap(previous, word)
+              ? joinLinesOf([previous, word])
+              : undefined
+          }
+          previousLineKind={previous ? (lineGap(previous, word) ?? undefined) : undefined}
+          onJoinNextLine={
+            onJoinLines && next && lineGap(word, next)
+              ? joinLinesOf([word, next])
+              : undefined
+          }
+          nextLineKind={next ? (lineGap(word, next) ?? undefined) : undefined}
           onLegal={() => onLegalSpelling(word)}
           onCancel={() => setEditing(null)}
         />
@@ -540,11 +670,38 @@ export default function PageText({
 
   return (
     <div className="structure-wrap" ref={wrap}>
-      <p className="structure-hint">
-        {onCreateEntity
-          ? 'Select some text to mark it as a named entity the recognition missed.'
-          : 'Double-click a place in the text to add text that the OCR missed.'}
-      </p>
+      {emptyPage && onAddToken ? (
+        <form
+          className="empty-page"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!busy) addFirstText()
+          }}
+        >
+          <p className="structure-hint">
+            This page has no text. Add the text that the OCR missed:
+          </p>
+          <input
+            aria-label="Text to add to the empty page"
+            placeholder="Text"
+            size={30}
+            maxLength={200}
+            spellCheck={false}
+            value={firstText}
+            disabled={busy}
+            onChange={(event) => setFirstText(event.target.value)}
+          />
+          <button type="submit" disabled={firstText.trim() === '' || busy}>
+            Add text
+          </button>
+        </form>
+      ) : (
+        <p className="structure-hint">
+          {onCreateEntity
+            ? 'Select some text to mark it as a named entity the recognition missed.'
+            : 'Double-click a place in the text to add text that the OCR missed.'}
+        </p>
+      )}
       {pre}
       {addingAt && (
         <div

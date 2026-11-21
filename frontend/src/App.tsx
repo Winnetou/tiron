@@ -3,7 +3,9 @@ import {
   addLegalSpelling,
   addToken,
   correctWord,
+  joinLines,
   joinTokens,
+  splitLine,
   getPage,
   markSection,
   pageFromPath,
@@ -374,6 +376,12 @@ export default function App() {
         onLegalSpelling={(word) => legalize(page, text, word)}
         onJoinWords={(words) =>
           run(joinTokens(page.edition_id, page.number, words))
+        }
+        onSplitLine={(words) =>
+          run(splitLine(page.edition_id, page.number, words))
+        }
+        onJoinLines={(words) =>
+          run(joinLines(page.edition_id, page.number, words, text))
         }
         onAddToken={(position, token) =>
           run(addToken(page.edition_id, page.number, position, token))
