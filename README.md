@@ -320,9 +320,19 @@ frontend sends the edition with every check.
   made of letters and digits, with a single hyphen or apostrophe inside it
   (`biało-czerwony`). A run of signs (`$`, `(|}`, a comma), alone or glued to a word, is a token
   too: it is never wrong, but it can be clicked and corrected like a word. Only
-  white space is not a token. A hyphen at the end of a line is not part of a
-  word, so the two halves of a word split over two lines (`o-` / `wych`) are two
-  words.
+  white space is not a token.
+- **A word split over two lines is checked as one word.** When a word is followed,
+  with nothing between, by a hyphen, then one line break and another word
+  (`przeczy-` / `tać`), the two halves are one word. Each half stays a token of its
+  own, with its own offsets, so it can still be corrected on its own, but both get
+  the verdict of the whole word: correct if the word joined (`przeczytać`) is
+  correct, or if the word with the hyphen kept (`biało-czerwony`) is, because a
+  hyphen at the end of a line may be one of the word or only the sign of the split.
+  The legal spellings of the edition are matched against the joined word too. The
+  hyphen itself is a sign, so it is correct. A word split over three lines or four
+  is checked the same way; an empty line (a new paragraph) or a space after the
+  hyphen is not a split. A word that is split over two *pages* is not found: only
+  the text of one page is known to the check.
 - A word with digits in it is not checked and counts as correct. A hyphenated
   word is correct if it is in the dictionary, or if all its parts are. Capital
   letters do not matter.
