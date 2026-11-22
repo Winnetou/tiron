@@ -676,6 +676,54 @@ nothing.
   alone on the first or last line. Polona is not called. The search is
   `Database.get_similar_page_numbers`, on `app/text_tools/page_numbers.py`.
 
+### The hyphens that the OCR dropped at the end of a line
+
+A word that is split over two lines has a hyphen at the end of the first line
+(`przeczy-` / `tać`). The OCR very often leaves it out, typically a few times on a
+page, and the spell check then sees two wrong words. These are put back in bulk,
+for one page at a time (not the edition).
+
+`GET /editions/{edition_id}/pages/{number}/missing-hyphens` lists the line ends of
+the page where a hyphen is missing. It changes nothing.
+
+- **What is found**: the last word of a line and the first word of the next line,
+  each of two letters at least and without digits, that make a correct word
+  together (`przeczy` + `tać` = `przeczytać`). The spellings that are legal in the
+  edition count as correct (see "Legal spellings"). A line that has its hyphen
+  already, a line that is followed by an empty line (a paragraph break) and a space
+  before the line break are not found. A word that has a hyphen of its own
+  (`biało-czerwony`) is not found either: any two correct words are correct with a
+  hyphen between them, so that would find every line end.
+- **A stray sign**: the OCR may have read the hyphen as another sign (`przeczy,`,
+  `przeczy'`, `przeczy~`). One or two signs glued to the word at the end of the line
+  are taken as the hyphen (dashes are not: that is a hyphen of another kind), and
+  they are replaced by it.
+- **The response**: a list of `{"start": 9, "end": 16, "text": "przeczy",
+  "suggestion": "przeczy-", "next_word": "tać", "joined": "przeczytać",
+  "ambiguous": false}` in the order of the text. `joined` is the word that the two
+  parts make together, the one that was found correct. `start` and `end` are offsets in the text of the page (as `POST
+  /tei/text` gives it), so `text[start:end]` is `text` (the word with the stray
+  sign, if any), which is to become `suggestion`.
+- **`ambiguous`** is true when both parts are correct words on their own (`do` /
+  `mu` makes `domu`): it is not sure that the word is split, so a human has to say.
+- 404 if the page is not stored, 422 if its XML cannot be read, 503 if the
+  dictionary is not available. A page without text has none.
+
+`POST /editions/{edition_id}/pages/{number}/hyphens` puts the hyphens back, all at
+once, so there is a single request however many were approved. The body is
+`{"fixes": [{"start": 9, "end": 16, "before": "przeczy", "after": "przeczy-"}]}`:
+`before` is a word, perhaps with the stray sign, and `after` is the same word and a
+hyphen (anything else is a 422), the fixes must not overlap, and there is at least
+one. All the offsets are those of the page as the client saw it: the backend makes
+the fixes from the end of the page to its start, so that none moves the others. The
+new XML and a Correction for each fix are saved in one transaction (all or none);
+nothing is made a legal spelling, as a hyphen at the end of a line is not a
+spelling. 404 if the page is not stored, 409 if the text at an offset is not
+`before` (the page has changed), 422 if the page has no valid XML.
+
+The search is `Database.get_missing_hyphens`, on `app/text_tools/hyphens.py`;
+saving is `Database.apply_corrections`, the `apply_correction` for several.
+
 ### What the frontend shows
 
 While the scan of a page is loading (or has not started), a spinner with "Loading the
@@ -926,6 +974,40 @@ the entity's dialog getting in the way), and an entity that starts or ends in
 the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
+
+**The missing hyphens of a page.** The OCR very often drops the hyphen at the end of
+a line where a word is split (`przeczy` / `tać`), a few times on a page. In the
+correction view a **Find missing hyphens** button (above the text; disabled while a
+request runs and on a page without text) opens a panel docked under the text of the
+page (not a box over it: the text and the scan stay in sight, and the text can be
+corrected meanwhile), which asks `GET .../pages/{number}/missing-hyphens` (see "The hyphens that the OCR dropped at
+the end of a line") for the page on the screen only, never the edition. It lists
+each line end: the word, a `↵`, the word that starts the next line, the word
+with its hyphen and the word that both halves make together (`joined: przeczytać`),
+so that the human can decide, with an **Approve** button (carrying `data-edition-id`,
+`data-page`, `data-start`, `data-end`) and a box to take it out of "Approve all".
+
+- The panel is not modal. Its height is changed by dragging its lower right corner,
+  **Fold** shrinks it to its header (and **Show the list** brings it back), and
+  **Close** closes it (not Escape, which belongs to the text being edited). It goes
+  away when another page is opened.
+- A place that the mouse is over, or that has the keyboard focus, is shown in the
+  text: its two words (and the sign taken for the hyphen) get a yellow marker, and
+  the text scrolls to it if it is out of view; the scan follows the text.
+- The places where both parts are words on their own (`do` / `mu`) say "both parts
+  are words: not sure it is split" and are not included by default; the sure ones
+  are. **Include all**, **Include none** and **Include only the sure ones** set the
+  boxes.
+- **Approve all (N)** sends the included places in one request,
+  `POST .../pages/{number}/hyphens` (all or none). **Approve** on a row sends that
+  place alone. The places approved are marked "✓ Approved", the page on the screen
+  is shown again with its new text, and its spelling is checked again.
+- After an approval the offsets of the places that follow it are moved by the
+  difference in length, so they stay right for the next one.
+- If the backend refuses (for example the 409 when the page has changed), the reason
+  is shown: for "Approve all" no place is changed, and it can be tried again.
+- The panel says "No missing hyphen found on this page" when there is none, and shows
+  the backend's reason if the search fails.
 
 **The structure view.** The **Structure** button (the first in the sidebar) turns
 a third view on, next to Text and XML: the text of the page, in which the sections

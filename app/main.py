@@ -11,7 +11,12 @@ from fastapi_pagination import add_pagination
 
 from app import page_provider
 from app.persistence.db import Database
-from app.persistence.ontology import LegalSpelling, PageMatches, SimilarPageNumbers
+from app.persistence.ontology import (
+    LegalSpelling,
+    MissingHyphen,
+    PageMatches,
+    SimilarPageNumbers,
+)
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
@@ -38,6 +43,7 @@ from app.text_tools.tei_xml import (
 from app.view_models import (
     CollectionPage,
     EntityTag,
+    HyphenFixes,
     LineJoin,
     LineSplit,
     NerRequest,
@@ -535,6 +541,107 @@ def get_similar_page_numbers(
         number,
     )
     return found
+
+
+@app.get(
+    "/editions/{edition_id}/pages/{number}/missing-hyphens",
+    response_model=list[MissingHyphen],
+)
+def get_missing_hyphens(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)]
+) -> list[MissingHyphen]:
+    """List the line ends of page `number` where the OCR dropped the hyphen of a
+    split word ("przeczy" / "tać" for "przeczy-" / "tać"), so that they can be put
+    back at once (`POST .../hyphens`). Only this page is looked at.
+
+    A line end is listed if the last word of the line and the first word of the
+    next one (each of two letters at least) make a correct word together. The OCR
+    may also have read the hyphen as another sign ("przeczy," or "przeczy'"): up to
+    two signs glued to the word are taken as the hyphen. A line that has its
+    hyphen already, or is followed by an empty line, is not listed. The
+    spellings that are legal in the edition count as correct.
+
+    Each item is `{"start": 9, "end": 16, "text": "przeczy", "suggestion":
+    "przeczy-", "next_word": "tać", "joined": "przeczytać", "ambiguous":
+    false}`: `start` and `end` are
+    offsets in the text that `POST /tei/text` gives (counted in code points), so
+    text[start:end] is `text`, which is to become `suggestion`. `ambiguous` is true
+    when both parts are correct words on their own ("do" / "mu" makes "domu"): it
+    is not sure that the word is split, so a human has to say. The items are in
+    the order of the text.
+
+    Nothing is changed. 404 if the page is not stored, 422 if its XML cannot be
+    read, 503 if the dictionary is not available. A page without text has none.
+    """
+    try:
+        found = db.get_missing_hyphens(edition_id, number)
+    except InvalidTei as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    if found is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info("%s missing hyphens on page %s of %s", len(found), number, edition_id)
+    return found
+
+
+@app.post("/editions/{edition_id}/pages/{number}/hyphens", response_model=PageView)
+def put_hyphens_back(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], hyphens: HyphenFixes
+) -> PageView:
+    """Put the hyphens that the OCR dropped back at the line ends of a stored
+    page, all at once (the ones that `GET .../missing-hyphens` found, and the user
+    approved).
+
+    The body is `{"fixes": [{"start": 9, "end": 16, "before": "przeczy",
+    "after": "przeczy-"}]}`. The offsets are those of the text that `POST
+    /tei/text` gives for this page; `before` is a word, perhaps with the sign
+    that the OCR made of the hyphen, and `after` is the word and a hyphen. The
+    fixes must not overlap. They are made from the end of the page to its start,
+    so that none of them moves the offsets of the others: all the offsets are
+    those of the page as the client saw it.
+
+    The new XML and a Correction for each fix are saved in one transaction: all
+    of it happens, or none of it. Nothing is made a legal spelling: a word with
+    a hyphen at the end of a line is not a spelling of its own.
+
+    404 if the page is not stored. 409 if the text at an offset is not `before`,
+    because the page has changed since. 422 if the page has no valid TEI XML, a
+    fix is not acceptable, or the fixes overlap. Returns the updated page as a
+    PageView.
+    """
+    fixes = sorted(hyphens.fixes, key=lambda fix: fix.start, reverse=True)
+
+    def put_back(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to correct")
+        for fix in fixes:
+            xml = replace_text_range(xml, fix.start, fix.end, fix.before, fix.after)
+        return xml
+
+    try:
+        page = db.apply_corrections(
+            edition_id,
+            number,
+            put_back,
+            [(fix.before, fix.after) for fix in reversed(fixes)],
+        )
+    except TextChanged as exc:
+        logger.warning(
+            "Hyphens not put back on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotReplace) as exc:
+        logger.warning(
+            "Hyphens not put back on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info("%s hyphens put back on page %s of %s", len(fixes), number, edition_id)
+    return PageView.from_page(page)
 
 
 @app.post("/editions/{edition_id}/pages/{number}/corrections", response_model=PageView)

@@ -25,6 +25,7 @@ from app.persistence.ontology import (
     Correction,
     Edition,
     LegalSpelling,
+    MissingHyphen,
     Page,
     PageMatches,
     PageNumberMatch,
@@ -32,6 +33,7 @@ from app.persistence.ontology import (
     TokenMatch,
     Work,
 )
+from app.text_tools.hyphens import find_missing_hyphens
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
 from app.text_tools.page_numbers import (
     PAGE_NUMBER_OPEN,
@@ -247,6 +249,24 @@ class Database:
 
         Returns the updated page, or None if there is no such page.
         """
+        return self.apply_corrections(
+            edition_id, number, replace, [(before, after)] if record else []
+        )
+
+    def apply_corrections(
+        self,
+        edition_id: UUID,
+        number: int,
+        replace: Callable[[str], str],
+        corrections: list[tuple[str, str]],
+    ) -> Page | None:
+        """Like `apply_correction`, for a change that is several corrections at
+        once: each (`before`, `after`) of `corrections` is recorded for the page,
+        in the same transaction as the new corrected content (none is recorded
+        if the list is empty).
+
+        Returns the updated page, or None if there is no such page.
+        """
         with self.conn.transaction():
             row = self.conn.execute(
                 "SELECT * FROM pages WHERE edition_id = %s AND number = %s FOR UPDATE",
@@ -260,7 +280,7 @@ class Database:
                 "UPDATE pages SET xml_content_corrected = %s WHERE id = %s RETURNING *",
                 (xml_content_corrected, page.id),
             ).fetchone()
-            if record:
+            for before, after in corrections:
                 self.create_correction(
                     Correction(page_id=page.id, before=before, after=after)
                 )
@@ -344,6 +364,33 @@ class Database:
             if tokens:
                 found.append(PageMatches(page_number=row["number"], tokens=tokens))
         return found
+
+    def get_missing_hyphens(
+        self, edition_id: UUID, number: int
+    ) -> list[MissingHyphen] | None:
+        """The line ends of a page where the OCR dropped a hyphen (see
+        `app/text_tools/hyphens.py`), in the text of the corrected content, as
+        the user sees it, with the spellings that are legal in the edition taken
+        as correct. A page without XML has none.
+
+        Returns None if there is no such page. Raises InvalidTei if its XML cannot
+        be read, and SpellcheckUnavailable if the dictionary cannot be loaded.
+        """
+        row = self.conn.execute(
+            "SELECT xml_content_corrected FROM pages"
+            " WHERE edition_id = %s AND number = %s",
+            (edition_id, number),
+        ).fetchone()
+        if row is None:
+            return None
+        if not row["xml_content_corrected"]:
+            return []
+        text = tei_xml_to_text(row["xml_content_corrected"])
+        legal = self.get_legal_spellings(edition_id)
+        return [
+            MissingHyphen.model_validate(vars(found))
+            for found in find_missing_hyphens(text, legal)
+        ]
 
     def get_similar_page_numbers(
         self, edition_id: UUID, number: int

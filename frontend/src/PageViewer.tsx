@@ -1,4 +1,4 @@
-import { useRef, useState, type UIEvent } from 'react'
+import { useRef, useState, type ReactNode, type UIEvent } from 'react'
 import type { Page } from './api'
 import type { Decision, Entity } from './entities'
 import PageText from './PageText'
@@ -96,6 +96,12 @@ interface Props {
   onSplitLine: (words: Word[]) => void
   /** Remove the line break between two neighbouring words on two lines. */
   onJoinLines: (words: Word[]) => void
+  /** A stretch of the text to show, by code point offsets (a place that is pointed at). */
+  highlight: { start: number; end: number } | null
+  /** A panel that is docked under the text (the missing hyphens), if any. */
+  dock: ReactNode
+  /** Look for the hyphens that the OCR dropped at the line ends of this page. */
+  onFindHyphens: () => void
   /** Look for the page number that is marked on this page on the other pages. */
   onFindPageNumbers: () => void
   /** The user selected some text in the NER view and chose a label for it. */
@@ -146,6 +152,9 @@ export default function PageViewer({
   onSplitLine,
   onJoinLines,
   onFindPageNumbers,
+  onFindHyphens,
+  highlight,
+  dock,
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
@@ -302,6 +311,18 @@ export default function PageViewer({
         )}
         {/* The correction view is where the spelling is corrected: the entities are not
             shown in it, and the NER view does not show the spelling. */}
+        {view === 'correction' && (
+          <div className="correction-bar">
+            <button
+              type="button"
+              disabled={busy || text.trim() === ''}
+              title="Put back the hyphens that the OCR dropped at the end of the lines of this page"
+              onClick={onFindHyphens}
+            >
+              Find missing hyphens
+            </button>
+          </div>
+        )}
         {(view === 'correction' || view === 'ner') && (
           <PageText
             text={text}
@@ -323,6 +344,7 @@ export default function PageViewer({
             onJoinWords={view === 'correction' ? onJoinWords : undefined}
             onSplitLine={view === 'correction' ? onSplitLine : undefined}
             onJoinLines={view === 'correction' ? onJoinLines : undefined}
+            highlight={view === 'correction' ? highlight : null}
           />
         )}
         {view === 'text' && (
@@ -348,6 +370,7 @@ export default function PageViewer({
             onFindPageNumbers={onFindPageNumbers}
           />
         )}
+        {view === 'correction' && dock}
       </section>
       <Sidebar
         view={view}

@@ -413,6 +413,11 @@ interface Props {
    * hint. The text is sent as a token at position 0, like any other token.
    */
   emptyPage?: boolean
+  /**
+   * A stretch of the text to show (code point offsets): the words that overlap
+   * it are marked, and the first of them is scrolled into view.
+   */
+  highlight?: { start: number; end: number } | null
 }
 
 /**
@@ -437,6 +442,7 @@ export default function PageText({
   onSplitLine,
   onJoinLines,
   emptyPage,
+  highlight,
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -636,7 +642,11 @@ export default function PageText({
     return (
       <span
         key={key}
-        className={word.correct ? 'word' : 'word misspelled'}
+        className={`${word.correct ? 'word' : 'word misspelled'}${
+          highlight && word.start < highlight.end && word.end > highlight.start
+            ? ' pointed'
+            : ''
+        }`}
         // misspelled words can be reached with the keyboard too
         tabIndex={word.correct ? undefined : 0}
         onClick={edit}
@@ -677,6 +687,15 @@ export default function PageText({
       </EntityMark>,
     )
   }
+
+  // The place that is pointed at is brought into view, if it is out of it.
+  const highlighted = highlight ? `${highlight.start}-${highlight.end}` : null
+  useEffect(() => {
+    if (highlighted === null) return
+    box.current
+      ?.querySelector<HTMLElement>('.pointed')
+      ?.scrollIntoView?.({ block: 'nearest' })
+  }, [highlighted])
 
   const pre = (
     <pre

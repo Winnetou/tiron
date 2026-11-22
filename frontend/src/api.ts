@@ -360,6 +360,59 @@ export function getSimilarPageNumbers(
   )
 }
 
+/** A line end of a page where the OCR dropped a hyphen (MissingHyphen). */
+export interface MissingHyphen {
+  /** What to replace: offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  /** The word at the end of the line, with the sign taken for the hyphen, if any. */
+  text: string
+  /** The word and a hyphen: what `text` is to become. */
+  suggestion: string
+  /** The word that starts the next line. */
+  next_word: string
+  /** The word that the two parts make together (the one that was found correct). */
+  joined: string
+  /** Both parts are correct words on their own: it is not sure the word is split. */
+  ambiguous: boolean
+}
+
+/**
+ * Calls GET /editions/{editionId}/pages/{number}/missing-hyphens: the backend finds
+ * the line ends of that page where a hyphen of a split word is missing. Nothing is
+ * changed.
+ */
+export function getMissingHyphens(
+  editionId: string,
+  number: number,
+): Promise<MissingHyphen[]> {
+  return request<MissingHyphen[]>(`${pageUrl(editionId, number)}/missing-hyphens`)
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/hyphens: the backend puts the
+ * hyphens back at the places, all at once (all or none), and returns the updated
+ * page. The offsets are those of the page as the client saw it.
+ */
+export function putHyphensBack(
+  editionId: string,
+  number: number,
+  hyphens: MissingHyphen[],
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/hyphens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fixes: hyphens.map((hyphen) => ({
+        start: hyphen.start,
+        end: hyphen.end,
+        before: hyphen.text,
+        after: hyphen.suggestion,
+      })),
+    }),
+  })
+}
+
 /**
  * Calls POST /editions/{editionId}/pages/{number}/line-splits: the backend turns
  * the space between `words` (two neighbouring words of one line) into a line

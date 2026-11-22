@@ -4,7 +4,7 @@ import itertools
 import logging
 import re
 import threading
-from collections.abc import Collection, Iterator
+from collections.abc import Callable, Collection, Iterator
 
 import phunspell
 
@@ -121,6 +121,26 @@ def _joined(pieces: list[str]) -> Iterator[str]:
         yield "".join(piece + glue for piece, glue in zip(pieces, glues, strict=True))
 
 
+def word_verdict(legal: Collection[str] = ()) -> Callable[[str], bool]:
+    """A function that says whether a word is spelled correctly (or is legal, see
+    `check_words`). It remembers its answers, so each distinct word is looked up
+    once: make one for a text and use it for all the words of it.
+
+    Raises SpellcheckUnavailable if the dictionary cannot be loaded.
+    """
+    checker = get_checker()
+    verdicts: dict[str, bool] = {}
+
+    def verdict(word: str) -> bool:
+        if word not in verdicts:
+            verdicts[word] = (
+                word in legal or word.lower() in legal or _is_correct(word, checker)
+            )
+        return verdicts[word]
+
+    return verdict
+
+
 def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
     """Every word of `text`, in order, and whether it is spelled correctly.
 
@@ -151,15 +171,7 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
 
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """
-    checker = get_checker()
-    verdicts: dict[str, bool] = {}  # each distinct word is looked up once
-
-    def verdict(word: str) -> bool:
-        if word not in verdicts:
-            verdicts[word] = (
-                word in legal or word.lower() in legal or _is_correct(word, checker)
-            )
-        return verdicts[word]
+    verdict = word_verdict(legal)
 
     tokens = tokenize(text)
     split = _split_words(text, tokens)
