@@ -2580,3 +2580,195 @@ class TestTeiSections:
 
         assert response.status_code == 422
         assert "TEI" in response.json()["detail"]
+
+
+class TestRubbishLines:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/rubbish-lines"
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        known = {"ala", "ma", "kota", "szczerą"}
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w.lower() in known})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        marked = mark_section(
+            str(text_to_tei_xml("Ala ma\n;;; ,,,\nkota")), 7, 14, "header", ";;; ,,,"
+        )
+        rows = [
+            {"number": 0, "xml_content_corrected": str(text_to_tei_xml("Ala ma kota"))},
+            {
+                "number": 3,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("Ala ma\n; . l-v ■ :\nkota\n\n***\n\n12")
+                ),
+            },
+            {"number": 4, "xml_content_corrected": None},
+            {"number": 5, "xml_content_corrected": marked},
+            {"number": 6, "xml_content_corrected": "<not tei/>"},
+        ]
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = [] if "legal_spellings" in query else rows
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
+        return edition_id
+
+    def test_lists_the_rubbish_lines_page_by_page(self, stored):
+        response = client.get(self.url(stored))
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "page_number": 3,
+                "lines": [
+                    {"start": 7, "end": 18, "text": "; . l-v ■ :", "sure": True},
+                    {"start": 25, "end": 28, "text": "***", "sure": True},
+                ],
+            }
+        ]
+
+    def test_offsets_are_those_of_the_text(self, stored):
+        text = "Ala ma\n; . l-v ■ :\nkota\n\n***\n\n12"
+
+        for line in client.get(self.url(stored)).json()[0]["lines"]:
+            assert text[line["start"] : line["end"]] == line["text"]
+
+    def test_a_marked_section_is_left_alone(self, stored):
+        pages = [p["page_number"] for p in client.get(self.url(stored)).json()]
+
+        assert 5 not in pages
+
+    def test_edition_not_stored_is_404(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = client.get(self.url())
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    def test_dictionary_unavailable_is_503(self, stored, monkeypatch):
+        def unavailable():
+            raise SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        assert client.get(self.url(stored)).status_code == 503
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "get" in schema["paths"]["/editions/{edition_id}/rubbish-lines"]
+        assert {"PageRubbish", "RubbishLine"} <= schema["components"]["schemas"].keys()
+
+
+class TestRemoveLine:
+    TEXT = "Ala ma\n; . :\nkota"
+    XML = str(text_to_tei_xml(TEXT))
+
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/line-removals"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
+            ),
+            "recorded": [],
+        }
+
+        def apply(edition_id, number, replace, before, after, record=True):
+            page = state["page"]
+            if (edition_id, number) != (page.edition_id, page.number):
+                return None
+            new_xml = replace(page.xml_content_corrected or "")
+            state["page"] = page.model_copy(update={"xml_content_corrected": new_xml})
+            if record:
+                state["recorded"].append((before, after))
+            return state["page"]
+
+        monkeypatch.setattr(db, "apply_correction", mock.Mock(side_effect=apply))
+        return state
+
+    BODY = {"start": 7, "end": 12, "text": "; . :"}
+
+    def post(self, stored, body=None):
+        return client.post(self.url(stored["page"].edition_id), json=body or self.BODY)
+
+    def test_removes_the_line_from_the_xml(self, stored):
+        response = self.post(stored)
+
+        assert response.status_code == 200
+        assert tei_xml_to_text(response.json()["page"]["content"]) == "Ala ma\nkota"
+        assert tei_xml_to_text(stored["page"].xml_content_corrected) == "Ala ma\nkota"
+
+    def test_says_how_many_characters_of_the_text_went(self, stored):
+        assert self.post(stored).json()["removed"] == 6  # the line and a line break
+
+    def test_a_line_that_is_a_paragraph_takes_two_line_breaks(self, stored):
+        text = "Ala\n\n; . :\n\nkota"
+        stored["page"] = stored["page"].model_copy(
+            update={"xml_content_corrected": str(text_to_tei_xml(text))}
+        )
+
+        response = self.post(stored, {"start": 5, "end": 10, "text": "; . :"})
+
+        assert response.json()["removed"] == 7
+
+    def test_no_correction_is_recorded(self, stored):
+        self.post(stored)
+
+        assert stored["recorded"] == []
+
+    def test_the_page_has_changed_is_409(self, stored):
+        response = self.post(stored, {**self.BODY, "text": "; . ;"})
+
+        assert response.status_code == 409
+        assert stored["page"].xml_content_corrected == self.XML
+
+    def test_page_not_stored_is_404(self, stored):
+        response = client.post(self.url(), json=self.BODY)
+
+        assert response.status_code == 404
+
+    def test_page_without_xml_is_422(self, stored):
+        stored["page"] = stored["page"].model_copy(
+            update={"xml_content_corrected": None}
+        )
+
+        assert self.post(stored).status_code == 422
+
+    def test_not_a_whole_line_is_422(self, stored):
+        response = self.post(stored, {"start": 7, "end": 9, "text": "; "})
+
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"start": 7, "end": 7, "text": "x"},
+            {"start": 7, "end": 12, "text": ""},
+            {**BODY, "extra": 1},
+        ],
+    )
+    def test_a_body_that_is_not_acceptable_is_422(self, stored, body):
+        assert self.post(stored, body).status_code == 422
+
+    def test_is_in_the_openapi_schema(self):
+        paths = client.get("/openapi.json").json()["paths"]
+
+        assert "post" in paths["/editions/{edition_id}/pages/{number}/line-removals"]

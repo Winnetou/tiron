@@ -100,6 +100,8 @@ interface Props {
   highlight: { start: number; end: number } | null
   /** A panel that is docked under the text (the missing hyphens), if any. */
   dock: ReactNode
+  /** Look for the OCR rubbish (lines that are not text) in the whole edition. */
+  onFindRubbish: () => void
   /** Look for the hyphens that the OCR dropped at the line ends of this page. */
   onFindHyphens: () => void
   /** Look for the page number that is marked on this page on the other pages (a
@@ -154,6 +156,7 @@ export default function PageViewer({
   onJoinLines,
   onFindPageNumbers,
   onFindHyphens,
+  onFindRubbish,
   highlight,
   dock,
   notice,
@@ -219,6 +222,13 @@ export default function PageViewer({
             disabled: busy || text.trim() === '',
             title:
               'Put back the hyphens that the OCR dropped at the end of the lines of this page',
+          },
+          {
+            label: 'Find OCR rubbish in the edition',
+            onSelect: onFindRubbish,
+            disabled: busy,
+            title:
+              'Find the lines of the whole edition that are not text (an ornament read as letters) and remove them',
           },
         ]
       : view === 'structure'

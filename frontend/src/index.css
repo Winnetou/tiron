@@ -707,6 +707,15 @@ button {
   border-bottom: 1px solid #eee;
 }
 
+.review-row .rubbish-line {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .review-row .misspelling {
   color: #b00020;
   text-decoration: underline wavy;

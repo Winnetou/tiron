@@ -724,6 +724,52 @@ spelling. 404 if the page is not stored, 409 if the text at an offset is not
 The search is `Database.get_missing_hyphens`, on `app/text_tools/hyphens.py`;
 saving is `Database.apply_corrections`, the `apply_correction` for several.
 
+### The OCR rubbish
+
+The OCR reads a fleuron, a printer's ornament, or the print that shows through from
+the other side of the page, as text, and produces nonsense, whole lines of it
+(`I *>• ' -V. ^oSkv. ;-'. i M , . ypton`; a line of `■`, `*` or `\\`). These are
+found in the whole edition and removed in bulk. Only whole lines are dealt with,
+never a damaged token at the start of a good line (`£r~*>e szczerą ...`): that is
+closer to a correction than to a removal.
+
+`GET /editions/{edition_id}/rubbish-lines` lists them, page by page, in the order of
+the pages. It changes nothing.
+
+- **A candidate** is a line in which signs outnumber letters: the letters are less
+  than 60 % of the letters and signs together (digits are not counted). It is
+  **`sure`** if there is no correct word of three letters or more in it. If there is
+  one, the line may be text with a lot of punctuation (`zamku!....`, a list of
+  references), so it is `sure: false` and a human has to say. The spellings that are
+  legal in the edition count as correct words.
+- **Never found**: a line shorter than three characters (`*`, `.`, `\`, `♦`: too little to
+  say it is rubbish), a line of one and the same sign, `?` `.` `-` or `!`, several times
+  (`...`, `---`, `???`, `!!!`, `. . .`; a mix such as `.-.` does count), a line with
+  digits and no letters (`0`, `16`, `7 (`: a page number or what stands for it), a Roman
+  numeral (`II.`: the number of a chapter), and a line
+  that is in a marked section (a header, a footer, a page number, a table of
+  contents, a note).
+- **The response**: `[{"page_number": 18, "lines": [{"start": 14, "end": 51, "text":
+  "I *>• ...", "sure": true}]}]`. `start` and `end` are offsets in the text of the page
+  (counted in code points, as `POST /tei/text` gives it), so `text[start:end]` is the
+  line. A page whose XML cannot be read, or that has no such line, is left out.
+- 404 if the edition is not stored, 503 if the dictionary is not available. The
+  search is `Database.get_rubbish_lines`, on `app/text_tools/rubbish.py`.
+
+`POST /editions/{edition_id}/pages/{number}/line-removals` removes one line, with the
+body `{"start": 14, "end": 51, "text": "I *>• ..."}`. The characters `start` to `end`
+must be `text` and a whole line (a line break before it and after it, or an end of
+the text), else it is a 409 (the page has changed) or a 422. The backend removes the
+line and its `<lb/>`: the one before it, or after it if it is the first line of its
+paragraph. A line that is all of its paragraph takes the paragraph with it, and so
+the empty line next to it, unless it is the only paragraph of the page, which stays,
+empty. A line with an element inside it (a `<persName>`), or that is not plain text of
+a paragraph, is not removed (422). No Correction is recorded: it is not the
+correction of a word. The answer is `{"page": {...}, "removed": 6}`: the updated page,
+and how many characters of its text went (the line and its line break or breaks), so
+the client can move the offsets of what follows on the page by that. The function is
+`remove_line_at` in `app/text_tools/tei_xml.py`.
+
 ### What the frontend shows
 
 While the scan of a page is loading (or has not started), a spinner with "Loading the
@@ -975,6 +1021,28 @@ the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
 
+**The OCR rubbish of the edition.** The **Find OCR rubbish in the edition** tool of the
+correction view (in the cog wheel of the sidebar) opens a big box over the page, which
+asks `GET /editions/{id}/rubbish-lines` (see "The OCR rubbish") and lists the lines by
+page, each as it is (in a monospace face), with an **Approve** button (it carries
+`data-edition-id`, `data-page`, `data-start` and `data-end`) and a box to take it out of
+"Approve all". It is like the box for the same mistake in the edition, but the unit is
+a whole line, and approving *removes* it.
+
+- The sure lines are included by default; those with a correct word in them say "has a
+  correct word: may be text" and are not. **Include all**, **Include none** and
+  **Include only the sure ones** set the boxes.
+- **Approve** removes that line alone (`POST .../line-removals`) and marks it
+  "✓ Removed". **Approve all (N)** removes the included lines one request at a time, in
+  the order of the pages, and shows "Removing x of y …". A line that the backend refuses
+  is marked with the reason, and the others go on.
+- One removal is made at a time, as it makes the page shorter: the offsets of the lines
+  that follow it on its page are moved by `removed`, the number of characters that went
+  (the backend says it, as it depends on the XML). Other pages are not touched.
+- If the line is on the page on the screen, that page is shown again with its new text.
+- The box says "No OCR rubbish found in the edition" when there is none, shows the
+  backend's reason if the search fails, and is closed with **Close** or Escape.
+
 **The tools of the sidebar.** At the bottom of the sidebar, set apart from the
 buttons above it by a horizontal bar, a **cog wheel** button (tooltip "Tools")
 reveals the tools of the view that is shown: each view has its own. The list closes
@@ -985,6 +1053,7 @@ the cog wheel disabled.
 | View | Tool | |
 |---|---|---|
 | Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
+| Correction | **Find OCR rubbish in the edition** | finds the lines of the whole edition that are not text, to remove them (above) |
 | Structure | **Find this on other pages** | looks for the page number marked on this page on the other pages; disabled until a page number is marked (its tooltip says "Mark the page number on this page first") |
 | Named entity recognition | **Find this NER on other pages** | a stub for now: the button is inactive and does nothing |
 

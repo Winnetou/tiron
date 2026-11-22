@@ -11,6 +11,7 @@ import type {
   MissingHyphen,
   Page,
   PageMatches,
+  PageRubbish,
   SectionSpan,
   SimilarPageNumbers,
 } from './api'
@@ -128,6 +129,17 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../rubbish-lines; defaults to none. */
+  rubbish?: () => PageRubbish[] | Error
+  /**
+   * Answer of POST .../line-removals: the changes to the page and how many
+   * characters of its text went. Defaults to removing the line and the line break
+   * after it from the text.
+   */
+  removeLine?: (
+    body: { start: number; end: number; text: string },
+    page: Page,
+  ) => { changes: Partial<Page>; removed: number } | Error
   /** Answer of GET .../missing-hyphens for a page; defaults to none. */
   hyphens?: (page: number) => MissingHyphen[] | Error
   /** Answer of POST .../hyphens; defaults to replacing each word in the XML. */
@@ -270,6 +282,27 @@ function fakeBackend(options: Options = {}) {
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.endsWith('/rubbish-lines')) {
+      const answer = options.rubbish ? options.rubbish() : []
+      return answer instanceof Error ? failure(404, answer) : reply(true, 200, answer)
+    }
+    const removing = url.match(/\/pages\/(\d+)\/line-removals$/)
+    if (removing) {
+      const number = Number(removing[1])
+      const page = pageFor(number)
+      if (page instanceof Error) return failure(404, page)
+      const current = pages.get(number) ?? page
+      const answer = options.removeLine
+        ? options.removeLine(body, current)
+        : {
+            changes: { content: current.content.replace(`${body.text}\n`, '') },
+            removed: [...body.text].length + 1,
+          }
+      if (answer instanceof Error) return failure(409, answer)
+      const updated = { ...current, ...answer.changes }
+      pages.set(number, updated)
+      return reply(true, 200, { page: updated, removed: answer.removed })
     }
     const missing = url.match(/\/pages\/(\d+)\/missing-hyphens$/)
     if (missing) {
@@ -5620,13 +5653,16 @@ describe('page view', () => {
       expect(cog()).toHaveAttribute('aria-expanded', 'false')
     })
 
-    it('has "Find missing hyphens" in the correction view', async () => {
+    it('has "Find missing hyphens" and "Find OCR rubbish in the edition" in the correction view', async () => {
       await open()
 
       await userEvent.click(cog())
 
       expect(cog()).toHaveAttribute('aria-expanded', 'true')
-      expect(names()).toEqual(['Find missing hyphens'])
+      expect(names()).toEqual([
+        'Find missing hyphens',
+        'Find OCR rubbish in the edition',
+      ])
     })
 
     it('has "Find this on other pages" in the structure view', async () => {
@@ -6440,6 +6476,299 @@ describe('the missing hyphens of a page', () => {
       expect(screen.queryByText('✓ Approved')).toBeNull()
       expect(approveAll()).toHaveTextContent('Approve all (3)')
       expect(approveAll()).toBeEnabled()
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await openReview()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})
+
+describe('the OCR rubbish of the edition', () => {
+  const TEXT = 'Ala ma\n; . l-v :\nkota\n\n\\\n\nAla'
+  const line = (text: string, start: number, sure = true) => ({
+    start,
+    end: start + [...text].length,
+    text,
+    sure,
+  })
+  const FOUND: PageRubbish[] = [
+    {
+      page_number: 0,
+      lines: [line('; . l-v :', 7), line('\\', 24), line('zamku!....', 40, false)],
+    },
+    { page_number: 2, lines: [line('♦', 0)] },
+  ]
+  const review = () => screen.queryByRole('dialog', { name: 'The OCR rubbish in the edition' })
+  const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
+  const include = (text: string, page: number) =>
+    screen.getByRole('checkbox', {
+      name: `Include the line “${text}” of page ${page} in Approve all`,
+    })
+  const remove = (text: string, page: number) =>
+    screen.getByRole('button', { name: `Remove the line “${text}” of page ${page}` })
+  const removalCalls = () => calls.filter((c) => c.url.endsWith('/line-removals'))
+  const getCalls = () => calls.filter((c) => c.url.endsWith('/rubbish-lines'))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      rubbish: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+  async function openReview(extra: Options = {}) {
+    await open(extra)
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Find OCR rubbish in the edition' }))
+    await screen.findByText(/lines? on \d+ pages?/)
+  }
+
+  describe('the tool', () => {
+    it('is in the cog wheel of the correction view', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(
+        screen.getByRole('button', { name: 'Find OCR rubbish in the edition' }),
+      ).toBeEnabled()
+    })
+
+    it('is not in the structure view', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(screen.queryByRole('button', { name: 'Find OCR rubbish in the edition' })).toBeNull()
+    })
+
+    it('does nothing until it is clicked: the backend is not asked', async () => {
+      await open()
+
+      expect(getCalls()).toHaveLength(0)
+      expect(review()).toBeNull()
+    })
+
+    it('asks the backend for the edition', async () => {
+      await openReview()
+
+      expect(getCalls()).toHaveLength(1)
+      expect(getCalls()[0].url).toBe(`/editions/${UUID}/rubbish-lines`)
+    })
+  })
+
+  describe('the box', () => {
+    it('lists the lines by page', async () => {
+      await openReview()
+
+      expect(within(review()!).getByRole('region', { name: 'Page 0' })).toBeInTheDocument()
+      expect(within(review()!).getByRole('region', { name: 'Page 2' })).toBeInTheDocument()
+      expect(within(review()!).getAllByRole('listitem')).toHaveLength(4)
+      expect(screen.getByText('; . l-v :')).toBeInTheDocument()
+    })
+
+    it('counts the lines, the pages and the sure ones', async () => {
+      await openReview()
+
+      expect(screen.getByText('4 lines on 2 pages, 3 of them sure')).toBeInTheDocument()
+    })
+
+    it('takes the sure lines by default, and not those with a correct word', async () => {
+      await openReview()
+
+      expect(include('; . l-v :', 0)).toBeChecked()
+      expect(include('♦', 2)).toBeChecked()
+      expect(include('zamku!....', 0)).not.toBeChecked()
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+    })
+
+    it('says that a line with a correct word may be text', async () => {
+      await openReview()
+
+      expect(screen.getByText('has a correct word: may be text')).toBeInTheDocument()
+    })
+
+    it('has Include all, Include none and Include only the sure ones', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(approveAll()).toHaveTextContent('Approve all (4)')
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(approveAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include only the sure ones' }))
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+    })
+
+    it('says so when there is none', async () => {
+      await open({ rubbish: () => [] })
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Find OCR rubbish in the edition' }))
+
+      expect(await screen.findByText('No OCR rubbish found in the edition.')).toBeInTheDocument()
+    })
+
+    it('shows the reason when the backend refuses', async () => {
+      await open({ rubbish: () => new Error('Edition not found') })
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Find OCR rubbish in the edition' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
+    })
+
+    it('closes with Close and with Escape', async () => {
+      await openReview()
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Find OCR rubbish in the edition' }))
+      await screen.findByText(/lines? on \d+ pages?/)
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+
+    it('changes nothing until the user approves', async () => {
+      await openReview()
+
+      expect(removalCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('approving one line', () => {
+    it('sends that line alone, with the offsets the button carries', async () => {
+      await openReview()
+      const button = remove('\\', 0)
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '0')
+      expect(button).toHaveAttribute('data-start', '24')
+      expect(button).toHaveAttribute('data-end', '25')
+
+      await userEvent.click(button)
+
+      await waitFor(() => expect(removalCalls()).toHaveLength(1))
+      expect(removalCalls()[0].method).toBe('POST')
+      expect(removalCalls()[0].url).toBe(`/editions/${UUID}/pages/0/line-removals`)
+      expect(removalCalls()[0].body).toEqual({ start: 24, end: 25, text: '\\' })
+    })
+
+    it('shows the page without the line, and marks the line removed', async () => {
+      await openReview()
+
+      await userEvent.click(remove('; . l-v :', 0))
+
+      await waitFor(() => expect(pageText().textContent).not.toContain('; . l-v :'))
+      expect(await screen.findByText('✓ Removed')).toBeInTheDocument()
+      expect(screen.getByText(/1 removed/)).toBeInTheDocument()
+    })
+
+    it('can remove a line that is not in Approve all', async () => {
+      await openReview()
+
+      await userEvent.click(remove('zamku!....', 0))
+
+      await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    })
+
+    it('moves the lines after it on its page by what went, not those before it or on other pages', async () => {
+      await openReview({
+        removeLine: (body, page) => ({
+          changes: { content: page.content.replace(`${body.text}\n`, '') },
+          removed: 10,
+        }),
+      })
+
+      await userEvent.click(remove('\\', 0))
+      await screen.findByText('✓ Removed')
+
+      expect(remove('zamku!....', 0)).toHaveAttribute('data-start', '30')
+      expect(remove('; . l-v :', 0)).toHaveAttribute('data-start', '7')
+      expect(remove('♦', 2)).toHaveAttribute('data-start', '0')
+    })
+
+    it('shows the reason when the backend refuses, and the line can be tried again', async () => {
+      await openReview({ removeLine: () => new Error('The page has changed') })
+
+      await userEvent.click(remove('\\', 0))
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      expect(remove('\\', 0)).toBeEnabled()
+    })
+  })
+
+  describe('approve all', () => {
+    it('removes the lines that are in, one request each, in order', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(removalCalls()).toHaveLength(3))
+      expect(removalCalls().map((c) => c.url)).toEqual([
+        `/editions/${UUID}/pages/0/line-removals`,
+        `/editions/${UUID}/pages/0/line-removals`,
+        `/editions/${UUID}/pages/2/line-removals`,
+      ])
+      expect((removalCalls()[1].body as { text: string }).text).toBe('\\')
+    })
+
+    it('sends the offsets as the earlier removals left them', async () => {
+      await openReview({
+        removeLine: (body, page) => ({
+          changes: { content: page.content.replace(`${body.text}\n`, '') },
+          removed: 10,
+        }),
+      })
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(removalCalls()).toHaveLength(3))
+      // the second line of page 0 follows the first, which took 10 characters
+      expect(removalCalls()[1].body).toMatchObject({ start: 14, end: 15 })
+    })
+
+    it('leaves out a line that was taken out', async () => {
+      await openReview()
+      await userEvent.click(include('\\', 0))
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(removalCalls()).toHaveLength(2))
+      expect(
+        removalCalls().map((c) => (c.body as { text: string }).text),
+      ).toEqual(['; . l-v :', '♦'])
+    })
+
+    it('marks all of them removed, and has nothing left to approve', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+
+      expect(await screen.findAllByText('✓ Removed')).toHaveLength(3)
+      expect(approveAll()).toBeDisabled()
+    })
+
+    it('goes on after a line that was refused, and says which', async () => {
+      await openReview({
+        removeLine: (body, page) =>
+          body.text === '\\'
+            ? new Error('The page has changed')
+            : {
+                changes: { content: page.content.replace(`${body.text}\n`, '') },
+                removed: [...body.text].length + 1,
+              },
+      })
+
+      await userEvent.click(approveAll())
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      await waitFor(() => expect(removalCalls()).toHaveLength(3))
+      expect(screen.getAllByText('✓ Removed')).toHaveLength(2)
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
     })
   })
 

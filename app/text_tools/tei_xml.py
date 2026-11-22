@@ -978,6 +978,116 @@ def join_lines_at(xml: str, start: int, end: int, text: str) -> str:
     return _serialise(root, xml)
 
 
+class CannotRemoveLine(ValueError):
+    """The line cannot be removed from the XML; the message says why."""
+
+
+def remove_line_at(xml: str, start: int, end: int, text: str) -> str:
+    """Remove a whole line of a TEI document: the characters `start` to `end` of
+    the text, which are `text`, and the line break that goes with it. The changed
+    XML is returned.
+
+    `text` is the line as the client saw it (no line break in it, and no space at
+    its ends), and the characters `start` to `end` of the text must be that, and
+    be a whole line: the text before them ends with a line break (or they start
+    the text) and the text after them starts with one (or they end it); else
+    TextChanged or CannotRemoveLine. The line must be text of one block (<p>,
+    <head>, <ab> or <lg>) and have no markup inside it: a line with an element in
+    it (a <persName>) is not removed.
+
+    The line break that goes is the <lb/> before the line, or after it if it is the
+    first line of its block. A line that is all of its block takes the block with
+    it (the empty line next to it goes too), unless it is the only block of the
+    page, which stays, empty.
+
+    Raises InvalidTei if the XML is not TEI, TextChanged if the text at the
+    offsets is not `text`, and CannotRemoveLine for the other problems.
+    """
+    if not text or "\n" in text or text != text.strip():
+        raise CannotRemoveLine(
+            "The line must not be empty, have a line break, or start or end with "
+            "a space"
+        )
+    root = _parse_tei(xml)
+    text_element = _text_element(root)
+    extracted, sources = _extract(text_element)
+    if not 0 <= start < end <= len(extracted) or extracted[start:end] != text:
+        raise TextChanged(
+            f"The text at {start}-{end} is not {text!r}: the page has changed"
+        )
+    if (start > 0 and extracted[start - 1] != "\n") or (
+        end < len(extracted) and extracted[end] != "\n"
+    ):
+        raise CannotRemoveLine("The text is not a whole line")
+
+    # where the characters of the line are, in each text node
+    spans: dict[int, tuple[TextNode, int, int]] = {}
+    for source in sources[start:end]:
+        if source is None:
+            continue
+        node, index = source
+        _, first, last = spans.get(id(node), (node, index, index))
+        spans[id(node)] = (node, min(first, index), max(last, index))
+    parents = {id(node.parent) for node, _, _ in spans.values()}
+    if len(parents) != 1:
+        raise CannotRemoveLine("The line has markup in it: it cannot be removed")
+    block = next(iter(spans.values()))[0].parent
+    if block is None or block.local_name not in _BLOCK_ELEMENTS - {"div"}:
+        raise CannotRemoveLine("The line is not in a paragraph: it cannot be removed")
+
+    children = list(block.iterate_children())
+    mine = {id(node) for node, _, _ in spans.values()}
+    positions = [i for i, child in enumerate(children) if id(child) in mine]
+    first_at, last_at = positions[0], positions[-1]
+    if any(
+        id(child) not in mine and not _is_blank(child) and not _is_lb(child)
+        for child in children[first_at : last_at + 1]
+    ):
+        raise CannotRemoveLine("The line has markup in it: it cannot be removed")
+
+    def neighbour(order: range) -> Any:
+        for i in order:
+            if not _is_blank(children[i]):
+                return children[i]
+        return None
+
+    before = neighbour(range(first_at - 1, -1, -1))
+    after = neighbour(range(last_at + 1, len(children)))
+    if _is_lb(before):
+        gone = before
+    elif before is None and _is_lb(after):
+        gone = after
+    elif before is None and after is None:
+        gone = None  # the line is all of its block
+    else:
+        raise CannotRemoveLine(
+            "The line has other markup next to it: it cannot be removed"
+        )
+
+    for node, first, last in spans.values():
+        content = node.content
+        rest = content[:first] + content[last + 1 :]
+        if rest.strip():
+            node.content = rest
+        else:
+            node.detach()
+    if gone is not None:
+        gone.detach()
+    else:
+        blocks = [
+            node
+            for node in text_element.iterate_descendants()
+            if isinstance(node, TagNode) and node.local_name in _BLOCK_ELEMENTS
+        ]
+        if len(blocks) > 1:
+            block.detach()
+    return _serialise(root, xml)
+
+
+def _is_lb(node: Any) -> bool:
+    return isinstance(node, TagNode) and node.local_name == "lb"
+
+
 def _merge_paragraphs(
     text_element: TagNode, before: Any, after: Any, first_token: str
 ) -> None:

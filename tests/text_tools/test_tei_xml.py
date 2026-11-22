@@ -9,6 +9,7 @@ from app.text_tools.tei_xml import (
     CannotInsert,
     CannotJoin,
     CannotJoinLines,
+    CannotRemoveLine,
     CannotReplace,
     CannotSplit,
     CannotTag,
@@ -18,6 +19,7 @@ from app.text_tools.tei_xml import (
     join_lines_at,
     join_text_range,
     mark_section,
+    remove_line_at,
     replace_text_range,
     split_line_at,
     tag_text_range,
@@ -2057,3 +2059,104 @@ class TestSectionsOfTheXml:
     def test_xml_that_is_not_tei(self, xml):
         with pytest.raises(InvalidTei):
             tei_xml_sections(xml)
+
+
+class TestRemoveLineAt:
+    def remove(self, line, source, xml=None):
+        start = source.index(line)
+        return remove_line_at(xml or generated(source), start, start + len(line), line)
+
+    def test_a_line_in_the_middle_goes_with_the_break_before_it(self):
+        result = self.remove("; . :", "Ala ma\n; . :\nkota")
+
+        assert tei_xml_to_text(result) == "Ala ma\nkota"
+        assert result.count("<lb") == 1
+
+    def test_the_first_line_of_a_paragraph_goes_with_the_break_after_it(self):
+        result = self.remove("; . :", "; . :\nAla ma\nkota")
+
+        assert tei_xml_to_text(result) == "Ala ma\nkota"
+        assert result.count("<lb") == 1
+
+    def test_the_last_line_of_a_paragraph(self):
+        result = self.remove("; . :", "Ala ma\nkota\n; . :")
+
+        assert tei_xml_to_text(result) == "Ala ma\nkota"
+
+    def test_a_line_that_is_a_paragraph_takes_the_paragraph_and_its_empty_line(self):
+        result = self.remove("; . :", "Ala\n\n; . :\n\nkota")
+
+        assert tei_xml_to_text(result) == "Ala\n\nkota"
+        assert result.count("<p>") == 2 + 1  # (the one of the header)
+
+    def test_a_first_paragraph_that_is_one_line(self):
+        result = self.remove("; . :", "; . :\n\nAla\nkota")
+
+        assert tei_xml_to_text(result) == "Ala\nkota"
+
+    def test_a_last_paragraph_that_is_one_line(self):
+        result = self.remove("; . :", "Ala\nkota\n\n; . :")
+
+        assert tei_xml_to_text(result) == "Ala\nkota"
+
+    def test_the_only_line_of_a_page_leaves_an_empty_page(self):
+        result = self.remove("; . :", "; . :")
+
+        assert tei_xml_to_text(result) == ""
+        assert "<p/>" in result or "<p></p>" in result
+
+    def test_the_other_lines_keep_their_markup(self):
+        xml = tag_text_range(generated("Ala Jan\n; . :\nkota"), 4, 7, "persName", "Jan")
+
+        result = remove_line_at(xml, 8, 13, "; . :")
+
+        assert tei_xml_to_text(result) == "Ala Jan\nkota"
+        assert "<persName>Jan</persName>" in result
+
+    def test_a_line_with_a_hyphen_break_before_it(self):
+        result = self.remove("; . :", "abso-\n; . :\nlutely")
+
+        assert tei_xml_to_text(result) == "abso-\nlutely"
+
+    def test_the_offsets_count_code_points(self):
+        source = "😀 a\n; . :\nkota"
+
+        assert tei_xml_to_text(self.remove("; . :", source)) == "😀 a\nkota"
+
+    def test_the_page_has_changed(self):
+        xml = generated("Ala\n; . :\nkota")
+
+        with pytest.raises(TextChanged):
+            remove_line_at(xml, 4, 9, "; . ;")
+        with pytest.raises(TextChanged):
+            remove_line_at(xml, 4, 99, "; . :")
+
+    def test_it_must_be_a_whole_line(self):
+        xml = generated("Ala ; . :\nkota")
+
+        with pytest.raises(CannotRemoveLine, match="whole line"):
+            remove_line_at(xml, 4, 9, "; . :")
+        with pytest.raises(CannotRemoveLine, match="whole line"):
+            remove_line_at(xml, 0, 3, "Ala")
+
+    @pytest.mark.parametrize("text", ["", " ; ", "a\nb"])
+    def test_the_text_must_be_a_line(self, text):
+        with pytest.raises(CannotRemoveLine):
+            remove_line_at(generated("Ala\n; . :\nkota"), 4, 9, text)
+
+    def test_a_line_with_markup_in_it_is_not_removed(self):
+        xml = tag_text_range(generated("Ala\n; Jan :\nkota"), 6, 9, "persName", "Jan")
+
+        with pytest.raises(CannotRemoveLine, match="markup"):
+            remove_line_at(xml, 4, 11, "; Jan :")
+
+    def test_a_line_that_is_all_inside_an_element_is_not_removed(self):
+        xml = tag_text_range(generated("Ala\n; . :\nkota"), 4, 9, "persName", "; . :")
+
+        with pytest.raises(CannotRemoveLine):
+            remove_line_at(xml, 4, 9, "; . :")
+
+    @pytest.mark.parametrize("xml", ["", "not xml", "<a/>"])
+    def test_xml_that_is_not_tei(self, xml):
+        with pytest.raises(InvalidTei):
+            remove_line_at(xml, 0, 1, "a")

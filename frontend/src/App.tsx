@@ -9,11 +9,13 @@ import {
   getPage,
   type MissingHyphen,
   type PageNumberMatch,
+  type RubbishLine,
   type TokenMatch,
   markSection,
   pageFromPath,
   pageUrl,
   putHyphensBack,
+  removeLine,
   recognizeEntities,
   spellcheck,
   tagEntity,
@@ -22,6 +24,7 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import { RubbishReview, type RubbishEdition } from './EditionWideRubbish'
 import { MissingHyphensReview, type HyphenPage } from './MissingHyphens'
 import {
   SimilarPageNumbersReview,
@@ -155,6 +158,8 @@ export default function App() {
     useState<PageNumberExample | null>(null)
   // The page whose line ends are looked at for the hyphens that the OCR dropped.
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
+  // The edition whose OCR rubbish lines the user wants to find and remove.
+  const [findingRubbish, setFindingRubbish] = useState<RubbishEdition | null>(null)
   // The place of the text that the user points at in its list, to show in the text.
   const [hyphenStretch, setHyphenStretch] = useState<{
     start: number
@@ -216,7 +221,30 @@ export default function App() {
     setReviewing(null)
     setFindingPageNumbers(null)
     setFindingHyphens(null)
+    setFindingRubbish(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Remove one line of a page of the edition (OCR rubbish). If it is the page on
+   * the screen, it is shown again with its new text. Resolves with how many
+   * characters of the text went, for the list to move the lines after it by. A
+   * refusal rejects, with its reason, for the list to show.
+   */
+  async function approveRubbish(
+    editionId: string,
+    pageNumber: number,
+    line: RubbishLine,
+  ): Promise<number> {
+    const { page: updated, removed } = await removeLine(editionId, pageNumber, line)
+    if (
+      status.kind === 'done' &&
+      status.page.edition_id === editionId &&
+      status.page.number === pageNumber
+    ) {
+      setStatus({ kind: 'done', ...(await withText(updated)) })
+    }
+    return removed
   }
 
   /**
@@ -548,6 +576,7 @@ export default function App() {
               page: page.number,
             })
           }
+          onFindRubbish={() => setFindingRubbish({ editionId: page.edition_id })}
           onFindHyphens={() =>
             setFindingHyphens({ editionId: page.edition_id, page: page.number })
           }
@@ -576,6 +605,15 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {findingRubbish && (
+          <RubbishReview
+            edition={findingRubbish}
+            onApprove={(pageNumber, line) =>
+              approveRubbish(findingRubbish.editionId, pageNumber, line)
+            }
+            onClose={() => setFindingRubbish(null)}
           />
         )}
         {findingPageNumbers && (

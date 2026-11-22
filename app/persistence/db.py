@@ -29,6 +29,8 @@ from app.persistence.ontology import (
     Page,
     PageMatches,
     PageNumberMatch,
+    PageRubbish,
+    RubbishLine,
     SimilarPageNumbers,
     TokenMatch,
     Work,
@@ -41,6 +43,7 @@ from app.text_tools.page_numbers import (
     marked_page_number,
     pattern_of,
 )
+from app.text_tools.rubbish import find_rubbish_lines
 from app.text_tools.tei_xml import InvalidTei, tei_xml_sections, tei_xml_to_text
 
 
@@ -391,6 +394,43 @@ class Database:
             MissingHyphen.model_validate(vars(found))
             for found in find_missing_hyphens(text, legal)
         ]
+
+    def get_rubbish_lines(self, edition_id: UUID) -> list[PageRubbish]:
+        """The lines of the pages of an edition that are OCR rubbish (see
+        `app/text_tools/rubbish.py`), page by page, in the order of the pages, in
+        the text of the corrected content as the user sees it. A line in a section
+        that is marked (a header, a page number, ...) is left alone, and so is a
+        page without lines like that, without XML, or with XML that cannot be read.
+        The spellings that are legal in the edition count as correct words.
+
+        Raises SpellcheckUnavailable if the dictionary cannot be loaded.
+        """
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        legal = self.get_legal_spellings(edition_id)
+        found = []
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if not xml:
+                continue
+            try:
+                text = tei_xml_to_text(xml)
+                protected = [
+                    (section["start"], section["end"])
+                    for section in tei_xml_sections(xml)
+                ]
+            except InvalidTei:
+                continue
+            lines = [
+                RubbishLine.model_validate(vars(line))
+                for line in find_rubbish_lines(text, legal, protected)
+            ]
+            if lines:
+                found.append(PageRubbish(page_number=row["number"], lines=lines))
+        return found
 
     def get_similar_page_numbers(
         self, edition_id: UUID, number: int
