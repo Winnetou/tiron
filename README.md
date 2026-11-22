@@ -55,9 +55,6 @@ worker (`docker-compose.yml`):
   It only waits for the backend to be started, not healthy, so for the first
   minutes the main page shows an error until the backend has loaded its models.
   `make frontend` still runs the dev server on the host instead.
-<<<<<<< HEAD
-- A new database is empty, and the main page lists the editions of the
-=======
 - **`rabbitmq`** (RabbitMQ 4) is the message broker for the Celery worker. It keeps
   its data in the named volume `rabbitmq-data` (and has a fixed hostname, because
   RabbitMQ stores it under the node name), and waits for nobody. Its port is not
@@ -72,7 +69,6 @@ worker (`docker-compose.yml`):
   mounted, so restart the container after editing the tasks
   (`docker compose restart celery-worker`).
 - A new database is empty. Pages can only be opened for editions in the
->>>>>>> a6fbda1 (feat: add celery worked with container and rabbit container)
   `collection` table, so add one first, for example:
 
   ```
@@ -638,6 +634,47 @@ if it is not what is at those offsets the page has changed, and the answer is
 - 404 if the page is not stored, 422 if it has no valid TEI XML or the section
   cannot be marked (with the reason). Like `PATCH`, it does not fetch from
   Polona.
+
+### The same page number on the other pages
+
+In some editions the page number is printed at the top of every page, as the first
+line, and it should be marked on all of them as `<fw type="pageNum">` (see "Marking
+the sections of a page"): nobody should have to do that page by page.
+`GET /editions/{edition_id}/pages/{number}/similar-page-numbers` takes the page
+number that is marked on that page as an example and lists the other pages that
+have one like it, so that a human can check them and approve them. It changes
+nothing.
+
+- **The example** is the first page number marked on the page (`<fw
+  type="pageNum">`). Its line must be the first or the last line of the page and
+  have nothing on it but the number and dashes around it: a number of one to four
+  digits, with single or double dashes before and after it (`- 12 -`, `— 12 —`,
+  `-12-`, any of `-`, `–`, `—`) or with none. If not, the answer is a 422 with the
+  reason (`The page number must be alone on its line…`).
+- **The pattern** is that: the same line of another page (the first, or the last),
+  the whole line a number, with dashes if the example has them and without if it
+  has none (single or double does not matter). So a page that starts with a table
+  of contents, a title or a chapter heading (`12 Rozdział pierwszy`) is not a
+  candidate. A page that has a page number marked already is left out too, and a
+  page without XML, or with XML that cannot be read.
+- **What is marked** is what the example has: the number with its dashes if the
+  example was marked with them, the digits alone if it was not.
+- **The response**: `{"example": {...}, "where": "first", "offset": 3,
+  "candidates": [{"page_number": 12, "start": 0, "end": 1, "text": "9",
+  "number": 9, "context": "Ciekawość względem …", "fits_sequence": true}, ...]}`,
+  the candidates in the order of the pages. `start` and `end` are offsets in the
+  text of the page (counted in code points, as `POST /tei/text` gives it), so
+  `text[start:end]` is `text`: what `POST .../sections` is to mark, with
+  `"section": "page_number"`. `context` is the start of the nearest line with text
+  in it, to see where the number is.
+- **`fits_sequence`** says whether the number follows the numbering of the example.
+  A numbering counts one by one, so the page less its printed number is the same
+  all through (`offset`: page 12 shows 9, offset 3, and so does page 123 with 120).
+  A candidate that does not fit (`9`, whose page less 9 is not 3, or the `99` of a
+  table of contents) is probably something else; it is listed all the same.
+- 404 if the page is not stored, 422 if no page number is marked on it or it is not
+  alone on the first or last line. Polona is not called. The search is
+  `Database.get_similar_page_numbers`, on `app/text_tools/page_numbers.py`.
 
 ### What the frontend shows
 

@@ -11,7 +11,7 @@ from fastapi_pagination import add_pagination
 
 from app import page_provider
 from app.persistence.db import Database
-from app.persistence.ontology import LegalSpelling, PageMatches
+from app.persistence.ontology import LegalSpelling, PageMatches, SimilarPageNumbers
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
@@ -482,6 +482,57 @@ def get_similar_misspellings(
         len(found),
         edition_id,
         incorrect_spelling,
+    )
+    return found
+
+
+@app.get(
+    "/editions/{edition_id}/pages/{number}/similar-page-numbers",
+    response_model=SimilarPageNumbers,
+)
+def get_similar_page_numbers(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)]
+) -> SimilarPageNumbers:
+    """List the pages of the edition that have a printed page number like the one
+    that is marked on page `number` (`<fw type="pageNum">`, see `POST
+    .../sections`), so that it can be marked on all of them at once.
+
+    The page number marked on the page is the example: its line must be the first
+    or the last of the page and have nothing on it but the number (one to four
+    digits) and dashes around it, single or double (`- 12 -`, `— 12 —`, `-12-`),
+    or none. The pattern is that: the same line of another page, a number with
+    dashes if the example has them and without if it has none. Pages that do not
+    fit it, such as a table of contents, are not listed, and nor are those that
+    have a page number marked already.
+
+    The response is `{"example": {...}, "where": "first", "offset": 3,
+    "candidates": [...]}`. Each candidate is `{"page_number": 12, "start": 0,
+    "end": 1, "text": "9", "number": 9, "context": "...", "fits_sequence":
+    true}`: `start` and `end` are offsets in the text of the page that `POST
+    /tei/text` gives (counted in code points), so text[start:end] is `text`, what
+    `POST .../sections` is to mark (`"section": "page_number"`); it is the number
+    with its dashes if the example was marked with them, and the digits alone if
+    not. `context` is the start of the line next to it. `fits_sequence` says
+    whether the printed number is the number of the page less the same `offset` as
+    in the example (a numbering counts one by one): those that do not fit are
+    probably something else. The pages are in the order of their numbers.
+
+    Nothing is changed, and Polona is not called. 404 if the page is not stored;
+    422 if no page number is marked on it, or it is not alone on the first or the
+    last line (with the reason).
+    """
+    try:
+        found = db.get_similar_page_numbers(edition_id, number)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if found is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "%s pages of edition %s have a page number like the one on page %s",
+        len(found.candidates),
+        edition_id,
+        number,
     )
     return found
 
