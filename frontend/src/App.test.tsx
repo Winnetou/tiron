@@ -4522,6 +4522,14 @@ describe('the page number on the other pages', () => {
     ],
   }
   const find = () => screen.getByRole('button', { name: 'Find this on other pages' })
+  const openTools = async () => {
+    const cog = screen.getByRole('button', { name: 'Tools' })
+    if (cog.getAttribute('aria-expanded') !== 'true') await userEvent.click(cog)
+  }
+  const clickFind = async () => {
+    await openTools()
+    await userEvent.click(find())
+  }
   const review = () =>
     screen.queryByRole('dialog', { name: 'The same page number on the other pages' })
   const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
@@ -4541,8 +4549,9 @@ describe('the page number on the other pages', () => {
   }
   async function openReview(extra: Options = {}) {
     await openStructure(extra)
+    await openTools()
     await waitFor(() => expect(find()).toBeEnabled())
-    await userEvent.click(find())
+    await clickFind()
     await screen.findByText(/pages?, \d+ of them/)
   }
 
@@ -4554,19 +4563,23 @@ describe('the page number on the other pages', () => {
 
       await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
 
+      await openTools()
       expect(find()).toBeInTheDocument()
     })
 
     it('can be used when a page number is marked on the page', async () => {
       await openStructure()
 
+      await openTools()
       await waitFor(() => expect(find()).toBeEnabled())
     })
 
     it('can not be used when no page number is marked: it says to mark one first', async () => {
       await openStructure({ sections: () => [] })
 
+      await openTools()
       expect(find()).toBeDisabled()
+      await openTools()
       expect(find()).toHaveAttribute('title', 'Mark the page number on this page first')
     })
 
@@ -4575,11 +4588,13 @@ describe('the page number on the other pages', () => {
         sections: () => [{ ...PAGE_NUMBER, open: '<fw type="header">' }],
       })
 
+      await openTools()
       expect(find()).toBeDisabled()
     })
 
     it('does nothing until it is clicked: the backend is not asked', async () => {
       await openStructure()
+      await openTools()
       await waitFor(() => expect(find()).toBeEnabled())
 
       expect(numberCalls()).toHaveLength(0)
@@ -4656,9 +4671,10 @@ describe('the page number on the other pages', () => {
 
     it('says so when no page is like it', async () => {
       await openStructure({ similarNumbers: () => ({ ...FOUND, candidates: [] }) })
+      await openTools()
       await waitFor(() => expect(find()).toBeEnabled())
 
-      await userEvent.click(find())
+      await clickFind()
 
       expect(
         await screen.findByText('No other page has a page number like it.'),
@@ -4669,9 +4685,10 @@ describe('the page number on the other pages', () => {
       await openStructure({
         similarNumbers: () => new Error('The page number must be alone on its line'),
       })
+      await openTools()
       await waitFor(() => expect(find()).toBeEnabled())
 
-      await userEvent.click(find())
+      await clickFind()
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'The page number must be alone on its line',
@@ -4684,7 +4701,7 @@ describe('the page number on the other pages', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Close' }))
       expect(review()).toBeNull()
 
-      await userEvent.click(find())
+      await clickFind()
       await screen.findByText(/pages?, \d+ of them/)
       await userEvent.keyboard('{Escape}')
       expect(review()).toBeNull()
@@ -5545,7 +5562,7 @@ describe('page view', () => {
     expect(screen.queryByLabelText('Edition UUID')).not.toBeInTheDocument()
   })
 
-  it('has a right sidebar with three tool buttons', async () => {
+  it('has a right sidebar with three view buttons and the cog wheel of the tools', async () => {
     await openPage()
     await screen.findByRole('img')
 
@@ -5558,6 +5575,7 @@ describe('page view', () => {
       'Correction',
       'Structure',
       'Named entity recognition',
+      'Tools', // the cog wheel, at the bottom
     ])
     for (const button of buttons) {
       expect(button).toHaveAttribute(
@@ -5569,6 +5587,128 @@ describe('page view', () => {
     expect(sidebar.previousElementSibling).toBe(
       document.querySelectorAll('.viewer-half')[1],
     )
+  })
+
+  describe('the cog wheel: the tools of the view', () => {
+    const cog = () => screen.getByRole('button', { name: 'Tools' })
+    const menu = () => screen.queryByRole('group', { name: 'Tools of this view' })
+    const names = () =>
+      within(menu()!)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+
+    async function open() {
+      await openPage({ page: () => ({ content: xmlOf('Ala ma kota') }) })
+      await screen.findByRole('img')
+      await waitFor(() => expect(pageText().textContent).toBe('Ala ma kota'))
+    }
+
+    it('is at the bottom of the sidebar, below a bar, with the tooltip "Tools"', async () => {
+      await open()
+
+      expect(cog().closest('.sidebar-tools')).toBe(
+        screen.getByRole('complementary', { name: 'Tools' }).lastElementChild,
+      )
+      expect(cog()).toHaveAttribute('data-tooltip', 'Tools')
+      expect(cog().querySelector('svg')).not.toBeNull()
+    })
+
+    it('shows no tools until it is clicked', async () => {
+      await open()
+
+      expect(menu()).toBeNull()
+      expect(cog()).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('has "Find missing hyphens" in the correction view', async () => {
+      await open()
+
+      await userEvent.click(cog())
+
+      expect(cog()).toHaveAttribute('aria-expanded', 'true')
+      expect(names()).toEqual(['Find missing hyphens'])
+    })
+
+    it('has "Find this on other pages" in the structure view', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+
+      await userEvent.click(cog())
+
+      expect(names()).toEqual(['Find this on other pages'])
+    })
+
+    it('has a "Find this NER on other pages" in the NER view: a stub, which is inactive', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Named entity recognition' }))
+      await waitFor(() => expect(cog()).toBeEnabled())
+
+      await userEvent.click(cog())
+
+      expect(names()).toEqual(['Find this NER on other pages'])
+      const stub = screen.getByRole('button', { name: 'Find this NER on other pages' })
+      expect(stub).toBeDisabled()
+      await userEvent.click(stub)
+      expect(menu()).toBeInTheDocument() // nothing happened
+      expect(calls.filter((c) => c.url.includes('similar'))).toHaveLength(0)
+    })
+
+    it('is disabled in the Text and XML views, which have no tools', async () => {
+      await open()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+      expect(cog()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'XML' }))
+      expect(cog()).toBeDisabled()
+    })
+
+    it('closes when a tool is chosen', async () => {
+      await open()
+      await userEvent.click(cog())
+
+      await userEvent.click(screen.getByRole('button', { name: 'Find missing hyphens' }))
+
+      expect(menu()).toBeNull()
+    })
+
+    it('closes with Escape, and when the user clicks somewhere else', async () => {
+      await open()
+      await userEvent.click(cog())
+      await userEvent.keyboard('{Escape}')
+      expect(menu()).toBeNull()
+
+      await userEvent.click(cog())
+      await userEvent.click(pageText())
+      expect(menu()).toBeNull()
+    })
+
+    it('closes when the cog wheel is clicked again', async () => {
+      await open()
+      await userEvent.click(cog())
+
+      await userEvent.click(cog())
+
+      expect(menu()).toBeNull()
+    })
+
+    it('is closed when the view is changed, and shows the tools of the new view', async () => {
+      await open()
+      await userEvent.click(cog())
+
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+
+      expect(menu()).toBeNull()
+      await userEvent.click(cog())
+      expect(names()).toEqual(['Find this on other pages'])
+    })
+
+    it('has no tools on the page itself any more: the buttons are not above the text', async () => {
+      await open()
+
+      expect(screen.queryByRole('button', { name: 'Find missing hyphens' })).toBeNull()
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      expect(screen.queryByRole('button', { name: 'Find this on other pages' })).toBeNull()
+    })
   })
 
   describe('the active view', () => {
@@ -5707,7 +5847,9 @@ describe('page view', () => {
     expect(
       within(group).getAllByRole('button').map((b) => b.textContent),
     ).toEqual(['Text', 'XML'])
-    expect(sidebar.lastElementChild).toBe(group)
+    // only the cog wheel is below them
+    expect(group.nextElementSibling).toBe(sidebar.lastElementChild)
+    expect(sidebar.lastElementChild).toHaveClass('sidebar-tools')
   })
 
   it('zooms the scan in and out within limits', async () => {
@@ -5859,6 +6001,14 @@ describe('the missing hyphens of a page', () => {
     hyphen('na', 'wet', 40, true),
   ]
   const find = () => screen.getByRole('button', { name: 'Find missing hyphens' })
+  const openTools = async () => {
+    const cog = screen.getByRole('button', { name: 'Tools' })
+    if (cog.getAttribute('aria-expanded') !== 'true') await userEvent.click(cog)
+  }
+  const clickFind = async () => {
+    await openTools()
+    await userEvent.click(find())
+  }
   const review = () =>
     screen.queryByRole('region', { name: 'The missing hyphens on this page' })
   const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
@@ -5881,13 +6031,14 @@ describe('the missing hyphens of a page', () => {
   }
   async function openReview(extra: Options = {}) {
     await open(extra)
-    await userEvent.click(find())
+    await clickFind()
     await screen.findByText(/places?, \d+ of them sure/)
   }
 
   describe('the button', () => {
     it('is in the correction view, and only there', async () => {
       await open()
+      await openTools()
       expect(find()).toBeEnabled()
 
       await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
@@ -5904,13 +6055,15 @@ describe('the missing hyphens of a page', () => {
 
     it('can not be used on a page without text', async () => {
       await openPage({ page: () => ({ content: xmlOf('') }) })
+      await screen.findByRole('button', { name: 'Tools' })
+      await openTools()
       await waitFor(() => expect(find()).toBeDisabled())
     })
 
     it('asks the backend for this page only', async () => {
       await open()
 
-      await userEvent.click(find())
+      await clickFind()
 
       await waitFor(() => expect(getCalls()).toHaveLength(1))
       expect(getCalls()[0].url).toBe(`/editions/${UUID}/pages/0/missing-hyphens`)
@@ -5939,7 +6092,7 @@ describe('the missing hyphens of a page', () => {
 
     it('shows the joined word without the stray sign', async () => {
       await open({ hyphens: () => [hyphen('przeczy,', 'tać', 4)] })
-      await userEvent.click(find())
+      await clickFind()
       await screen.findByText(/places?, \d+ of them sure/)
 
       expect(review()!.textContent).toContain('(joined: przeczytać)')
@@ -5970,14 +6123,14 @@ describe('the missing hyphens of a page', () => {
 
     it('says so when there is none', async () => {
       await open({ hyphens: () => [] })
-      await userEvent.click(find())
+      await clickFind()
 
       expect(await screen.findByText('No missing hyphen found on this page.')).toBeInTheDocument()
     })
 
     it('shows the reason when the backend refuses', async () => {
       await open({ hyphens: () => new Error('The XML of the page cannot be read') })
-      await userEvent.click(find())
+      await clickFind()
 
       expect(await screen.findByRole('alert')).toHaveTextContent(
         'The XML of the page cannot be read',
@@ -6096,7 +6249,7 @@ describe('the missing hyphens of a page', () => {
         ],
       })
       await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
-      await userEvent.click(find())
+      await clickFind()
       await screen.findByText(/places?, \d+ of them sure/)
 
       await userEvent.hover(row(0))

@@ -78,11 +78,12 @@ interface Props {
   /** The user chose a section for the selected text and confirmed. */
   onMark: (selection: TextSelection, section: SectionKind, n?: string) => void
   /**
-   * The user wants the page number that is marked on this page looked for on the
-   * other pages of the edition. Without it there is no button. (Headers and
-   * footers could get the same button later; not done yet.)
+   * Told whether a page number is marked on the page (`<fw type="pageNum">`), as
+   * the sections are known: only then can it be the example for the other pages
+   * (the tool "Find this on other pages", in the sidebar). False again when this
+   * view goes away. Pass a function that does not change.
    */
-  onFindPageNumbers?: () => void
+  onPageNumberMarked?: (marked: boolean) => void
 }
 
 /**
@@ -97,7 +98,7 @@ export default function StructureView({
   xml,
   busy,
   onMark,
-  onFindPageNumbers,
+  onPageNumberMarked,
 }: Props) {
   // The sections marked in the XML, by the backend, for the XML they are of. They
   // are shown once they are known: until then (or if they cannot be had) it is
@@ -118,6 +119,10 @@ export default function StructureView({
   // A page number is marked on the page (<fw type="pageNum">): it can be the
   // example for the other pages.
   const hasPageNumber = spans.some((span) => span.open === PAGE_NUMBER_OPEN)
+  useEffect(() => {
+    onPageNumberMarked?.(hasPageNumber)
+    return () => onPageNumberMarked?.(false)
+  }, [hasPageNumber, onPageNumberMarked])
 
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -183,26 +188,9 @@ export default function StructureView({
 
   return (
     <div className="structure-wrap" ref={wrap}>
-      <div className="structure-bar">
-        <p className="structure-hint">
-          Select some text to mark it as a section of the page.
-        </p>
-        {onFindPageNumbers && (
-          <button
-            type="button"
-            className="find-page-numbers"
-            disabled={!hasPageNumber || busy}
-            title={
-              hasPageNumber
-                ? 'Look for a page number like the one marked here on the other pages of the edition'
-                : 'Mark the page number on this page first'
-            }
-            onClick={onFindPageNumbers}
-          >
-            Find this on other pages
-          </button>
-        )}
-      </div>
+      <p className="structure-hint">
+        Select some text to mark it as a section of the page.
+      </p>
       <pre
         ref={box}
         className="page-box structure-box"

@@ -975,10 +975,24 @@ the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
 
+**The tools of the sidebar.** At the bottom of the sidebar, set apart from the
+buttons above it by a horizontal bar, a **cog wheel** button (tooltip "Tools")
+reveals the tools of the view that is shown: each view has its own. The list closes
+when a tool is chosen, with Escape, on a click anywhere else, on a second click on
+the cog wheel and when the view changes. A view that has no tools (Text, XML) has
+the cog wheel disabled.
+
+| View | Tool | |
+|---|---|---|
+| Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
+| Structure | **Find this on other pages** | looks for the page number marked on this page on the other pages; disabled until a page number is marked (its tooltip says "Mark the page number on this page first") |
+| Named entity recognition | **Find this NER on other pages** | a stub for now: the button is inactive and does nothing |
+
 **The missing hyphens of a page.** The OCR very often drops the hyphen at the end of
 a line where a word is split (`przeczy` / `tać`), a few times on a page. In the
-correction view a **Find missing hyphens** button (above the text; disabled while a
-request runs and on a page without text) opens a panel docked under the text of the
+correction view the **Find missing hyphens** tool (in the cog wheel of the sidebar, see
+"The tools of the sidebar"; disabled while a request runs and on a page without
+text) opens a panel docked under the text of the
 page (not a box over it: the text and the scan stay in sight, and the text can be
 corrected meanwhile), which asks `GET .../pages/{number}/missing-hyphens` (see "The hyphens that the OCR dropped at
 the end of a line") for the page on the screen only, never the edition. It lists
