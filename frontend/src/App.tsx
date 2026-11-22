@@ -7,6 +7,7 @@ import {
   joinTokens,
   splitLine,
   getPage,
+  type EntityMatch,
   type MissingHyphen,
   type PageNumberMatch,
   type RubbishLine,
@@ -24,6 +25,10 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import {
+  SimilarEntitiesReview,
+  type EntityExample,
+} from './EditionWideEntities'
 import { RubbishReview, type RubbishEdition } from './EditionWideRubbish'
 import { MissingHyphensReview, type HyphenPage } from './MissingHyphens'
 import {
@@ -158,6 +163,12 @@ export default function App() {
     useState<PageNumberExample | null>(null)
   // The page whose line ends are looked at for the hyphens that the OCR dropped.
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
+  // The named entities confirmed on the page, one of which the user wants to find
+  // on the other pages of the edition (in all its forms in the cases).
+  const [findingEntities, setFindingEntities] = useState<{
+    editionId: string
+    examples: EntityExample[]
+  } | null>(null)
   // The edition whose OCR rubbish lines the user wants to find and remove.
   const [findingRubbish, setFindingRubbish] = useState<RubbishEdition | null>(null)
   // The place of the text that the user points at in its list, to show in the text.
@@ -222,7 +233,36 @@ export default function App() {
     setFindingPageNumbers(null)
     setFindingHyphens(null)
     setFindingRubbish(null)
+    setFindingEntities(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Mark a named entity at a place of a page of the edition, with `label` (the same
+   * request as confirming an entity). Marking does not change the text. If it is the
+   * page on the screen, it is shown again, with the entity as confirmed. A refusal
+   * rejects, with its reason, for the list to show.
+   */
+  async function approveEntity(
+    editionId: string,
+    pageNumber: number,
+    match: EntityMatch,
+    label: string,
+  ) {
+    const updated = await tagEntity(
+      editionId,
+      pageNumber,
+      { text: match.text, label, start: match.start, end: match.end },
+      label,
+    )
+    if (
+      status.kind === 'done' &&
+      status.page.edition_id === editionId &&
+      status.page.number === pageNumber
+    ) {
+      loadMarked(updated.content)
+      setStatus({ kind: 'done', ...(await withText(updated)) })
+    }
   }
 
   /**
@@ -576,6 +616,9 @@ export default function App() {
               page: page.number,
             })
           }
+          onFindEntities={(examples) =>
+            setFindingEntities({ editionId: page.edition_id, examples })
+          }
           onFindRubbish={() => setFindingRubbish({ editionId: page.edition_id })}
           onFindHyphens={() =>
             setFindingHyphens({ editionId: page.edition_id, page: page.number })
@@ -605,6 +648,16 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {findingEntities && (
+          <SimilarEntitiesReview
+            editionId={findingEntities.editionId}
+            examples={findingEntities.examples}
+            onApprove={(pageNumber, match, label) =>
+              approveEntity(findingEntities.editionId, pageNumber, match, label)
+            }
+            onClose={() => setFindingEntities(null)}
           />
         )}
         {findingRubbish && (

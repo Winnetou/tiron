@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode, type UIEvent } from 'react'
 import type { Page } from './api'
-import type { Decision, Entity } from './entities'
+import type { EntityExample } from './EditionWideEntities'
+import { entityKey, type Decision, type Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
@@ -100,6 +101,11 @@ interface Props {
   highlight: { start: number; end: number } | null
   /** A panel that is docked under the text (the missing hyphens), if any. */
   dock: ReactNode
+  /**
+   * Look for a named entity that was confirmed on this page, in all its forms in
+   * the cases, in the whole edition: `examples` are the confirmed entities.
+   */
+  onFindEntities: (examples: EntityExample[]) => void
   /** Look for the OCR rubbish (lines that are not text) in the whole edition. */
   onFindRubbish: () => void
   /** Look for the hyphens that the OCR dropped at the line ends of this page. */
@@ -157,6 +163,7 @@ export default function PageViewer({
   onFindPageNumbers,
   onFindHyphens,
   onFindRubbish,
+  onFindEntities,
   highlight,
   dock,
   notice,
@@ -212,6 +219,21 @@ export default function PageViewer({
   // A page number is marked on the page (told by the structure view).
   const [pageNumberMarked, setPageNumberMarked] = useState(false)
 
+  // The named entities that were confirmed on this page: the examples that can be
+  // looked for in the edition.
+  const confirmed: EntityExample[] = (entities ?? []).flatMap((entity) => {
+    const decision = decisions[entityKey(entity)]
+    return decision?.kind === 'confirmed'
+      ? [{ text: entity.text, label: decision.label }]
+      : []
+  })
+  const examples = confirmed.filter(
+    (example, index) =>
+      confirmed.findIndex(
+        (other) => other.text === example.text && other.label === example.label,
+      ) === index,
+  )
+
   // What the cog wheel of the sidebar offers: different tools in each view.
   const tools: SidebarTool[] =
     view === 'correction'
@@ -245,11 +267,13 @@ export default function PageViewer({
         : view === 'ner'
           ? [
               {
-                // a stub: it does nothing yet
                 label: 'Find this NER on other pages',
-                onSelect: () => {},
-                disabled: true,
-                title: 'Not available yet',
+                onSelect: () => onFindEntities(examples),
+                disabled: busy || examples.length === 0,
+                title:
+                  examples.length > 0
+                    ? 'Look for a named entity confirmed here, in all its forms in the cases, in the whole edition'
+                    : 'Confirm a named entity on this page first',
               },
             ]
           : []

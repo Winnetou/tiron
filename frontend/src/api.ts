@@ -360,6 +360,53 @@ export function getSimilarPageNumbers(
   )
 }
 
+/** A form of a named entity in the cases (EntityForm). */
+export interface EntityForm {
+  text: string
+  /** The cases it can be in ("gen.sg", ...); "any" if it has no case. */
+  cases: string[]
+}
+
+/** A form of a named entity found in the text of a page (EntityMatch). */
+export interface EntityMatch {
+  /** What to mark: offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  text: string
+  /** The token before it and the one after it: its context. */
+  before: string
+  after: string
+  /** The NER model also takes it for an entity, with the same label. */
+  sure: boolean
+}
+
+/** The places of one page that have a form of the entity (PageEntityMatches). */
+export interface PageEntityMatches {
+  page_number: number
+  matches: EntityMatch[]
+}
+
+/** The forms of an entity that were looked for in an edition, and where they are. */
+export interface SimilarEntities {
+  label: string
+  forms: EntityForm[]
+  pages: PageEntityMatches[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/similar-entities: the backend makes the forms in
+ * the cases of the named entity `text` (marked as `label`) and finds them in the
+ * pages of the whole edition, each with its context. Nothing is changed.
+ */
+export function getSimilarEntities(
+  editionId: string,
+  text: string,
+  label: string,
+): Promise<SimilarEntities> {
+  const query = new URLSearchParams({ text, label })
+  return request<SimilarEntities>(`/editions/${editionId}/similar-entities?${query}`)
+}
+
 /** A line of a page that is OCR rubbish, not text (RubbishLine). */
 export interface RubbishLine {
   /** The whole line: offsets in the text of the page, counted in code points. */

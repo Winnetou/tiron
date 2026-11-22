@@ -16,7 +16,12 @@ from app.persistence.ontology import Edition, LegalSpelling, Page
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import NerModelUnavailable
 from app.text_tools.spelling import SpellcheckUnavailable
-from app.text_tools.tei_xml import mark_section, tei_xml_to_text, text_to_tei_xml
+from app.text_tools.tei_xml import (
+    mark_section,
+    tag_text_range,
+    tei_xml_to_text,
+    text_to_tei_xml,
+)
 from app.view_models import Entity, PageView, Word
 
 client = TestClient(app)
@@ -2772,3 +2777,184 @@ class TestRemoveLine:
         paths = client.get("/openapi.json").json()["paths"]
 
         assert "post" in paths["/editions/{edition_id}/pages/{number}/line-removals"]
+
+
+class TestSimilarEntities:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/similar-entities"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        tagged = tag_text_range(
+            str(text_to_tei_xml("Był Machnicki tu, i Machnicki tam")),
+            4,
+            13,
+            "persName",
+            "Machnicki",
+        )
+        rows = [
+            {"number": 0, "xml_content_corrected": str(text_to_tei_xml("Ala ma kota"))},
+            {
+                "number": 3,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("Z panem Machnickiego i Machnickiej, Machnickimi.")
+                ),
+            },
+            {"number": 4, "xml_content_corrected": None},
+            {"number": 5, "xml_content_corrected": tagged},
+            {"number": 6, "xml_content_corrected": "<not tei/>"},
+        ]
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(**{"execute.return_value.fetchall.return_value": rows}),
+        )
+
+        # the NER model finds the genitive, and takes the instrumental for a place
+        def recognize(text):
+            found = []
+            for word, label in (
+                ("Machnickiego", "persName"),
+                ("Machnickimi", "placeName"),
+            ):
+                at = text.find(word)
+                if at >= 0:
+                    found.append(
+                        Entity(text=word, label=label, start=at, end=at + len(word))
+                    )
+            return found
+
+        monkeypatch.setattr("app.persistence.db.find_entities", recognize)
+        return edition_id
+
+    def get(self, edition_id, text="Machnicki", label="persName"):
+        return client.get(self.url(edition_id), params={"text": text, "label": label})
+
+    def test_lists_the_places_by_page_with_their_context(self, stored):
+        response = self.get(stored)
+
+        assert response.status_code == 200
+        pages = response.json()["pages"]
+        # (page 5 has one place that is not marked yet; 0, 4 and 6 have none)
+        assert [p["page_number"] for p in pages] == [3, 5]
+        assert [(m["text"], m["before"], m["after"]) for m in pages[0]["matches"]] == [
+            ("Machnickiego", "panem", "i"),
+            ("Machnickiej", "i", ","),
+            ("Machnickimi", ",", "."),
+        ]
+
+    def test_offsets_are_those_of_the_text(self, stored):
+        text = "Z panem Machnickiego i Machnickiej, Machnickimi."
+
+        for match in self.get(stored).json()["pages"][0]["matches"]:
+            assert text[match["start"] : match["end"]] == match["text"]
+
+    def test_a_match_is_sure_if_the_model_finds_an_entity_with_the_same_label(
+        self, stored
+    ):
+        matches = self.get(stored).json()["pages"][0]["matches"]
+
+        assert [(m["text"], m["sure"]) for m in matches] == [
+            ("Machnickiego", True),
+            ("Machnickiej", False),  # the model does not find it
+            ("Machnickimi", False),  # the model says it is a place
+        ]
+
+    def test_the_label_is_the_one_that_is_asked(self, stored):
+        # the same token: the model says it is a person, not a place
+        by_label = {
+            label: self.get(stored, text="Machnickiego", label=label).json()["pages"]
+            for label in ("persName", "placeName")
+        }
+
+        assert by_label["persName"][0]["matches"][0]["sure"] is True
+        assert by_label["placeName"][0]["matches"][0]["sure"] is False
+
+    def test_the_forms_that_were_looked_for_are_listed(self, stored):
+        body = self.get(stored).json()
+
+        assert body["label"] == "persName"
+        assert body["forms"][0] == {"text": "Machnicki", "cases": ["nom.sg"]}
+        by_text = {f["text"]: f["cases"] for f in body["forms"]}
+        assert by_text["Machnickiego"] == ["acc.sg", "gen.sg"]
+        assert "Machnickiej" in by_text
+
+    def test_a_place_that_is_marked_already_is_left_out(self, stored):
+        # on page 5 the first "Machnicki" is marked, the second is not
+        pages = {p["page_number"]: p for p in self.get(stored).json()["pages"]}
+
+        assert [(m["start"], m["end"]) for m in pages[5]["matches"]] == [(20, 29)]
+
+    def test_a_name_of_several_words(self, stored, monkeypatch):
+        rows = [
+            {
+                "number": 1,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("Był Jan Machnicki, potem Jana Machnickiego.")
+                ),
+            }
+        ]
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(**{"execute.return_value.fetchall.return_value": rows}),
+        )
+
+        matches = self.get(stored, text="Jan Machnicki").json()["pages"][0]["matches"]
+
+        assert [m["text"] for m in matches] == ["Jan Machnicki", "Jana Machnickiego"]
+
+    def test_the_model_is_run_only_for_pages_with_matches(self, stored, monkeypatch):
+        recognize = mock.Mock(return_value=[])
+        monkeypatch.setattr("app.persistence.db.find_entities", recognize)
+
+        self.get(stored)
+
+        assert recognize.call_count == 2  # pages 3 and 5, not the others
+
+    def test_edition_not_stored_is_404(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = client.get(self.url(), params={"text": "Ala", "label": "persName"})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"text": "", "label": "persName"},
+            {"text": "x" * 101, "label": "persName"},
+            {"text": "a b c d e f", "label": "persName"},
+            {"text": "123", "label": "persName"},
+            {"text": "Ala", "label": "nonsense"},
+            {"text": "Ala"},
+            {"label": "persName"},
+        ],
+    )
+    def test_a_request_that_is_not_acceptable_is_422(self, stored, params):
+        response = client.get(self.url(stored), params=params)
+
+        assert response.status_code == 422
+
+    def test_model_unavailable_is_503(self, stored, monkeypatch):
+        def unavailable(text):
+            raise NerModelUnavailable("no model")
+
+        monkeypatch.setattr("app.persistence.db.find_entities", unavailable)
+
+        assert self.get(stored).status_code == 503
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "get" in schema["paths"]["/editions/{edition_id}/similar-entities"]
+        assert {"SimilarEntities", "EntityMatch", "EntityForm"} <= schema["components"][
+            "schemas"
+        ].keys()

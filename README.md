@@ -724,6 +724,54 @@ spelling. 404 if the page is not stored, 409 if the text at an offset is not
 The search is `Database.get_missing_hyphens`, on `app/text_tools/hyphens.py`;
 saving is `Database.apply_corrections`, the `apply_correction` for several.
 
+### The same named entity in all its forms
+
+A Polish name is not always in the nominative. A surname that a person confirmed as
+`<persName>` (`Machnicki`) is `Machnickiego`, `Machnickiemu`, `Machnickim` in the rest
+of the edition, the feminine is `Machnicka`, `Machnickiej`, and a place (`Kraków`) is
+`Krakowa`, `Krakowie`. `GET /editions/{edition_id}/similar-entities?text=Machnicki&label=persName`
+finds all of them in the whole edition, so that they can be marked in bulk. It changes
+nothing.
+
+- **The forms are made by rules** from the word that was marked
+  (`app/text_tools/inflection.py`), not taken from the spaCy model: its lemma of a name
+  that it does not know is no use (it makes `machnickiego` of `Machnickiego`). The word
+  is taken apart by its ending, in each family it fits: a surname in `-ski`/`-cki`/`-dzki`
+  (and `-ki`, `-gi`), a hard adjective in `-y`, a masculine noun (`Jan`, with `ó` of the
+  nominative as `o` in the others: `Kraków`, `Krakowa`; after `k` and `g` the instrumental
+  is `-iem`), the masculines in `-ek`, `-ec` (`Marek`, `Marka`) and `-ń` (`Poznań`,
+  `Poznania`, `Poznaniu`), a neuter in `-o` (`Zamczysko`, `Zamczyska`), and a feminine in
+  `-a` (`Warszawa`, `Warszawie`; `Polska`, `Polsce`). The same forms are made from any
+  form of the word, so it does not matter which case was marked. The 19th-century
+  `-éj` and `-ém` are covered. Only the singular is made for nouns; a surname in `-ski`
+  has its plural too (`Machnickich`, `Machniccy`).
+- **`label` says which families to try**: a `persName` that fits `-ski`/`-cki` is that
+  and nothing else (`Machnickiego` is not a noun), a `placeName` or `geogName` is a noun
+  (never a surname in `-ski`), another label tries them all. A word that does not
+  start with a capital, or has a sign other than a letter, a hyphen or an apostrophe in
+  it, is left as it is.
+- **Several words** (`Jan Machnicki`, at most five) are made of the forms of each word in
+  the same case (`Jana Machnickiego`, `Janowi Machnickiemu`), and a word without a capital
+  (`de`) stays. They are found where the words are next to each other, with one space or
+  one line break between them.
+- **What is found**: the whole tokens, never a part of a word, with the same case of the
+  letters. A place that is inside an entity that is marked already (of any label) is left
+  out; where two forms overlap, the longest is taken.
+- **The response**: `{"label": "persName", "forms": [{"text": "Machnicki", "cases":
+  ["nom.sg"]}, ...], "pages": [{"page_number": 8, "matches": [{"start": 383, "end": 395,
+  "text": "Machnickiego", "before": "panem", "after": "wczoraj", "sure": true}]}]}`. The
+  `forms` are what was looked for, so that a human can see them. `start` and `end` are
+  offsets in the text of the page (as `POST /tei/text` gives it), so `text[start:end]` is
+  `text`, which is what `POST .../entities` is to mark, with the `label`. `before` and
+  `after` are the token before and after (a sign counts), the context for a human.
+- **`sure`** is true if the NER model also finds an entity at that place with the same
+  label. The model is run only on the pages that have a match, which takes a few seconds
+  for a whole edition. A match that is not sure may be a word that only looks like the
+  name (the model took `Zamczyska` for a person, so for a place it is not sure).
+- 404 if the edition is not stored, 422 if `text` is empty, has no letters, is longer than
+  100 characters or five words, or `label` is not an entity label, 503 if the model is
+  not available. The search is `Database.get_similar_entities`.
+
 ### The OCR rubbish
 
 The OCR reads a fleuron, a printer's ornament, or the print that shows through from
@@ -1021,6 +1069,33 @@ the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
 
+**The same named entity in all its forms.** The **Find this NER on other pages** tool of
+the NER view (in the cog wheel of the sidebar) is enabled when an entity is confirmed on
+the page (marked in the XML: confirmed here, or by a person earlier); until then its
+tooltip says "Confirm a named entity on this page first". It opens a big box over the page,
+which asks `GET /editions/{id}/similar-entities` (see "The same named entity in all its
+forms") for the entity and its label, and lists the places of the edition by page.
+
+- If several entities are confirmed, a dropdown "Named entity" chooses which one is looked
+  for; the list is made again for the other one.
+- Each place is shown **in its context**: the token before it, the name (marked in
+  yellow), and the token after it, so that it can be judged without the page. It has an
+  **Approve** button (it carries `data-edition-id`, `data-page`, `data-start` and
+  `data-end`) and a box to take it out of "Approve all". The sure ones are included by
+  default; the others say "the model does not take it for this entity". **Include all**,
+  **Include none** and **Include only the sure ones** set the boxes.
+- "Forms that were looked for (N), M of them found" opens the list of the forms, each with
+  its cases (`genitive sg, accusative sg`) and a box. Dropping a form hides its places and
+  keeps them out of "Approve all".
+- **Approve** marks that place alone: the same request as confirming an entity in the NER
+  view (`POST .../entities`, with the label of the example). **Approve all (N)** does it for
+  the places that are in, one request at a time, in the order of the pages, with
+  "Approving x of y …". A place that the backend refuses is marked with the reason, and the
+  others go on. Marking does not change the text, so the offsets of the other places stay
+  right. If the place is on the page on the screen, it shows as confirmed at once.
+- The box says "No other place in the edition has this name" when there is none, shows the
+  backend's reason if the search fails, and is closed with **Close** or Escape.
+
 **The OCR rubbish of the edition.** The **Find OCR rubbish in the edition** tool of the
 correction view (in the cog wheel of the sidebar) opens a big box over the page, which
 asks `GET /editions/{id}/rubbish-lines` (see "The OCR rubbish") and lists the lines by
@@ -1055,7 +1130,7 @@ the cog wheel disabled.
 | Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
 | Correction | **Find OCR rubbish in the edition** | finds the lines of the whole edition that are not text, to remove them (above) |
 | Structure | **Find this on other pages** | looks for the page number marked on this page on the other pages; disabled until a page number is marked (its tooltip says "Mark the page number on this page first") |
-| Named entity recognition | **Find this NER on other pages** | a stub for now: the button is inactive and does nothing |
+| Named entity recognition | **Find this NER on other pages** | finds a confirmed entity, in all its forms in the cases, in the whole edition; disabled until an entity is confirmed on the page (above) |
 
 **The missing hyphens of a page.** The OCR very often drops the hyphen at the end of
 a line where a word is split (`przeczy` / `tać`), a few times on a page. In the

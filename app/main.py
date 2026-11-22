@@ -16,6 +16,7 @@ from app.persistence.ontology import (
     MissingHyphen,
     PageMatches,
     PageRubbish,
+    SimilarEntities,
     SimilarPageNumbers,
 )
 from app.polona.polona_connector import PolonaError
@@ -45,6 +46,7 @@ from app.text_tools.tei_xml import (
 )
 from app.view_models import (
     CollectionPage,
+    EntityLabel,
     EntityTag,
     HyphenFixes,
     LineJoin,
@@ -544,6 +546,64 @@ def get_similar_page_numbers(
         len(found.candidates),
         edition_id,
         number,
+    )
+    return found
+
+
+@app.get("/editions/{edition_id}/similar-entities", response_model=SimilarEntities)
+def get_similar_entities(
+    edition_id: UUID,
+    text: Annotated[str, Query(min_length=1, max_length=100)],
+    label: EntityLabel,
+) -> SimilarEntities:
+    """List the places in the edition that have the named entity `text` (marked
+    as `label`) in any of its forms in the cases, so that it can be marked there
+    too, in bulk. A Polish name is not always in the nominative: "Machnicki" is
+    also "Machnickiego", "Machnickiemu", "Machnickim", the feminine "Machnicka",
+    "Machnickiej", and "Kraków" is "Krakowa", "Krakowie".
+
+    The forms are made by rules from the word (see `app/text_tools/inflection.py`):
+    a surname in -ski/-cki, a masculine, feminine or neuter noun, a name in -ń, -ek
+    or -ec, with the 19th-century "-éj" and "-ém"; `label` says which families
+    to try (a place is not a surname in -ski). A name of several words ("Jan
+    Machnicki", at most five) is made of the forms of its words in the same case,
+    and found where they are next to each other (one space or one line break
+    between them). A match is the whole tokens, never a part of a word.
+
+    The response is `{"label": "persName", "forms": [{"text": "Machnicki", "cases":
+    ["nom.sg"]}, ...], "pages": [{"page_number": 8, "matches": [{"start": 383,
+    "end": 395, "text": "Machnickiego", "before": "panem", "after": "wczoraj",
+    "sure": true}]}]}`. The `forms` are what was looked for (the first is `text`),
+    so that a human can see them, and a match is only one of them. `start` and `end`
+    are offsets in the text of the page that `POST /tei/text` gives (counted in code
+    points), so text[start:end] is `text`, which is what `POST .../entities` is to
+    mark, with `label`. `before` and `after` are the token before the match and the
+    one after it, to see it in its context. A match is `sure` if the NER model also
+    finds an entity there, with the same label: else it may be a word that only
+    looks like the name. The pages are searched in their corrected content, as the
+    user sees them, in the order of the page numbers; a page without matches, or
+    whose XML cannot be read, is left out, and so is a place that is inside a marked
+    entity already. Nothing is changed, and Polona is not called.
+
+    404 if the edition is not stored. 422 if `text` is not a name (it has no
+    letters, or is more than five words) or `label` is not an entity label. 503 if
+    the NER model is not available.
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        found = db.get_similar_entities(edition_id, text, label)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except NerModelUnavailable as exc:
+        logger.error("Similar entities requested, but the model is not available")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    logger.info(
+        "%s pages of edition %s have forms of an entity (%s forms)",
+        len(found.pages),
+        edition_id,
+        len(found.forms),
     )
     return found
 

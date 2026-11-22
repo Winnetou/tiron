@@ -24,19 +24,25 @@ from psycopg.rows import dict_row
 from app.persistence.ontology import (
     Correction,
     Edition,
+    EntityForm,
+    EntityMatch,
     LegalSpelling,
     MissingHyphen,
     Page,
+    PageEntityMatches,
     PageMatches,
     PageNumberMatch,
     PageRubbish,
     RubbishLine,
+    SimilarEntities,
     SimilarPageNumbers,
     TokenMatch,
     Work,
 )
 from app.text_tools.hyphens import find_missing_hyphens
+from app.text_tools.inflection import find_forms, forms_of_phrase
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
+from app.text_tools.ner import find_entities
 from app.text_tools.page_numbers import (
     PAGE_NUMBER_OPEN,
     find_page_number,
@@ -44,7 +50,12 @@ from app.text_tools.page_numbers import (
     pattern_of,
 )
 from app.text_tools.rubbish import find_rubbish_lines
-from app.text_tools.tei_xml import InvalidTei, tei_xml_sections, tei_xml_to_text
+from app.text_tools.tei_xml import (
+    InvalidTei,
+    tei_xml_entities,
+    tei_xml_sections,
+    tei_xml_to_text,
+)
 
 
 def get_conninfo() -> str:
@@ -115,6 +126,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
 
 
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
+
+
+# The most words of a named entity that its forms are looked for.
+_MOST_WORDS = 5
 
 
 class Database:
@@ -394,6 +409,87 @@ class Database:
             MissingHyphen.model_validate(vars(found))
             for found in find_missing_hyphens(text, legal)
         ]
+
+    def get_similar_entities(
+        self, edition_id: UUID, text: str, label: str
+    ) -> SimilarEntities:
+        """The places in the pages of an edition that have the named entity `text`
+        (a name of one or more words, as a person marked it with `label`) in any
+        of its forms in the cases (see `app/text_tools/inflection.py`), in the text
+        of the corrected content as the user sees it. A place that is in an entity
+        that is marked already (of any label) is left out. A match is `sure` if
+        the NER model finds an entity there too, with the same label; the model
+        is run only on the pages that have a match. A page without matches, without
+        XML, or with XML that cannot be read is left out.
+
+        Raises ValueError if `text` is not a name (no letters, or more than five
+        words), and NerModelUnavailable if the model cannot be loaded.
+        """
+        words = text.split()
+        if (
+            not words
+            or len(words) > _MOST_WORDS
+            or not all(any(character.isalpha() for character in word) for word in words)
+        ):
+            raise ValueError(
+                f"The entity must be a name of one to {_MOST_WORDS} words with letters"
+            )
+        forms = forms_of_phrase(" ".join(words), label)
+        wanted = {form.text for form in forms}
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        pages = []
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if not xml:
+                continue
+            try:
+                page_text = tei_xml_to_text(xml)
+                marked = tei_xml_entities(xml)
+            except InvalidTei:
+                continue
+            found = [
+                match
+                for match in find_forms(page_text, wanted)
+                if not any(
+                    match.start < entity["end"] and match.end > entity["start"]
+                    for entity in marked
+                )
+            ]
+            if not found:
+                continue
+            recognized = [
+                entity for entity in find_entities(page_text) if entity.label == label
+            ]
+            pages.append(
+                PageEntityMatches(
+                    page_number=row["number"],
+                    matches=[
+                        EntityMatch(
+                            start=match.start,
+                            end=match.end,
+                            text=match.text,
+                            before=match.before,
+                            after=match.after,
+                            sure=any(
+                                match.start < entity.end and match.end > entity.start
+                                for entity in recognized
+                            ),
+                        )
+                        for match in found
+                    ],
+                )
+            )
+        return SimilarEntities(
+            label=label,
+            forms=[
+                EntityForm(text=form.text, cases=sorted(form.cases)) for form in forms
+            ],
+            pages=pages,
+        )
 
     def get_rubbish_lines(self, edition_id: UUID) -> list[PageRubbish]:
         """The lines of the pages of an edition that are OCR rubbish (see
