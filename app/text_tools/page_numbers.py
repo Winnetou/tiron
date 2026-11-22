@@ -1,5 +1,13 @@
 """Finding the printed page numbers of an edition: from one page number that a
-human marked, the same pattern on the other pages."""
+human marked, the same pattern on the other pages.
+
+Note: the same can be done for the other furniture of a printed page, the running
+header and the footer (`<fw type="header">`, `<fw type="footer">`): a human marks
+one, and the same line on the other pages is offered for approval. Only the page
+number is done for now, on purpose; the headers and footers are left for later,
+when this has proved itself. What would change is the pattern (a line of words,
+not a number with dashes, so the match would be on the shape or on the text of the
+line, not on digits) and the section that is marked."""
 
 import re
 from dataclasses import dataclass

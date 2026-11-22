@@ -79,7 +79,8 @@ interface Props {
   onMark: (selection: TextSelection, section: SectionKind, n?: string) => void
   /**
    * The user wants the page number that is marked on this page looked for on the
-   * other pages of the edition. Without it there is no button.
+   * other pages of the edition. Without it there is no button. (Headers and
+   * footers could get the same button later; not done yet.)
    */
   onFindPageNumbers?: () => void
 }

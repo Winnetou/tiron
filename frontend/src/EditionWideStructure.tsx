@@ -5,6 +5,13 @@ import {
   type SimilarPageNumbers,
 } from './api'
 
+/*
+ * Only the page number is looked for on the other pages for now. The same box can
+ * serve the running header and the footer of a page later (a human marks one, the
+ * same line on the other pages is offered for approval); that is left for when
+ * this has proved itself, and is not done here.
+ */
+
 /** The page number that is marked on a page: the example for the other pages. */
 export interface PageNumberExample {
   editionId: string

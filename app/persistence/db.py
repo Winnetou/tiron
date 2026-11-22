@@ -348,7 +348,10 @@ class Database:
     def get_similar_page_numbers(
         self, edition_id: UUID, number: int
     ) -> SimilarPageNumbers | None:
-        """The page numbers in the pages of an edition that are like the one that
+        """(Only page numbers for now; headers and footers can be done the same way
+        later, see `app/text_tools/page_numbers.py`.)
+
+        The page numbers in the pages of an edition that are like the one that
         is marked (<fw type="pageNum">) in page `number`: the pattern is that
         page number's line, which must be the first or the last of its page and
         have nothing but the number and the dashes around it. A page is a
