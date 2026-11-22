@@ -13,6 +13,7 @@ import type {
   PageMatches,
   PageRubbish,
   SectionSpan,
+  SimilarEntities,
   SimilarPageNumbers,
 } from './api'
 import App from './App'
@@ -129,6 +130,8 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../similar-entities; defaults to no form and no place. */
+  similarEntities?: (query: { text: string; label: string }) => SimilarEntities | Error
   /** Answer of GET .../rubbish-lines; defaults to none. */
   rubbish?: () => PageRubbish[] | Error
   /**
@@ -281,6 +284,13 @@ function fakeBackend(options: Options = {}) {
       const answer = options.similarNumbers
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.includes('/similar-entities?')) {
+      const query = Object.fromEntries(new URLSearchParams(url.split('?')[1]))
+      const answer = options.similarEntities
+        ? options.similarEntities(query as never)
+        : { label: query.label, forms: [], pages: [] }
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     if (url.endsWith('/rubbish-lines')) {
@@ -5674,7 +5684,7 @@ describe('page view', () => {
       expect(names()).toEqual(['Find this on other pages'])
     })
 
-    it('has a "Find this NER on other pages" in the NER view: a stub, which is inactive', async () => {
+    it('has "Find this NER on other pages" in the NER view, disabled until an entity is confirmed', async () => {
       await open()
       await userEvent.click(screen.getByRole('button', { name: 'Named entity recognition' }))
       await waitFor(() => expect(cog()).toBeEnabled())
@@ -5682,11 +5692,9 @@ describe('page view', () => {
       await userEvent.click(cog())
 
       expect(names()).toEqual(['Find this NER on other pages'])
-      const stub = screen.getByRole('button', { name: 'Find this NER on other pages' })
-      expect(stub).toBeDisabled()
-      await userEvent.click(stub)
-      expect(menu()).toBeInTheDocument() // nothing happened
-      expect(calls.filter((c) => c.url.includes('similar'))).toHaveLength(0)
+      const tool = screen.getByRole('button', { name: 'Find this NER on other pages' })
+      expect(tool).toBeDisabled()
+      expect(tool).toHaveAttribute('title', 'Confirm a named entity on this page first')
     })
 
     it('is disabled in the Text and XML views, which have no tools', async () => {
@@ -6768,6 +6776,347 @@ describe('the OCR rubbish of the edition', () => {
       expect(await screen.findByText('The page has changed')).toBeInTheDocument()
       await waitFor(() => expect(removalCalls()).toHaveLength(3))
       expect(screen.getAllByText('✓ Removed')).toHaveLength(2)
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await openReview()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})
+
+describe('the same named entity in all its forms', () => {
+  const TEXT = 'Był Machnicki tu, i Jan Kowalski.'
+  const XML = xmlOf('Był <persName>Machnicki</persName> tu, i Jan Kowalski.')
+  const form = (text: string, ...cases: string[]) => ({ text, cases })
+  const match = (
+    text: string,
+    start: number,
+    before: string,
+    after: string,
+    sure = true,
+  ) => ({ start, end: start + [...text].length, text, before, after, sure })
+  const FOUND: SimilarEntities = {
+    label: 'persName',
+    forms: [
+      form('Machnicki', 'nom.sg'),
+      form('Machnickiego', 'gen.sg', 'acc.sg'),
+      form('Machnickiemu', 'dat.sg'),
+      form('Machnicka', 'nom.sg'),
+    ],
+    pages: [
+      {
+        page_number: 1,
+        matches: [
+          match('Machnickiego', 10, 'panem', 'wczoraj'),
+          match('Machnickiemu', 40, 'dał', ',', false),
+        ],
+      },
+      { page_number: 3, matches: [match('Machnicka', 5, 'Pani', 'wyszła')] },
+    ],
+  }
+  const tool = () => screen.getByRole('button', { name: 'Find this NER on other pages' })
+  const review = () =>
+    screen.queryByRole('dialog', { name: 'The same named entity in the edition' })
+  const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
+  const include = (text: string, page: number) =>
+    screen.getByRole('checkbox', { name: `Include ${text} on page ${page} in Approve all` })
+  const approveOne = (text: string, page: number) =>
+    screen.getByRole('button', { name: `Approve ${text} on page ${page}` })
+  const getCalls = () => calls.filter((c) => c.url.includes('/similar-entities?'))
+  const tagCalls = () =>
+    calls.filter((c) => /\/pages\/\d+\/entities$/.test(c.url) && c.method === 'POST')
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: XML }),
+      ner: () => [{ text: 'Jan Kowalski', label: 'persName', start: 20, end: 32 }],
+      similarEntities: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(screen.getByRole('button', { name: 'Named entity recognition' }))
+    await waitFor(() => expect(pageText().querySelectorAll('mark.confirmed')).toHaveLength(1))
+  }
+  async function openReview(extra: Options = {}) {
+    await open(extra)
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(tool())
+    await screen.findByText(/places? on \d+ pages?/)
+  }
+
+  describe('the tool', () => {
+    it('is enabled when an entity is confirmed on the page', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(tool()).toBeEnabled()
+    })
+
+    it('does not count an entity that was only recognized, not confirmed', async () => {
+      await openPage({
+        page: () => ({ content: xmlOf('Był Machnicki tu.') }),
+        ner: () => [{ text: 'Machnicki', label: 'persName', start: 4, end: 13 }],
+      })
+      await waitFor(() => expect(pageText().textContent).toBe('Był Machnicki tu.'))
+      await userEvent.click(screen.getByRole('button', { name: 'Named entity recognition' }))
+      await waitFor(() => expect(pageText().querySelectorAll('mark.entity')).toHaveLength(1))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(tool()).toBeDisabled()
+    })
+
+    it('does nothing until it is clicked: the backend is not asked', async () => {
+      await open()
+
+      expect(getCalls()).toHaveLength(0)
+      expect(review()).toBeNull()
+    })
+
+    it('asks for the confirmed entity, with its label', async () => {
+      await openReview()
+
+      expect(getCalls()).toHaveLength(1)
+      expect(getCalls()[0].url).toBe(
+        `/editions/${UUID}/similar-entities?text=Machnicki&label=persName`,
+      )
+    })
+  })
+
+  describe('the box', () => {
+    it('shows each place in its context: the token before, the name marked, the token after', async () => {
+      await openReview()
+
+      const item = within(
+        within(review()!).getByRole('region', { name: 'Page 1' }),
+      ).getAllByRole('listitem')[0]
+      expect(item.querySelector('mark')!.textContent).toBe('Machnickiego')
+      expect(item.textContent).toContain('panem')
+      expect(item.textContent).toContain('wczoraj')
+    })
+
+    it('lists the places by page', async () => {
+      await openReview()
+
+      expect(within(review()!).getByRole('region', { name: 'Page 1' })).toBeInTheDocument()
+      expect(within(review()!).getByRole('region', { name: 'Page 3' })).toBeInTheDocument()
+    })
+
+    it('counts the places, the pages and the sure ones', async () => {
+      await openReview()
+
+      expect(screen.getByText('3 places on 2 pages, 2 of them sure')).toBeInTheDocument()
+    })
+
+    it('takes the sure ones by default, and says why the others are not', async () => {
+      await openReview()
+
+      expect(include('Machnickiego', 1)).toBeChecked()
+      expect(include('Machnickiemu', 1)).not.toBeChecked()
+      expect(approveAll()).toHaveTextContent('Approve all (2)')
+      expect(
+        screen.getByText('the model does not take it for this entity'),
+      ).toBeInTheDocument()
+    })
+
+    it('lists the forms that were looked for, with their cases, and which were found', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByText(/Forms that were looked for \(4\), 3 of them found/))
+
+      expect(screen.getByRole('checkbox', { name: 'Form Machnickiego' })).toBeChecked()
+      expect(screen.getByText('genitive sg, accusative sg')).toBeInTheDocument()
+    })
+
+    it('drops a form: its places are hidden and not approved', async () => {
+      await openReview()
+      await userEvent.click(screen.getByText(/Forms that were looked for/))
+
+      await userEvent.click(screen.getByRole('checkbox', { name: 'Form Machnicka' }))
+
+      expect(screen.queryByRole('region', { name: 'Page 3' })).toBeNull()
+      expect(screen.getByText('2 places on 1 page, 1 of them sure')).toBeInTheDocument()
+      expect(approveAll()).toHaveTextContent('Approve all (1)')
+
+      await userEvent.click(screen.getByRole('checkbox', { name: 'Form Machnicka' }))
+      expect(screen.getByRole('region', { name: 'Page 3' })).toBeInTheDocument()
+    })
+
+    it('has Include all, Include none and Include only the sure ones', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(approveAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include only the sure ones' }))
+      expect(approveAll()).toHaveTextContent('Approve all (2)')
+    })
+
+    it('says so when there is none', async () => {
+      await open({ similarEntities: () => ({ label: 'persName', forms: [form('Machnicki')], pages: [] }) })
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(tool())
+
+      expect(await screen.findByText('No other place in the edition has this name.')).toBeInTheDocument()
+    })
+
+    it('shows the reason when the backend refuses', async () => {
+      await open({ similarEntities: () => new Error('The entity must be a name') })
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(tool())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The entity must be a name')
+    })
+
+    it('closes with Close and with Escape', async () => {
+      await openReview()
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(tool())
+      await screen.findByText(/places? on \d+ pages?/)
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+
+    it('changes nothing until the user approves', async () => {
+      await openReview()
+
+      expect(tagCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('several confirmed entities', () => {
+    const TWO = xmlOf('<persName>Machnicki</persName> mieszka w <placeName>Krakowie</placeName>.')
+    const openTwo = async () => {
+      await openPage({
+        page: () => ({ content: TWO }),
+        ner: () => [],
+        similarEntities: ({ text, label }) => ({ ...FOUND, label, forms: [form(text)], pages: [] }),
+      })
+      await waitFor(() => expect(pageText().textContent).toContain('Machnicki mieszka'))
+      await userEvent.click(screen.getByRole('button', { name: 'Named entity recognition' }))
+      await waitFor(() => expect(pageText().querySelectorAll('mark.confirmed')).toHaveLength(2))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(tool())
+      await screen.findByRole('combobox', { name: 'Named entity' })
+    }
+
+    it('lets the user choose which one is looked for', async () => {
+      await openTwo()
+
+      expect(
+        within(screen.getByRole('combobox', { name: 'Named entity' }))
+          .getAllByRole('option')
+          .map((o) => o.textContent),
+      ).toEqual(['Machnicki (persName)', 'Krakowie (placeName)'])
+      await waitFor(() => expect(getCalls()).toHaveLength(1))
+      expect(getCalls()[0].url).toContain('text=Machnicki&label=persName')
+    })
+
+    it('looks for the other one when it is chosen', async () => {
+      await openTwo()
+
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Named entity' }),
+        'Krakowie (placeName)',
+      )
+
+      await waitFor(() => expect(getCalls()).toHaveLength(2))
+      expect(getCalls()[1].url).toContain('text=Krakowie&label=placeName')
+    })
+
+    it('has no choice when there is only one', async () => {
+      await openReview()
+
+      expect(screen.queryByRole('combobox', { name: 'Named entity' })).toBeNull()
+    })
+  })
+
+  describe('approving one place', () => {
+    it('marks that place alone, with the offsets the button carries and the label', async () => {
+      await openReview()
+      const button = approveOne('Machnickiego', 1)
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '1')
+      expect(button).toHaveAttribute('data-start', '10')
+      expect(button).toHaveAttribute('data-end', '22')
+
+      await userEvent.click(button)
+
+      await waitFor(() => expect(tagCalls()).toHaveLength(1))
+      expect(tagCalls()[0].url).toBe(`/editions/${UUID}/pages/1/entities`)
+      expect(tagCalls()[0].body).toEqual({
+        start: 10,
+        end: 22,
+        text: 'Machnickiego',
+        label: 'persName',
+      })
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+    })
+
+    it('can approve a place that is not in Approve all', async () => {
+      await openReview()
+
+      await userEvent.click(approveOne('Machnickiemu', 1))
+
+      await waitFor(() => expect(tagCalls()).toHaveLength(1))
+    })
+
+    it('shows the reason when the backend refuses, and the place can be tried again', async () => {
+      await openReview({ tag: () => new Error('The page has changed') })
+
+      await userEvent.click(approveOne('Machnickiego', 1))
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      expect(approveOne('Machnickiego', 1)).toBeEnabled()
+    })
+  })
+
+  describe('approve all', () => {
+    it('marks the places that are in, one request each, in order', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(tagCalls()).toHaveLength(2))
+      expect(tagCalls().map((c) => c.url)).toEqual([
+        `/editions/${UUID}/pages/1/entities`,
+        `/editions/${UUID}/pages/3/entities`,
+      ])
+      expect(await screen.findAllByText('✓ Approved')).toHaveLength(2)
+      expect(approveAll()).toBeDisabled()
+    })
+
+    it('leaves out a place that was taken out', async () => {
+      await openReview()
+      await userEvent.click(include('Machnicka', 3))
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(tagCalls()).toHaveLength(1))
+      expect((tagCalls()[0].body as { text: string }).text).toBe('Machnickiego')
+    })
+
+    it('goes on after a place that was refused, and says which', async () => {
+      await openReview({
+        tag: (body, page) =>
+          body.text === 'Machnickiego'
+            ? new Error('The page has changed')
+            : { content: page.content.replace(body.text, `<persName>${body.text}</persName>`) },
+      })
+
+      await userEvent.click(approveAll())
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      await waitFor(() => expect(tagCalls()).toHaveLength(2))
       expect(screen.getByText(/1 failed/)).toBeInTheDocument()
     })
   })

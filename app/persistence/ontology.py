@@ -68,6 +68,46 @@ class MissingHyphen(BaseModel):
     ambiguous: bool = False
 
 
+class EntityForm(BaseModel):
+    """A form of a named entity in the cases: `text`, and the `cases` it can be in
+    ("gen.sg", "dat.pl", ...; "any" if the word has no case: a name that does not
+    start with a capital)."""
+
+    text: str
+    cases: list[str]
+
+
+class EntityMatch(BaseModel):
+    """A form of a named entity found in the text of a page: the characters `start`
+    to `end` (offsets, counted in code points) are `text`. `before` and `after` are
+    the token before it and the one after it (empty at the ends of the text), so
+    that it is seen in its context. `sure` is true if the NER model also takes it
+    for an entity, with the same label."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str
+    before: str
+    after: str
+    sure: bool
+
+
+class PageEntityMatches(BaseModel):
+    """The places of one page where the forms of a named entity are."""
+
+    page_number: int = Field(ge=0)
+    matches: list[EntityMatch]
+
+
+class SimilarEntities(BaseModel):
+    """The forms of a named entity that were looked for in an edition, and the
+    places that have them, page by page in the order of the pages."""
+
+    label: str
+    forms: list[EntityForm]
+    pages: list[PageEntityMatches]
+
+
 class RubbishLine(BaseModel):
     """A line of a page that is OCR rubbish, not text (an ornament read as
     letters): the characters `start` to `end` of the text of the page (offsets,

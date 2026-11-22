@@ -707,6 +707,30 @@ button {
   border-bottom: 1px solid #eee;
 }
 
+.review-trigram {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-trigram mark {
+  padding: 0 0.2em;
+  background: #ffe36e;
+  font-weight: 600;
+}
+
+.review-forms {
+  margin: 0.5rem 0;
+}
+
+.review-form-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
 .review-row .rubbish-line {
   flex: 1;
   min-width: 0;
