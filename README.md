@@ -798,6 +798,17 @@ checked again. While the request runs the field is disabled; if it fails, the
 reason is shown and the field is kept so it can be tried again. The misspelled
 words can also be reached with the Tab key, and Enter on one starts editing.
 
+**The buttons of the word editor float over the text.** The buttons of a word
+that is being edited (Legal spelling, Join with previous / next, New line here,
+Remove line break / empty line) are one group, `role="group"`, that is out of the
+line: it is positioned (`position: absolute`) under the field, with a white
+background, a border and a shadow, over the text below it. Only the field is in the
+line, so the rest of the line stays where it is and does not jump to the next one.
+Near the right edge of the text box the group lines up with the right edge of the
+field instead of the left one, and near the bottom edge it goes above the field,
+when there is room there. The buttons keep the focus in the field (as before), so
+clicking one does not cancel the edit.
+
 **Applying a correction to the entire edition.** The OCR makes the same mistake
 again and again, so when a word was corrected (the backend has answered, and the
 page is shown), a small box comes up at the bottom right: "You corrected `jćj` to

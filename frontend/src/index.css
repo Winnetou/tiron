@@ -435,12 +435,43 @@ button {
   line-height: inherit;
 }
 
-/* The editor of a word: the field, and for a misspelled word its button. */
+/* The editor of a word: only the field is in the line. The buttons are a group
+   that floats over the text, under the field, so the rest of the line stays
+   where it is. */
 .word-editor {
+  position: relative;
   display: inline-flex;
   align-items: baseline;
-  gap: 0.3rem;
   white-space: normal;
+}
+
+.word-editor-actions {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.3rem;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 0.3rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  white-space: normal;
+}
+
+/* Near the right or the bottom edge of the box: on the other side of the field. */
+.word-editor-actions.right {
+  left: auto;
+  right: 0;
+}
+
+.word-editor-actions.above {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
 }
 
 .empty-page {

@@ -2383,6 +2383,117 @@ describe('spell check', () => {
   })
 })
 
+describe('the buttons of the word editor', () => {
+  const TEXT = 'Ala jey tey ma\nkota'
+  const group = () => screen.getByRole('group', { name: 'Actions for "jey"' })
+
+  async function open() {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text, ['jey', 'tey']),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    await userEvent.click(screen.getByText('jey', { selector: '.word' }))
+  }
+
+  it('are one group, with the buttons for the word', async () => {
+    await open()
+
+    const buttons = within(group()).getAllByRole('button')
+
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      'Legal spelling',
+      '← Join with previous',
+      'Join with next →',
+      '↵ New line here',
+    ])
+  })
+
+  it('float over the text: the group is out of the line, under the field', async () => {
+    await open()
+
+    const editor = document.querySelector('.word-editor') as HTMLElement
+    expect(getComputedStyle(editor).position).toBe('relative')
+    expect(getComputedStyle(group()).position).toBe('absolute')
+    expect(getComputedStyle(group()).top).not.toBe('auto')
+    expect(getComputedStyle(group()).zIndex).not.toBe('auto')
+    // the field is the only thing of the editor in the line
+    expect(Array.from(editor.children).filter((c) => getComputedStyle(c).position !== 'absolute')).toEqual([
+      screen.getByRole('textbox', { name: /^Correct / }),
+    ])
+  })
+
+  it('leave the text of the line as it is', async () => {
+    await open()
+
+    // the words around it are in the same place as before: nothing was added to the line
+    expect(pageText().textContent!.replace(group().textContent!, '')).toContain('Ala ')
+    expect(group().closest('.word-editor')).toBe(document.querySelector('.word-editor'))
+  })
+
+  it('stay with the field while the user types, and work as before', async () => {
+    await open()
+
+    await userEvent.keyboard('jej')
+    await userEvent.click(within(group()).getByRole('button', { name: 'Join with next →' }))
+
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith('/joins'))).toHaveLength(1))
+  })
+
+  describe('near the edge of the box', () => {
+    const original = Element.prototype.getBoundingClientRect
+    let field = { left: 10, right: 50, top: 20, bottom: 40 }
+
+    beforeEach(() => {
+      field = { left: 10, right: 50, top: 20, bottom: 40 }
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const rect = (r: Partial<DOMRect>) => ({ x: 0, y: 0, width: 0, height: 0, ...r }) as DOMRect
+        if (this.classList.contains('page-box')) {
+          return rect({ left: 0, right: 300, top: 0, bottom: 200 })
+        }
+        if (this.classList.contains('word-editor')) return rect(field)
+        if (this.classList.contains('word-editor-actions')) {
+          return rect({ width: 200, height: 60 })
+        }
+        return original.call(this)
+      }
+    })
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = original
+    })
+
+    it('are under the field, at its left, when there is room', async () => {
+      await open()
+
+      expect(group().className).not.toMatch(/right|above/)
+    })
+
+    it('line up with the right edge of the field when they would stick out on the right', async () => {
+      field = { left: 250, right: 290, top: 20, bottom: 40 }
+
+      await open()
+
+      expect(group()).toHaveClass('right')
+      expect(group()).not.toHaveClass('above')
+    })
+
+    it('go above the field when they would stick out at the bottom', async () => {
+      field = { left: 10, right: 50, top: 150, bottom: 190 }
+
+      await open()
+
+      expect(group()).toHaveClass('above')
+      expect(group()).not.toHaveClass('right')
+    })
+
+    it('stay where they are if the other side has no room either', async () => {
+      field = { left: 10, right: 50, top: 20, bottom: 190 } // no room above, none below
+      await open()
+      expect(group()).not.toHaveClass('above')
+    })
+  })
+})
+
 describe('applying a correction to the entire edition', () => {
   const TEXT = 'Ala ma kota, a jćj tćj nie ma.'
   const similarCalls = () => calls.filter((c) => c.url.includes('/similar-misspellings'))
