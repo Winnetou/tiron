@@ -721,6 +721,63 @@ button {
   margin: 0;
 }
 
+/*
+ * The panel with the missing hyphens, docked under the text of the page: it takes
+ * room from the text, which stays in sight (and so does the scan), instead of
+ * covering it. Its height is dragged by its lower right corner.
+ */
+.review-dock {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  height: 16rem;
+  min-height: 4rem;
+  max-height: 75%;
+  margin-top: 0.5rem;
+  overflow: hidden;
+  resize: vertical;
+  border: 1px solid #767676;
+  border-radius: 0.5rem;
+  background: #fff;
+  font-family: system-ui, sans-serif;
+}
+
+.review-dock.folded {
+  height: auto;
+  min-height: 0;
+  resize: none;
+}
+
+.review-dock .review-header {
+  padding: 0.4rem 0.75rem;
+}
+
+.review-dock .review-header h2 {
+  font-size: 1rem;
+}
+
+.review-header-buttons {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.review-joined {
+  color: #555;
+}
+
+/* The words of the place that is pointed at in the list of the panel. */
+.word.pointed {
+  background: #ffe36e;
+  outline: 2px solid #e0a800;
+}
+
+/* The correction view: the button that looks for the dropped hyphens. */
+.correction-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.25rem;
+}
+
 /* The big box with the page numbers like the marked one. */
 .review-example {
   color: #555;

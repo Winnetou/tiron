@@ -225,3 +225,64 @@ class TestSimilarPageNumbers:
 
         with pytest.raises(ValueError, match="No page number is marked"):
             db.get_similar_page_numbers(uuid4(), 1)
+
+
+class TestMissingHyphens:
+    def database(self, monkeypatch, row, legal=()):
+        for name, value in ENV.items():
+            monkeypatch.setenv(name, value)
+        connect = mock.Mock()
+        monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchone.return_value = row
+            result.fetchall.return_value = [{"spelling": s} for s in legal]
+            return result
+
+        connect.return_value.execute = execute
+        return Database()
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        from app.text_tools import spelling
+
+        known = {"przeczytać", "ala", "ma"}
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w.lower() in known})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    def xml(self, text):
+        return str(text_to_tei_xml(text))
+
+    def test_the_line_ends_of_the_page(self, monkeypatch):
+        db = self.database(
+            monkeypatch, {"xml_content_corrected": self.xml("Ala ma przeczy\ntać")}
+        )
+
+        found = db.get_missing_hyphens(uuid4(), 4)
+
+        assert [(m.text, m.suggestion, m.next_word) for m in found] == [
+            ("przeczy", "przeczy-", "tać")
+        ]
+
+    def test_the_legal_spellings_of_the_edition_count(self, monkeypatch):
+        db = self.database(
+            monkeypatch,
+            {"xml_content_corrected": self.xml("Ala ma przeczy\ntać")},
+            legal={"przeczy", "tać"},
+        )
+
+        # both parts are legal on their own, so it is not sure that it is split
+        (match,) = db.get_missing_hyphens(uuid4(), 4)
+
+        assert match.ambiguous is True
+
+    def test_none_if_the_page_is_not_stored(self, monkeypatch):
+        db = self.database(monkeypatch, None)
+
+        assert db.get_missing_hyphens(uuid4(), 4) is None
+
+    def test_a_page_without_xml_has_none(self, monkeypatch):
+        db = self.database(monkeypatch, {"xml_content_corrected": None})
+
+        assert db.get_missing_hyphens(uuid4(), 4) == []

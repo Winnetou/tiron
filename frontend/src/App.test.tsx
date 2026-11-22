@@ -7,7 +7,13 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Page, PageMatches, SectionSpan, SimilarPageNumbers } from './api'
+import type {
+  MissingHyphen,
+  Page,
+  PageMatches,
+  SectionSpan,
+  SimilarPageNumbers,
+} from './api'
 import App from './App'
 import type { Entity } from './entities'
 import './index.css'
@@ -122,6 +128,13 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../missing-hyphens for a page; defaults to none. */
+  hyphens?: (page: number) => MissingHyphen[] | Error
+  /** Answer of POST .../hyphens; defaults to replacing each word in the XML. */
+  putHyphens?: (
+    body: { fixes: { start: number; end: number; before: string; after: string }[] },
+    page: Page,
+  ) => Partial<Page> | Error
   /** Answer of GET .../similar-misspellings; defaults to no place. */
   similar?: (query: {
     incorrect_spelling: string
@@ -257,6 +270,33 @@ function fakeBackend(options: Options = {}) {
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    const missing = url.match(/\/pages\/(\d+)\/missing-hyphens$/)
+    if (missing) {
+      const answer = options.hyphens ? options.hyphens(Number(missing[1])) : []
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    const hyphening = url.match(/\/pages\/(\d+)\/hyphens$/)
+    if (hyphening) {
+      const number = Number(hyphening[1])
+      const page = pageFor(number)
+      if (page instanceof Error) return failure(404, page)
+      const current = pages.get(number) ?? page
+      const changes = options.putHyphens
+        ? options.putHyphens(body, current)
+        : {
+            content: [...body.fixes]
+              .reverse()
+              .reduce(
+                (xml: string, fix: { before: string; after: string }) =>
+                  xml.replace(fix.before, fix.after),
+                current.content,
+              ),
+          }
+      if (changes instanceof Error) return failure(409, changes)
+      const updated = { ...current, ...changes }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
     }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
@@ -5795,3 +5835,467 @@ describe('page navigation', () => {
   })
 })
 
+
+
+describe('the missing hyphens of a page', () => {
+  const TEXT = 'Ala przeczy\ntać kota, i do\nmu wrócił, a na\nwet nie'
+  const hyphen = (
+    text: string,
+    next: string,
+    start: number,
+    ambiguous = false,
+  ): MissingHyphen => ({
+    start,
+    end: start + [...text].length,
+    text,
+    suggestion: `${text.replace(/[^\p{L}]+$/u, '')}-`,
+    next_word: next,
+    joined: `${text.replace(/[^\p{L}]+$/u, '')}${next}`,
+    ambiguous,
+  })
+  const FOUND = [
+    hyphen('przeczy', 'tać', 4),
+    hyphen('do', 'mu', 23, true),
+    hyphen('na', 'wet', 40, true),
+  ]
+  const find = () => screen.getByRole('button', { name: 'Find missing hyphens' })
+  const review = () =>
+    screen.queryByRole('region', { name: 'The missing hyphens on this page' })
+  const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
+  const include = (word: string, next: string) =>
+    screen.getByRole('checkbox', { name: `Include ${word} ${next} in Approve all` })
+  const approveOne = (suggestion: string, next: string) =>
+    screen.getByRole('button', { name: `Approve ${suggestion} before ${next}` })
+  const getCalls = () => calls.filter((c) => c.url.endsWith('/missing-hyphens'))
+  const getPageCalls = () => calls.filter((c) => c.method === 'GET').map((c) => c.url)
+  const postCalls = () =>
+    calls.filter((c) => c.method === 'POST' && c.url.endsWith('/hyphens'))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      hyphens: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+  async function openReview(extra: Options = {}) {
+    await open(extra)
+    await userEvent.click(find())
+    await screen.findByText(/places?, \d+ of them sure/)
+  }
+
+  describe('the button', () => {
+    it('is in the correction view, and only there', async () => {
+      await open()
+      expect(find()).toBeEnabled()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+
+      expect(screen.queryByRole('button', { name: 'Find missing hyphens' })).toBeNull()
+    })
+
+    it('does nothing until it is clicked: the backend is not asked', async () => {
+      await open()
+
+      expect(getCalls()).toHaveLength(0)
+      expect(review()).toBeNull()
+    })
+
+    it('can not be used on a page without text', async () => {
+      await openPage({ page: () => ({ content: xmlOf('') }) })
+      await waitFor(() => expect(find()).toBeDisabled())
+    })
+
+    it('asks the backend for this page only', async () => {
+      await open()
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(getCalls()).toHaveLength(1))
+      expect(getCalls()[0].url).toBe(`/editions/${UUID}/pages/0/missing-hyphens`)
+    })
+  })
+
+  describe('the box', () => {
+    it('shows each line end: the word, the next word and the word with the hyphen', async () => {
+      await openReview()
+
+      expect(review()).toBeInTheDocument()
+      const items = within(review()!).getAllByRole('listitem')
+      expect(items).toHaveLength(3)
+      expect(items[0].textContent).toContain('przeczy')
+      expect(items[0].textContent).toContain('tać')
+      expect(items[0].textContent).toContain('przeczy-')
+    })
+
+    it('shows the word that both halves make together, to decide on', async () => {
+      await openReview()
+
+      const items = within(review()!).getAllByRole('listitem')
+      expect(items[0].textContent).toContain('(joined: przeczytać)')
+      expect(items[1].textContent).toContain('(joined: domu)')
+    })
+
+    it('shows the joined word without the stray sign', async () => {
+      await open({ hyphens: () => [hyphen('przeczy,', 'tać', 4)] })
+      await userEvent.click(find())
+      await screen.findByText(/places?, \d+ of them sure/)
+
+      expect(review()!.textContent).toContain('(joined: przeczytać)')
+    })
+
+    it('counts the places and the sure ones', async () => {
+      await openReview()
+
+      expect(screen.getByText('3 places, 1 of them sure')).toBeInTheDocument()
+    })
+
+    it('takes the sure ones by default, and not those where both parts are words', async () => {
+      await openReview()
+
+      expect(include('przeczy', 'tać')).toBeChecked()
+      expect(include('do', 'mu')).not.toBeChecked()
+      expect(include('na', 'wet')).not.toBeChecked()
+      expect(approveAll()).toHaveTextContent('Approve all (1)')
+    })
+
+    it('says that the ambiguous ones are not sure', async () => {
+      await openReview()
+
+      const items = within(review()!).getAllByRole('listitem')
+      expect(items[1].textContent).toContain('both parts are words')
+      expect(items[0].textContent).not.toContain('both parts are words')
+    })
+
+    it('says so when there is none', async () => {
+      await open({ hyphens: () => [] })
+      await userEvent.click(find())
+
+      expect(await screen.findByText('No missing hyphen found on this page.')).toBeInTheDocument()
+    })
+
+    it('shows the reason when the backend refuses', async () => {
+      await open({ hyphens: () => new Error('The XML of the page cannot be read') })
+      await userEvent.click(find())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The XML of the page cannot be read',
+      )
+    })
+
+    it('has buttons to include all, none, or only the sure ones', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(approveAll()).toHaveTextContent('Approve all (0)')
+      expect(approveAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include only the sure ones' }))
+      expect(approveAll()).toHaveTextContent('Approve all (1)')
+    })
+
+    it('closes with the Close button', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      expect(review()).toBeNull()
+    })
+
+    it('does not close with Escape: it is not a box over the page', async () => {
+      await openReview()
+
+      await userEvent.keyboard('{Escape}')
+
+      expect(review()).toBeInTheDocument()
+    })
+
+    it('is not a modal box: the text stays in sight and can be used', async () => {
+      await openReview()
+
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(document.querySelector('.review-backdrop')).toBeNull()
+      expect(pageText().textContent).toBe(TEXT)
+      // the text is above the panel, in the same half of the screen
+      const half = pageText().closest('.text-half')!
+      expect(half.contains(review())).toBe(true)
+    })
+
+    it('folds to its header, which hides the list, and shows it again', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Fold' }))
+
+      expect(review()).toBeInTheDocument()
+      expect(within(review()!).queryAllByRole('listitem')).toHaveLength(0)
+      expect(screen.queryByRole('button', { name: /^Approve all/ })).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Show the list' }))
+
+      expect(within(review()!).getAllByRole('listitem')).toHaveLength(3)
+    })
+
+    it('keeps what was included when it is folded and shown again', async () => {
+      await openReview()
+      await userEvent.click(include('do', 'mu'))
+      await userEvent.click(screen.getByRole('button', { name: 'Fold' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Show the list' }))
+
+      expect(include('do', 'mu')).toBeChecked()
+    })
+
+    it('is gone when the user goes to another page', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(getPageCalls()).toContain(`/editions/${UUID}/pages/1`))
+      expect(review()).toBeNull()
+    })
+
+    it('changes nothing until the user approves', async () => {
+      await openReview()
+
+      expect(postCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('showing the place in the text', () => {
+    const pointed = () =>
+      [...document.querySelectorAll('.pointed')].map((e) => e.textContent)
+    const row = (n: number) => within(review()!).getAllByRole('listitem')[n]
+
+    async function openWithWords() {
+      await openReview({ spell: (text) => wordsOf(text) })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    }
+
+    it('marks the two words of a place while it is pointed at', async () => {
+      await openWithWords()
+      expect(pointed()).toEqual([])
+
+      await userEvent.hover(row(0))
+
+      expect(pointed()).toEqual(['przeczy', 'tać'])
+    })
+
+    it('marks the stray sign of a place too', async () => {
+      const found = [hyphen('przeczy,', 'tać', 4)]
+      await openPage({
+        hyphens: () => found,
+        page: () => ({ content: xmlOf('Ala przeczy,\ntać kota') }),
+        // (the sign is a token of its own, as the backend has it)
+        spell: () => [
+          { text: 'Ala', start: 0, end: 3, correct: true },
+          { text: 'przeczy', start: 4, end: 11, correct: false },
+          { text: ',', start: 11, end: 12, correct: true },
+          { text: 'tać', start: 13, end: 16, correct: false },
+          { text: 'kota', start: 17, end: 21, correct: true },
+        ],
+      })
+      await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+      await userEvent.click(find())
+      await screen.findByText(/places?, \d+ of them sure/)
+
+      await userEvent.hover(row(0))
+
+      expect(pointed().join('')).toBe('przeczy,tać')
+    })
+
+    it('stops marking when the pointer leaves', async () => {
+      await openWithWords()
+      await userEvent.hover(row(1))
+      expect(pointed()).toEqual(['do', 'mu'])
+
+      await userEvent.unhover(row(1))
+
+      expect(pointed()).toEqual([])
+    })
+
+    it('marks a place when it is focused with the keyboard', async () => {
+      await openWithWords()
+
+      within(row(2)).getByRole('button', { name: /^Approve/ }).focus()
+
+      await waitFor(() => expect(pointed()).toEqual(['na', 'wet']))
+    })
+
+    it('marks nothing once the panel is closed', async () => {
+      await openWithWords()
+      await userEvent.hover(row(0))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      expect(pointed()).toEqual([])
+    })
+
+    it('does not mark an approved place', async () => {
+      await openWithWords()
+      await userEvent.click(approveOne('przeczy-', 'tać'))
+      await screen.findByText('✓ Approved')
+
+      await userEvent.hover(row(0))
+
+      expect(pointed()).toEqual([])
+    })
+  })
+
+  describe('approving one place', () => {
+    it('sends that place alone, with the offsets the button carries', async () => {
+      await openReview()
+      const button = approveOne('przeczy-', 'tać')
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '0')
+      expect(button).toHaveAttribute('data-start', '4')
+      expect(button).toHaveAttribute('data-end', '11')
+
+      await userEvent.click(button)
+
+      await waitFor(() => expect(postCalls()).toHaveLength(1))
+      expect(postCalls()[0].url).toBe(`/editions/${UUID}/pages/0/hyphens`)
+      expect(postCalls()[0].body).toEqual({
+        fixes: [{ start: 4, end: 11, before: 'przeczy', after: 'przeczy-' }],
+      })
+    })
+
+    it('shows the page with the hyphen, and marks the place approved', async () => {
+      await openReview()
+
+      await userEvent.click(approveOne('przeczy-', 'tać'))
+
+      await waitFor(() =>
+        expect(pageText().textContent).toBe(TEXT.replace('przeczy\n', 'przeczy-\n')),
+      )
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+      expect(screen.getByText(/1 approved/)).toBeInTheDocument()
+    })
+
+    it('can be done for an ambiguous place, which is not in Approve all', async () => {
+      await openReview()
+
+      await userEvent.click(approveOne('do-', 'mu'))
+
+      await waitFor(() => expect(postCalls()).toHaveLength(1))
+      expect(postCalls()[0].body).toEqual({
+        fixes: [{ start: 23, end: 25, before: 'do', after: 'do-' }],
+      })
+    })
+
+    it('moves the places after it by the hyphen that was added', async () => {
+      await openReview()
+      await userEvent.click(approveOne('przeczy-', 'tać'))
+      await screen.findByText('✓ Approved')
+
+      expect(approveOne('do-', 'mu')).toHaveAttribute('data-start', '24')
+      expect(approveOne('do-', 'mu')).toHaveAttribute('data-end', '26')
+      expect(approveOne('na-', 'wet')).toHaveAttribute('data-start', '41')
+    })
+
+    it('moves the places by the difference of length when a stray sign is replaced', async () => {
+      const found = [hyphen('przeczy,', 'tać', 4), hyphen('do', 'mu', 24, true)]
+      await openReview({ hyphens: () => found })
+      await userEvent.click(approveOne('przeczy-', 'tać'))
+      await screen.findByText('✓ Approved')
+
+      // the comma became the hyphen: the page is as long as before
+      expect(approveOne('do-', 'mu')).toHaveAttribute('data-start', '24')
+    })
+
+    it('does not move the places before it', async () => {
+      await openReview()
+      await userEvent.click(approveOne('na-', 'wet'))
+      await screen.findByText('✓ Approved')
+
+      expect(approveOne('przeczy-', 'tać')).toHaveAttribute('data-start', '4')
+      expect(approveOne('do-', 'mu')).toHaveAttribute('data-start', '23')
+    })
+
+    it('shows the reason when the backend refuses, and the place can be tried again', async () => {
+      await openReview({ putHyphens: () => new Error('The page has changed') })
+
+      await userEvent.click(approveOne('przeczy-', 'tać'))
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      expect(approveOne('przeczy-', 'tać')).toBeEnabled()
+    })
+  })
+
+  describe('approve all', () => {
+    it('sends the places that are included in one request', async () => {
+      await openReview()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(postCalls()).toHaveLength(1))
+      expect(postCalls()[0].body).toEqual({
+        fixes: [
+          { start: 4, end: 11, before: 'przeczy', after: 'przeczy-' },
+          { start: 23, end: 25, before: 'do', after: 'do-' },
+          { start: 40, end: 42, before: 'na', after: 'na-' },
+        ],
+      })
+    })
+
+    it('leaves out a place that was taken out', async () => {
+      await openReview()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      await userEvent.click(include('do', 'mu'))
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(postCalls()).toHaveLength(1))
+      expect(
+        (postCalls()[0].body as { fixes: { before: string }[] }).fixes.map((f) => f.before),
+      ).toEqual(['przeczy', 'na'])
+    })
+
+    it('puts all the hyphens in the page and marks the places approved', async () => {
+      await openReview()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() =>
+        expect(pageText().textContent).toBe(
+          'Ala przeczy-\ntać kota, i do-\nmu wrócił, a na-\nwet nie',
+        ),
+      )
+      expect(await screen.findAllByText('✓ Approved')).toHaveLength(3)
+      expect(approveAll()).toBeDisabled()
+    })
+
+    it('moves the places that were not approved by the hyphens that were added', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll()) // only przeczy
+
+      await screen.findByText('✓ Approved')
+      expect(approveOne('do-', 'mu')).toHaveAttribute('data-start', '24')
+      expect(approveOne('na-', 'wet')).toHaveAttribute('data-start', '41')
+    })
+
+    it('changes none of the places if the backend refuses, and says why', async () => {
+      await openReview({ putHyphens: () => new Error('The page has changed') })
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+
+      await userEvent.click(approveAll())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      expect(screen.queryByText('✓ Approved')).toBeNull()
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+      expect(approveAll()).toBeEnabled()
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await openReview()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})

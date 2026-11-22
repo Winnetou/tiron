@@ -7,11 +7,13 @@ import {
   joinTokens,
   splitLine,
   getPage,
+  type MissingHyphen,
   type PageNumberMatch,
   type TokenMatch,
   markSection,
   pageFromPath,
   pageUrl,
+  putHyphensBack,
   recognizeEntities,
   spellcheck,
   tagEntity,
@@ -20,6 +22,7 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import { MissingHyphensReview, type HyphenPage } from './MissingHyphens'
 import {
   SimilarPageNumbersReview,
   type PageNumberExample,
@@ -150,6 +153,13 @@ export default function App() {
   // The page number of this page, which the user wants to find on the others.
   const [findingPageNumbers, setFindingPageNumbers] =
     useState<PageNumberExample | null>(null)
+  // The page whose line ends are looked at for the hyphens that the OCR dropped.
+  const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
+  // The place of the text that the user points at in its list, to show in the text.
+  const [hyphenStretch, setHyphenStretch] = useState<{
+    start: number
+    end: number
+  } | null>(null)
   // The spellings that were made legal by approving places of the edition, so
   // that each is sent once.
   const legalized = useRef(new Set<string>())
@@ -205,7 +215,24 @@ export default function App() {
     setOffer(null)
     setReviewing(null)
     setFindingPageNumbers(null)
+    setFindingHyphens(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Put the hyphens back at some line ends of a page (one request, all or none).
+   * The page on the screen is shown again with its new text. A refusal rejects,
+   * with its reason, for the list to show.
+   */
+  async function approveHyphens(page: HyphenPage, hyphens: MissingHyphen[]) {
+    const updated = await putHyphensBack(page.editionId, page.page, hyphens)
+    if (
+      status.kind === 'done' &&
+      status.page.edition_id === page.editionId &&
+      status.page.number === page.page
+    ) {
+      setStatus({ kind: 'done', ...(await withText(updated)) })
+    }
   }
 
   /**
@@ -274,6 +301,7 @@ export default function App() {
 
   /** Show another page of the same edition and reflect it in the URL. */
   function goToPage(editionId: string, number: number) {
+    setFindingHyphens(null) // its places are on the page that is left
     return run(getPage(editionId, number), () => {
       window.history.replaceState(null, '', pageUrl(editionId, number))
     })
@@ -519,6 +547,24 @@ export default function App() {
               editionId: page.edition_id,
               page: page.number,
             })
+          }
+          onFindHyphens={() =>
+            setFindingHyphens({ editionId: page.edition_id, page: page.number })
+          }
+          highlight={hyphenStretch}
+          dock={
+            // docked under the text, not over the page: the text and the scan
+            // stay in sight while the places are checked
+            findingHyphens &&
+            findingHyphens.editionId === page.edition_id &&
+            findingHyphens.page === page.number ? (
+              <MissingHyphensReview
+                page={findingHyphens}
+                onApprove={(hyphens) => approveHyphens(findingHyphens, hyphens)}
+                onPoint={setHyphenStretch}
+                onClose={() => setFindingHyphens(null)}
+              />
+            ) : null
           }
           notice={notice}
         />

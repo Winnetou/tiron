@@ -49,6 +49,25 @@ class PageMatches(BaseModel):
     tokens: list[TokenMatch]
 
 
+class MissingHyphen(BaseModel):
+    """A word at the end of a line of a page that needs the hyphen the OCR
+    dropped: the characters `start` to `end` of the text (offsets, counted in
+    code points) are `text`, the word with the sign that was taken for the hyphen,
+    if any; it is to become `suggestion`, the word and a hyphen. `next_word` is
+    the word that starts the next line, and `joined` the word that the two parts
+    make together (the one that was found correct). `ambiguous` is true if both
+    parts are correct words on their own, so that it is not sure that the word is
+    split."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str
+    suggestion: str
+    next_word: str
+    joined: str
+    ambiguous: bool = False
+
+
 class PageNumberMatch(BaseModel):
     """A printed page number found in the text of a page: the characters `start`
     to `end` (offsets in the text, counted in code points) are `text`, which is

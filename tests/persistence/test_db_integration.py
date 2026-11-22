@@ -827,3 +827,57 @@ class TestSimilarPageNumbers:
         )
 
         assert db.get_similar_page_numbers(edition.id, 1).candidates == []
+
+
+class TestApplyCorrections:
+    def page(self, db, edition, text="Ala ma przeczy\ntać"):
+        db.create_page(
+            Page(
+                edition_id=edition.id,
+                number=1,
+                raw_ocr_content=text,
+                xml_content_corrected=str(text_to_tei_xml(text)),
+            )
+        )
+
+    def corrections(self, db):
+        return [
+            (c["before"], c["after"])
+            for c in db.conn.execute(
+                "SELECT before, after FROM corrections ORDER BY id"
+            ).fetchall()
+        ]
+
+    def test_saves_the_content_and_records_every_correction(self, db, edition):
+        self.page(db, edition)
+
+        page = db.apply_corrections(
+            edition.id,
+            1,
+            lambda xml: xml.replace("przeczy", "przeczy-"),
+            [("przeczy", "przeczy-"), ("a", "b")],
+        )
+
+        assert "przeczy-" in page.xml_content_corrected
+        assert sorted(self.corrections(db)) == [("a", "b"), ("przeczy", "przeczy-")]
+
+    def test_nothing_is_recorded_for_an_empty_list(self, db, edition):
+        self.page(db, edition)
+
+        db.apply_corrections(edition.id, 1, lambda xml: xml, [])
+
+        assert self.corrections(db) == []
+
+    def test_nothing_is_changed_if_the_replacement_fails(self, db, edition):
+        self.page(db, edition)
+
+        def fail(xml):
+            raise ValueError("no")
+
+        with pytest.raises(ValueError):
+            db.apply_corrections(edition.id, 1, fail, [("a", "b")])
+
+        assert self.corrections(db) == []
+
+    def test_none_if_the_page_is_not_stored(self, db, edition):
+        assert db.apply_corrections(edition.id, 9, lambda xml: xml, []) is None

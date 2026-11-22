@@ -198,6 +198,46 @@ class NewToken(BaseModel):
     text: str = Field(min_length=1, max_length=200)
 
 
+class HyphenFix(BaseModel):
+    """A hyphen to put back at the end of a line: the characters `start` to `end`
+    of the text of a page, which are `before` (a word, perhaps with the sign that
+    the OCR made of the hyphen), become `after` (the word and a hyphen)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    before: str = Field(min_length=1, max_length=200)
+    after: str = Field(min_length=2, max_length=200)
+
+    @model_validator(mode="after")
+    def check_fix(self) -> HyphenFix:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        if not self.after.endswith("-") or not self.before.startswith(self.after[:-1]):
+            raise ValueError(
+                "after must be the word of before, without any sign after it, and "
+                "a hyphen"
+            )
+        return self
+
+
+class HyphenFixes(BaseModel):
+    """The hyphens to put back on a page, all at once."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fixes: list[HyphenFix] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def check_apart(self) -> HyphenFixes:
+        ordered = sorted(self.fixes, key=lambda fix: fix.start)
+        for earlier, later in zip(ordered, ordered[1:], strict=False):
+            if later.start < earlier.end:
+                raise ValueError("The fixes must not overlap")
+        return self
+
+
 class TokenJoin(BaseModel):
     """Tokens of the text of a page to join into one (the OCR split a word): the
     characters `start` to `end`, which are `text` (two or more tokens, separated
