@@ -7,6 +7,7 @@ import {
   joinTokens,
   splitLine,
   getPage,
+  type PageNumberMatch,
   type TokenMatch,
   markSection,
   pageFromPath,
@@ -19,6 +20,10 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import {
+  SimilarPageNumbersReview,
+  type PageNumberExample,
+} from './EditionWideStructure'
 import {
   ApplyOffer,
   SimilarMisspellings,
@@ -142,6 +147,9 @@ export default function App() {
   // first the offer (a small box), then, if they accept it, the list of the places.
   const [offer, setOffer] = useState<EditionCorrection | null>(null)
   const [reviewing, setReviewing] = useState<EditionCorrection | null>(null)
+  // The page number of this page, which the user wants to find on the others.
+  const [findingPageNumbers, setFindingPageNumbers] =
+    useState<PageNumberExample | null>(null)
   // The spellings that were made legal by approving places of the edition, so
   // that each is sent once.
   const legalized = useRef(new Set<string>())
@@ -196,7 +204,30 @@ export default function App() {
     window.history.replaceState(null, '', '/')
     setOffer(null)
     setReviewing(null)
+    setFindingPageNumbers(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Mark the page number on one page of the edition: what is at the offsets is
+   * the page number (the same request as marking a section). If it is the page on
+   * the screen, it is shown again with its new XML. A refusal rejects, with its
+   * reason, for the list to show.
+   */
+  async function approvePageNumber(editionId: string, match: PageNumberMatch) {
+    const updated = await markSection(
+      editionId,
+      match.page_number,
+      { start: match.start, end: match.end, text: match.text },
+      'page_number',
+    )
+    if (
+      status.kind === 'done' &&
+      status.page.edition_id === editionId &&
+      status.page.number === match.page_number
+    ) {
+      setStatus({ kind: 'done', ...(await withText(updated)) })
+    }
   }
 
   /**
@@ -483,6 +514,12 @@ export default function App() {
           onMarkSection={(selection, section, n) =>
             markPageSection(page, selection, section, n)
           }
+          onFindPageNumbers={() =>
+            setFindingPageNumbers({
+              editionId: page.edition_id,
+              page: page.number,
+            })
+          }
           notice={notice}
         />
         {offer && !reviewing && (
@@ -493,6 +530,15 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {findingPageNumbers && (
+          <SimilarPageNumbersReview
+            example={findingPageNumbers}
+            onApprove={(match) =>
+              approvePageNumber(findingPageNumbers.editionId, match)
+            }
+            onClose={() => setFindingPageNumbers(null)}
           />
         )}
         {reviewing && (

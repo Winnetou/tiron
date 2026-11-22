@@ -676,3 +676,58 @@ button {
   font-size: 0.8rem;
   color: #8a5a00;
 }
+
+/* The structure view: the hint, and the button that looks for the page number. */
+.structure-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.structure-bar .structure-hint {
+  margin: 0;
+}
+
+/* The big box with the page numbers like the marked one. */
+.review-example {
+  color: #555;
+}
+
+.review-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.review-page {
+  min-width: 5.5rem;
+  font-weight: 600;
+}
+
+.review-fits {
+  font-size: 0.8rem;
+  color: #1b6b2a;
+}
+
+.review-misfit-note {
+  font-size: 0.8rem;
+  color: #8a5a00;
+}
+
+.review-row.misfit {
+  background: #fff8e6;
+}
+
+.review-context {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: #777;
+}

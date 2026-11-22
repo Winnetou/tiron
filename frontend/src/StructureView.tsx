@@ -3,6 +3,9 @@ import { teiSections, type SectionSpan } from './api'
 import { selectionInText } from './selection'
 import { SECTIONS, type SectionKind, type TextSelection } from './sections'
 
+/** How the backend writes the page number that is marked in the XML. */
+const PAGE_NUMBER_OPEN = '<fw type="pageNum">'
+
 /** About how wide the dialog is, to keep it inside the box. */
 const POPUP_WIDTH = 350
 
@@ -74,6 +77,11 @@ interface Props {
   busy: boolean
   /** The user chose a section for the selected text and confirmed. */
   onMark: (selection: TextSelection, section: SectionKind, n?: string) => void
+  /**
+   * The user wants the page number that is marked on this page looked for on the
+   * other pages of the edition. Without it there is no button.
+   */
+  onFindPageNumbers?: () => void
 }
 
 /**
@@ -83,7 +91,13 @@ interface Props {
  * The frontend only says which text it is and which section: the backend puts
  * the text inside the right element in the XML.
  */
-export default function StructureView({ text, xml, busy, onMark }: Props) {
+export default function StructureView({
+  text,
+  xml,
+  busy,
+  onMark,
+  onFindPageNumbers,
+}: Props) {
   // The sections marked in the XML, by the backend, for the XML they are of. They
   // are shown once they are known: until then (or if they cannot be had) it is
   // just the text.
@@ -100,6 +114,9 @@ export default function StructureView({ text, xml, busy, onMark }: Props) {
     }
   }, [xml])
   const spans = found && found.xml === xml ? found.spans : []
+  // A page number is marked on the page (<fw type="pageNum">): it can be the
+  // example for the other pages.
+  const hasPageNumber = spans.some((span) => span.open === PAGE_NUMBER_OPEN)
 
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
@@ -165,9 +182,26 @@ export default function StructureView({ text, xml, busy, onMark }: Props) {
 
   return (
     <div className="structure-wrap" ref={wrap}>
-      <p className="structure-hint">
-        Select some text to mark it as a section of the page.
-      </p>
+      <div className="structure-bar">
+        <p className="structure-hint">
+          Select some text to mark it as a section of the page.
+        </p>
+        {onFindPageNumbers && (
+          <button
+            type="button"
+            className="find-page-numbers"
+            disabled={!hasPageNumber || busy}
+            title={
+              hasPageNumber
+                ? 'Look for a page number like the one marked here on the other pages of the edition'
+                : 'Mark the page number on this page first'
+            }
+            onClick={onFindPageNumbers}
+          >
+            Find this on other pages
+          </button>
+        )}
+      </div>
       <pre
         ref={box}
         className="page-box structure-box"

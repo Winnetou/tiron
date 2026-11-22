@@ -96,6 +96,8 @@ interface Props {
   onSplitLine: (words: Word[]) => void
   /** Remove the line break between two neighbouring words on two lines. */
   onJoinLines: (words: Word[]) => void
+  /** Look for the page number that is marked on this page on the other pages. */
+  onFindPageNumbers: () => void
   /** The user selected some text in the NER view and chose a label for it. */
   onCreateEntity: (selection: TextSelection, label: string) => void
   /** Mark the selected text of the page as a section of it. */
@@ -143,6 +145,7 @@ export default function PageViewer({
   onJoinWords,
   onSplitLine,
   onJoinLines,
+  onFindPageNumbers,
   notice,
 }: Props) {
   const [zoom, setZoom] = useState(MIN_ZOOM)
@@ -342,6 +345,7 @@ export default function PageViewer({
             xml={page.content}
             busy={busy}
             onMark={onMarkSection}
+            onFindPageNumbers={onFindPageNumbers}
           />
         )}
       </section>

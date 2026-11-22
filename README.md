@@ -639,6 +639,47 @@ if it is not what is at those offsets the page has changed, and the answer is
   cannot be marked (with the reason). Like `PATCH`, it does not fetch from
   Polona.
 
+### The same page number on the other pages
+
+In some editions the page number is printed at the top of every page, as the first
+line, and it should be marked on all of them as `<fw type="pageNum">` (see "Marking
+the sections of a page"): nobody should have to do that page by page.
+`GET /editions/{edition_id}/pages/{number}/similar-page-numbers` takes the page
+number that is marked on that page as an example and lists the other pages that
+have one like it, so that a human can check them and approve them. It changes
+nothing.
+
+- **The example** is the first page number marked on the page (`<fw
+  type="pageNum">`). Its line must be the first or the last line of the page and
+  have nothing on it but the number and dashes around it: a number of one to four
+  digits, with single or double dashes before and after it (`- 12 -`, `— 12 —`,
+  `-12-`, any of `-`, `–`, `—`) or with none. If not, the answer is a 422 with the
+  reason (`The page number must be alone on its line…`).
+- **The pattern** is that: the same line of another page (the first, or the last),
+  the whole line a number, with dashes if the example has them and without if it
+  has none (single or double does not matter). So a page that starts with a table
+  of contents, a title or a chapter heading (`12 Rozdział pierwszy`) is not a
+  candidate. A page that has a page number marked already is left out too, and a
+  page without XML, or with XML that cannot be read.
+- **What is marked** is what the example has: the number with its dashes if the
+  example was marked with them, the digits alone if it was not.
+- **The response**: `{"example": {...}, "where": "first", "offset": 3,
+  "candidates": [{"page_number": 12, "start": 0, "end": 1, "text": "9",
+  "number": 9, "context": "Ciekawość względem …", "fits_sequence": true}, ...]}`,
+  the candidates in the order of the pages. `start` and `end` are offsets in the
+  text of the page (counted in code points, as `POST /tei/text` gives it), so
+  `text[start:end]` is `text`: what `POST .../sections` is to mark, with
+  `"section": "page_number"`. `context` is the start of the nearest line with text
+  in it, to see where the number is.
+- **`fits_sequence`** says whether the number follows the numbering of the example.
+  A numbering counts one by one, so the page less its printed number is the same
+  all through (`offset`: page 12 shows 9, offset 3, and so does page 123 with 120).
+  A candidate that does not fit (`9`, whose page less 9 is not 3, or the `99` of a
+  table of contents) is probably something else; it is listed all the same.
+- 404 if the page is not stored, 422 if no page number is marked on it or it is not
+  alone on the first or last line. Polona is not called. The search is
+  `Database.get_similar_page_numbers`, on `app/text_tools/page_numbers.py`.
+
 ### What the frontend shows
 
 While the scan of a page is loading (or has not started), a spinner with "Loading the
@@ -797,6 +838,34 @@ backend answers, the page is shown with its new text, and the spelling is
 checked again. While the request runs the field is disabled; if it fails, the
 reason is shown and the field is kept so it can be tried again. The misspelled
 words can also be reached with the Tab key, and Enter on one starts editing.
+
+**Finding a page number on the other pages.** In the structure view, a button
+**Find this on other pages** is next to the hint. It can be used when a page number
+is marked on the page (an `<fw type="pageNum">` in the sections that the view
+shows), and says "Mark the page number on this page first" otherwise. It does
+nothing until the user clicks it: the page number is the example, and the big box
+that opens is the same as the one for a correction of the entire edition, with the
+pages that `GET .../similar-page-numbers` lists, one row each:
+
+- the page, the number as printed (`“9”`), the line next to it, and whether it
+  follows the numbering of the example (`fits`, or `does not follow the numbering:
+  expected 9`, on a yellow row);
+- an **Approve** button, which marks the page number on that page alone
+  (`POST .../sections`, `"section": "page_number"`, with the offsets) and turns into
+  "✓ Approved"; the button carries the edition, the page and the offsets
+  (`data-edition-id`, `data-page`, `data-start`, `data-end`);
+- a box, "Include page N in Approve all", to take the page out of **Approve all**.
+  The pages that follow the numbering are in by default and the others are out, as
+  they are probably something else; any can be put in or out. **Include all**,
+  **Include none** and **Include only those that follow the numbering** do it for
+  all the rows.
+
+**Approve all (N)** marks the page number on every page that is in and not
+approved yet, one after the other, in the order of the pages, and says "Approving 3
+of 40 …" meanwhile; everything else is disabled until it is done. A page that the
+backend refuses (409 when it has changed, for example) shows the reason in its row,
+and the rest go on; it stays, and the next Approve all takes just the pages that are
+left. Nothing is marked by opening the box. It is closed with **Close** or Escape.
 
 **Applying a correction to the entire edition.** The OCR makes the same mistake
 again and again, so when a word was corrected (the backend has answered, and the

@@ -27,11 +27,19 @@ from app.persistence.ontology import (
     LegalSpelling,
     Page,
     PageMatches,
+    PageNumberMatch,
+    SimilarPageNumbers,
     TokenMatch,
     Work,
 )
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
-from app.text_tools.tei_xml import InvalidTei, tei_xml_to_text
+from app.text_tools.page_numbers import (
+    PAGE_NUMBER_OPEN,
+    find_page_number,
+    marked_page_number,
+    pattern_of,
+)
+from app.text_tools.tei_xml import InvalidTei, tei_xml_sections, tei_xml_to_text
 
 
 def get_conninfo() -> str:
@@ -336,6 +344,88 @@ class Database:
             if tokens:
                 found.append(PageMatches(page_number=row["number"], tokens=tokens))
         return found
+
+    def get_similar_page_numbers(
+        self, edition_id: UUID, number: int
+    ) -> SimilarPageNumbers | None:
+        """The page numbers in the pages of an edition that are like the one that
+        is marked (<fw type="pageNum">) in page `number`: the pattern is that
+        page number's line, which must be the first or the last of its page and
+        have nothing but the number and the dashes around it. A page is a
+        candidate if the same line of it is a number like that, with dashes around
+        it or not as in the example, and no page number is marked in it yet. A
+        candidate `fits_sequence` if its page less its number is the same as in
+        the example. They are in the order of the pages, and the text is that of
+        the corrected content, as the user sees it; a page without it, or with XML
+        that cannot be read, is left out.
+
+        Returns None if there is no such page. Raises ValueError, with the reason,
+        if no page number is marked in it, or it is not one that can be looked
+        for (see `pattern_of`).
+        """
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        example_row = next((row for row in rows if row["number"] == number), None)
+        if example_row is None:
+            return None
+        if not example_row["xml_content_corrected"]:
+            raise ValueError("No page number is marked on this page")
+        try:
+            marked = marked_page_number(example_row["xml_content_corrected"])
+        except InvalidTei as exc:
+            raise ValueError(f"The XML of the page cannot be read: {exc}") from exc
+        if marked is None:
+            raise ValueError("No page number is marked on this page")
+        text, start, end = marked
+        pattern = pattern_of(text, start, end)
+        found = find_page_number(text, pattern)
+        if found is None:  # (the marked part is the number, so this is not so)
+            raise ValueError("The page number is not like its own pattern")
+        offset = number - found.number
+
+        candidates = []
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if row["number"] == number or not xml:
+                continue
+            try:
+                page_text = tei_xml_to_text(xml)
+                has_one = any(
+                    section["open"] == PAGE_NUMBER_OPEN
+                    for section in tei_xml_sections(xml)
+                )
+            except InvalidTei:
+                continue
+            match = None if has_one else find_page_number(page_text, pattern)
+            if match is not None:
+                candidates.append(
+                    PageNumberMatch(
+                        page_number=row["number"],
+                        start=match.start,
+                        end=match.end,
+                        text=match.text,
+                        number=match.number,
+                        context=match.context,
+                        fits_sequence=row["number"] - match.number == offset,
+                    )
+                )
+        return SimilarPageNumbers(
+            example=PageNumberMatch(
+                page_number=number,
+                start=found.start,
+                end=found.end,
+                text=found.text,
+                number=found.number,
+                context=found.context,
+                fits_sequence=True,
+            ),
+            where=pattern.where,
+            offset=offset,
+            candidates=candidates,
+        )
 
     def get_page_by_number(self, edition_id: UUID, number: int) -> Page | None:
         row = self.conn.execute(

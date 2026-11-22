@@ -49,6 +49,36 @@ class PageMatches(BaseModel):
     tokens: list[TokenMatch]
 
 
+class PageNumberMatch(BaseModel):
+    """A printed page number found in the text of a page: the characters `start`
+    to `end` (offsets in the text, counted in code points) are `text`, which is
+    what to mark as the page number; `number` is its digits as a number. `context`
+    is the start of the line next to it, to see where it is. `fits_sequence` says
+    whether the number follows the numbering of the example: the printed number
+    is the number of the page less the same offset."""
+
+    page_number: int = Field(ge=0)
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str
+    number: int = Field(ge=0)
+    context: str = ""
+    fits_sequence: bool = True
+
+
+class SimilarPageNumbers(BaseModel):
+    """The page numbers of an edition that are like one that was marked: `example`
+    is the marked one, `where` the line of the page it is on (the first or the
+    last), and `offset` the number of its page less its printed number, which is
+    the same on all the pages of a numbering. `candidates` are the pages that have
+    a number like it and have none marked yet, in the order of the pages."""
+
+    example: PageNumberMatch
+    where: str
+    offset: int
+    candidates: list[PageNumberMatch]
+
+
 class Correction(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     page_id: UUID

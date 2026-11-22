@@ -16,7 +16,7 @@ from app.persistence.ontology import Edition, LegalSpelling, Page
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import NerModelUnavailable
 from app.text_tools.spelling import SpellcheckUnavailable
-from app.text_tools.tei_xml import tei_xml_to_text, text_to_tei_xml
+from app.text_tools.tei_xml import mark_section, tei_xml_to_text, text_to_tei_xml
 from app.view_models import Entity, PageView, Word
 
 client = TestClient(app)
@@ -1673,6 +1673,128 @@ class TestSimilarMisspellings:
         path = "/editions/{edition_id}/similar-misspellings"
         assert "get" in schema["paths"][path]
         assert {"PageMatches", "TokenMatch"} <= schema["components"]["schemas"].keys()
+
+
+class TestSimilarPageNumbers:
+    def url(self, edition_id=None, number=4):
+        return f"/editions/{edition_id or uuid4()}/pages/{number}/similar-page-numbers"
+
+    def xml(self, text, mark=None):
+        xml = str(text_to_tei_xml(text))
+        if mark:
+            xml = mark_section(xml, *mark, "page_number", text[mark[0] : mark[1]])
+        return xml
+
+    @pytest.fixture
+    def rows(self, monkeypatch):
+        """The pages that the database holds, as rows of (number, xml)."""
+        rows = [
+            {"number": 4, "xml_content_corrected": self.xml("1\n\nAla ma", (0, 1))},
+            {"number": 5, "xml_content_corrected": self.xml("2\n\nA kot ma Ale")},
+            {"number": 6, "xml_content_corrected": self.xml("TREŚĆ\n\n12")},
+            {"number": 7, "xml_content_corrected": self.xml("9\n\nNie pasuje")},
+        ]
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(**{"execute.return_value.fetchall.return_value": rows}),
+        )
+        return rows
+
+    def test_lists_the_example_and_the_pages_with_a_number_like_it(self, rows):
+        response = client.get(self.url(uuid4(), 4))
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["where"] == "first"
+        assert body["offset"] == 3
+        assert body["example"] == {
+            "page_number": 4,
+            "start": 0,
+            "end": 1,
+            "text": "1",
+            "number": 1,
+            "context": "Ala ma",
+            "fits_sequence": True,
+        }
+        assert body["candidates"] == [
+            {
+                "page_number": 5,
+                "start": 0,
+                "end": 1,
+                "text": "2",
+                "number": 2,
+                "context": "A kot ma Ale",
+                "fits_sequence": True,
+            },
+            {
+                "page_number": 7,
+                "start": 0,
+                "end": 1,
+                "text": "9",
+                "number": 9,
+                "context": "Nie pasuje",
+                "fits_sequence": False,
+            },
+        ]
+
+    def test_the_offsets_point_at_what_is_to_be_marked(self, rows):
+        body = client.get(self.url(uuid4(), 4)).json()
+
+        for candidate in body["candidates"]:
+            page = next(r for r in rows if r["number"] == candidate["page_number"])
+            text = tei_xml_to_text(page["xml_content_corrected"])
+            assert text[candidate["start"] : candidate["end"]] == candidate["text"]
+
+    def test_page_not_stored(self, rows):
+        response = client.get(self.url(uuid4(), 99))
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Page not found"
+
+    def test_no_page_number_marked_is_422(self, rows):
+        response = client.get(self.url(uuid4(), 5))
+
+        assert response.status_code == 422
+        assert "No page number is marked" in response.json()["detail"]
+
+    def test_a_number_that_is_not_alone_is_422(self, monkeypatch):
+        xml = self.xml("84 KATEDRA\n\nAla", (0, 2))
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(
+                **{
+                    "execute.return_value.fetchall.return_value": [
+                        {"number": 1, "xml_content_corrected": xml}
+                    ]
+                }
+            ),
+        )
+
+        response = client.get(self.url(uuid4(), 1))
+
+        assert response.status_code == 422
+        assert "alone" in response.json()["detail"]
+
+    def test_never_calls_polona_and_changes_nothing(self, rows, polona, monkeypatch):
+        for name in ("update_page", "apply_correction", "save_fetched_page"):
+            monkeypatch.setattr(db, name, mock.Mock())
+
+        client.get(self.url(uuid4(), 4))
+
+        polona.assert_not_called()
+        for name in ("update_page", "apply_correction", "save_fetched_page"):
+            getattr(db, name).assert_not_called()
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        path = "/editions/{edition_id}/pages/{number}/similar-page-numbers"
+        assert "get" in schema["paths"][path]
+        assert {"SimilarPageNumbers", "PageNumberMatch"} <= schema["components"][
+            "schemas"
+        ].keys()
 
 
 class TestCorrectWord:

@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Page, PageMatches, SectionSpan } from './api'
+import type { Page, PageMatches, SectionSpan, SimilarPageNumbers } from './api'
 import App from './App'
 import type { Entity } from './entities'
 import './index.css'
@@ -120,6 +120,8 @@ interface Options {
     body: { start: number; end: number; text: string },
     page: Page,
   ) => Partial<Page> | Error
+  /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
+  similarNumbers?: (page: number) => SimilarPageNumbers | Error
   /** Answer of GET .../similar-misspellings; defaults to no place. */
   similar?: (query: {
     incorrect_spelling: string
@@ -248,6 +250,13 @@ function fakeBackend(options: Options = {}) {
       return answer instanceof Error
         ? failure(422, answer)
         : reply(true, 200, { sections: answer })
+    }
+    const numbering = url.match(/\/pages\/(\d+)\/similar-page-numbers$/)
+    if (numbering) {
+      const answer = options.similarNumbers
+        ? options.similarNumbers(Number(numbering[1]))
+        : new Error('No page number is marked on this page')
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
@@ -4332,6 +4341,376 @@ describe('a page without text', () => {
     await waitFor(() => expect(pageText().textContent).toBe('Ala'))
 
     expect(screen.queryByRole('textbox', { name: 'Text to add to the empty page' })).toBeNull()
+  })
+})
+
+describe('the page number on the other pages', () => {
+  const PAGE_NUMBER = {
+    start: 0,
+    end: 4,
+    open: '<fw type="pageNum">',
+    close: '</fw>',
+  }
+  const match = (page: number, text: string, fits = true, context = 'Ala ma kota') => ({
+    page_number: page,
+    start: 0,
+    end: text.length,
+    text,
+    number: Number(text),
+    context,
+    fits_sequence: fits,
+  })
+  const FOUND: SimilarPageNumbers = {
+    example: match(0, '8'),
+    where: 'first',
+    offset: 3,
+    candidates: [
+      match(1, '9', true, 'Ciekawość względem'),
+      match(2, '10', true, 'Nic łatwiejszego'),
+      match(3, '99', false, 'TREŚĆ'),
+    ],
+  }
+  const find = () => screen.getByRole('button', { name: 'Find this on other pages' })
+  const review = () =>
+    screen.queryByRole('dialog', { name: 'The same page number on the other pages' })
+  const approveAll = () => screen.getByRole('button', { name: /^Approve all/ })
+  const include = (page: number) =>
+    screen.getByRole('checkbox', { name: `Include page ${page} in Approve all` })
+  const sectionCalls = () => calls.filter((c) => /\/pages\/\d+\/sections$/.test(c.url))
+  const numberCalls = () => calls.filter((c) => c.url.endsWith('/similar-page-numbers'))
+
+  async function openStructure(extra: Options = {}) {
+    await openPage({
+      sections: () => [PAGE_NUMBER],
+      similarNumbers: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+  }
+  async function openReview(extra: Options = {}) {
+    await openStructure(extra)
+    await waitFor(() => expect(find()).toBeEnabled())
+    await userEvent.click(find())
+    await screen.findByText(/pages?, \d+ of them/)
+  }
+
+  describe('the button', () => {
+    it('is in the structure view, and only there', async () => {
+      await openPage({ sections: () => [PAGE_NUMBER] })
+      await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+      expect(screen.queryByRole('button', { name: 'Find this on other pages' })).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+
+      expect(find()).toBeInTheDocument()
+    })
+
+    it('can be used when a page number is marked on the page', async () => {
+      await openStructure()
+
+      await waitFor(() => expect(find()).toBeEnabled())
+    })
+
+    it('can not be used when no page number is marked: it says to mark one first', async () => {
+      await openStructure({ sections: () => [] })
+
+      expect(find()).toBeDisabled()
+      expect(find()).toHaveAttribute('title', 'Mark the page number on this page first')
+    })
+
+    it('can not be used when only another section is marked', async () => {
+      await openStructure({
+        sections: () => [{ ...PAGE_NUMBER, open: '<fw type="header">' }],
+      })
+
+      expect(find()).toBeDisabled()
+    })
+
+    it('does nothing until it is clicked: the backend is not asked', async () => {
+      await openStructure()
+      await waitFor(() => expect(find()).toBeEnabled())
+
+      expect(numberCalls()).toHaveLength(0)
+      expect(review()).toBeNull()
+    })
+  })
+
+  describe('the list of the pages', () => {
+    it('asks the backend about the page that is on the screen', async () => {
+      await openReview()
+
+      expect(numberCalls()).toHaveLength(1)
+      expect(numberCalls()[0].method).toBe('GET')
+      expect(numberCalls()[0].url).toBe(`/editions/${UUID}/pages/0/similar-page-numbers`)
+    })
+
+    it('says what the example is, and how many pages it found', async () => {
+      await openReview()
+
+      expect(
+        screen.getByText(/The example is page 0: “8” on the first line, so the printed number is the number of the page less 3/),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText('3 pages, 2 of them with a number that follows the numbering'),
+      ).toBeInTheDocument()
+    })
+
+    it('shows each page with its number and the line next to it', async () => {
+      await openReview()
+
+      const rows = screen.getAllByRole('listitem')
+      expect(rows).toHaveLength(3)
+      expect(within(rows[0]).getByText('Page 1')).toBeInTheDocument()
+      expect(within(rows[0]).getByText('“9”')).toBeInTheDocument()
+      expect(within(rows[0]).getByText('Ciekawość względem')).toBeInTheDocument()
+      expect(within(rows[0]).getByText('fits')).toBeInTheDocument()
+    })
+
+    it('shows that a number does not follow the numbering, and what it should be', async () => {
+      await openReview()
+
+      const row = screen.getAllByRole('listitem')[2]
+      expect(within(row).getByText('“99”')).toBeInTheDocument()
+      expect(
+        within(row).getByText('does not follow the numbering: expected 0'),
+      ).toBeInTheDocument()
+      expect(row).toHaveClass('misfit')
+    })
+
+    it('has an Approve button for each page, with its edition, page and offsets', async () => {
+      await openReview()
+
+      const button = screen.getByRole('button', { name: 'Approve “10” on page 2' })
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '2')
+      expect(button).toHaveAttribute('data-start', '0')
+      expect(button).toHaveAttribute('data-end', '2')
+    })
+
+    it('has the pages that follow the numbering in "Approve all", and the others out', async () => {
+      await openReview()
+
+      expect(include(1)).toBeChecked()
+      expect(include(2)).toBeChecked()
+      expect(include(3)).not.toBeChecked()
+      expect(approveAll()).toHaveTextContent('Approve all (2)')
+    })
+
+    it('marks nothing by itself', async () => {
+      await openReview()
+
+      expect(sectionCalls()).toHaveLength(0)
+    })
+
+    it('says so when no page is like it', async () => {
+      await openStructure({ similarNumbers: () => ({ ...FOUND, candidates: [] }) })
+      await waitFor(() => expect(find()).toBeEnabled())
+
+      await userEvent.click(find())
+
+      expect(
+        await screen.findByText('No other page has a page number like it.'),
+      ).toBeInTheDocument()
+    })
+
+    it('shows the reason when the backend refuses', async () => {
+      await openStructure({
+        similarNumbers: () => new Error('The page number must be alone on its line'),
+      })
+      await waitFor(() => expect(find()).toBeEnabled())
+
+      await userEvent.click(find())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The page number must be alone on its line',
+      )
+    })
+
+    it('Close and Escape close it', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(find())
+      await screen.findByText(/pages?, \d+ of them/)
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+  })
+
+  describe('approving a page', () => {
+    it('marks the page number on that page alone, with its offsets', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Approve “10” on page 2' }))
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].method).toBe('POST')
+      expect(sectionCalls()[0].url).toBe(`/editions/${UUID}/pages/2/sections`)
+      expect(sectionCalls()[0].body).toEqual({
+        start: 0,
+        end: 2,
+        text: '10',
+        section: 'page_number',
+      })
+    })
+
+    it('marks the page as approved, and the others stay', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Approve “10” on page 2' }))
+
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Approve “10” on page 2' })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Approve “9” on page 1' })).toBeEnabled()
+      expect(sectionCalls()).toHaveLength(1)
+    })
+
+    it('can approve a page that is not in "Approve all"', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Approve “99” on page 3' }))
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].url).toBe(`/editions/${UUID}/pages/3/sections`)
+    })
+
+    it('shows why a page was refused, and it can be tried again', async () => {
+      let refuse = true
+      await openReview({
+        section: (_body, current) =>
+          refuse ? new Error('The page has changed') : { content: current.content },
+      })
+
+      await userEvent.click(screen.getByRole('button', { name: 'Approve “9” on page 1' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      refuse = false
+      await userEvent.click(screen.getByRole('button', { name: 'Approve “9” on page 1' }))
+      expect(await screen.findByText('✓ Approved')).toBeInTheDocument()
+    })
+  })
+
+  describe('approving all', () => {
+    it('marks the page number on every page that is in, in the order of the pages', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(2))
+      expect(sectionCalls().map((c) => c.url)).toEqual([
+        `/editions/${UUID}/pages/1/sections`,
+        `/editions/${UUID}/pages/2/sections`,
+      ])
+      expect(sectionCalls().map((c) => c.body)).toEqual([
+        { start: 0, end: 1, text: '9', section: 'page_number' },
+        { start: 0, end: 2, text: '10', section: 'page_number' },
+      ])
+    })
+
+    it('does not take a page that is out of it', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+      await waitFor(() => expect(screen.getAllByText('✓ Approved')).toHaveLength(2))
+
+      expect(sectionCalls().some((c) => c.url.includes('/pages/3/'))).toBe(false)
+      expect(screen.getByRole('button', { name: 'Approve “99” on page 3' })).toBeEnabled()
+    })
+
+    it('has a page taken out of it, with its box, and counts the rest', async () => {
+      await openReview()
+
+      await userEvent.click(include(1))
+
+      expect(include(1)).not.toBeChecked()
+      expect(approveAll()).toHaveTextContent('Approve all (1)')
+      await userEvent.click(approveAll())
+      await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+      expect(sectionCalls()[0].url).toBe(`/editions/${UUID}/pages/2/sections`)
+    })
+
+    it('can take a page that was out into it', async () => {
+      await openReview()
+
+      await userEvent.click(include(3))
+
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+      await userEvent.click(approveAll())
+      await waitFor(() => expect(sectionCalls()).toHaveLength(3))
+    })
+
+    it('has Include all, Include none and Include only those that follow the numbering', async () => {
+      await openReview()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(approveAll()).toHaveTextContent('Approve all (3)')
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(approveAll()).toHaveTextContent('Approve all (0)')
+      expect(approveAll()).toBeDisabled()
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Include only those that follow the numbering' }),
+      )
+      expect(approveAll()).toHaveTextContent('Approve all (2)')
+    })
+
+    it('has nothing left to approve when it is done', async () => {
+      await openReview()
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(approveAll()).toHaveTextContent('Approve all (0)'))
+      expect(approveAll()).toBeDisabled()
+      expect(screen.getByText(/2 approved/)).toBeInTheDocument()
+    })
+
+    it('goes on after a page that was refused, and says which', async () => {
+      await openReview({
+        section: (body, current) =>
+          body.text === '9'
+            ? new Error('The page has changed')
+            : { content: current.content },
+      })
+
+      await userEvent.click(approveAll())
+
+      await waitFor(() => expect(sectionCalls()).toHaveLength(2))
+      expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
+      expect(screen.getAllByText('✓ Approved')).toHaveLength(1)
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+      // the page that failed is still to approve, and Approve all takes just that
+      expect(approveAll()).toHaveTextContent('Approve all (1)')
+    })
+
+    it('shows how far it is while it works, and nothing else can be clicked meanwhile', async () => {
+      await openReview()
+      const original = (
+        fetch as unknown as {
+          getMockImplementation: () => (url: string, init?: RequestInit) => Promise<unknown>
+        }
+      ).getMockImplementation()
+      let finish: () => void = () => {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (!url.endsWith('/pages/1/sections')) return original(url, init)
+          await new Promise<void>((resolve) => (finish = resolve))
+          return original(url, init)
+        }),
+      )
+
+      await userEvent.click(approveAll())
+
+      expect(await screen.findByText('Approving 0 of 2 …')).toBeInTheDocument()
+      expect(approveAll()).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Approve “99” on page 3' })).toBeDisabled()
+      expect(include(2)).toBeDisabled()
+      finish()
+      await waitFor(() => expect(screen.getAllByText('✓ Approved')).toHaveLength(2))
+      expect(screen.queryByText(/^Approving /)).toBeNull()
+    })
   })
 })
 

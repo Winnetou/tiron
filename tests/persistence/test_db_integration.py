@@ -14,7 +14,7 @@ from fastapi_pagination import Params, set_page, set_params
 
 from app.persistence.db import Database, get_conninfo
 from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
-from app.text_tools.tei_xml import text_to_tei_xml
+from app.text_tools.tei_xml import mark_section, text_to_tei_xml
 from tests.conftest import real_connect
 
 pytestmark = pytest.mark.skipif(
@@ -766,3 +766,64 @@ class TestSimilarMisspellings:
         found = db.get_similar_misspellings(edition.id, "jćj", "jéj")
 
         assert [m.page_number for m in found] == [2, 5, 9]
+
+
+class TestSimilarPageNumbers:
+    def pages(self, db, edition, texts):
+        for number, text in texts.items():
+            db.create_page(
+                Page(
+                    edition_id=edition.id,
+                    number=number,
+                    raw_ocr_content=text,
+                    xml_content_corrected=str(text_to_tei_xml(text)),
+                )
+            )
+
+    def test_finds_the_page_numbers_that_are_like_the_marked_one(self, db, edition):
+        self.pages(
+            db,
+            edition,
+            {
+                0: "TYTUŁ",
+                1: "1\n\nAla",
+                2: "2\n\nAla",
+                3: "- 3 -\n\nAla",
+                4: "9\n\nAla",
+            },
+        )
+        db.apply_correction(
+            edition.id,
+            1,
+            lambda xml: mark_section(xml, 0, 1, "page_number", "1"),
+            "",
+            "",
+            record=False,
+        )
+
+        found = db.get_similar_page_numbers(edition.id, 1)
+
+        assert found.offset == 0
+        assert [(c.page_number, c.text, c.fits_sequence) for c in found.candidates] == [
+            (2, "2", True),
+            (4, "9", False),
+        ]
+
+    def test_none_for_a_page_that_is_not_stored(self, db, edition):
+        assert db.get_similar_page_numbers(edition.id, 5) is None
+
+    def test_pages_of_other_editions_are_not_looked_at(self, db, edition):
+        work = db.create_work(Work(author="Other"))
+        other = db.create_edition(Edition(work_id=work.id, year=1900))
+        self.pages(db, other, {1: "5\n\nAla"})
+        self.pages(db, edition, {1: "1\n\nAla"})
+        db.apply_correction(
+            edition.id,
+            1,
+            lambda xml: mark_section(xml, 0, 1, "page_number", "1"),
+            "",
+            "",
+            record=False,
+        )
+
+        assert db.get_similar_page_numbers(edition.id, 1).candidates == []

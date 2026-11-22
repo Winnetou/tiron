@@ -320,6 +320,46 @@ export function getSimilarMisspellings(
   )
 }
 
+/** A printed page number found in the text of a page (PageNumberMatch). */
+export interface PageNumberMatch {
+  page_number: number
+  /** What to mark: offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  text: string
+  /** The digits of the printed number, as a number. */
+  number: number
+  /** The start of the line next to it, to see where it is. */
+  context: string
+  /** Does it follow the numbering of the example (page less number is the same)? */
+  fits_sequence: boolean
+}
+
+/** The page numbers of an edition that are like a marked one (SimilarPageNumbers). */
+export interface SimilarPageNumbers {
+  example: PageNumberMatch
+  /** The line of the page the number is on: the first or the last. */
+  where: string
+  /** The page of the example less its printed number: the same for a numbering. */
+  offset: number
+  candidates: PageNumberMatch[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/pages/{number}/similar-page-numbers: the backend
+ * takes the page number that is marked on that page as an example, and lists the
+ * pages of the edition that have a number like it on the same line and none
+ * marked yet, with what to mark in each. Nothing is changed.
+ */
+export function getSimilarPageNumbers(
+  editionId: string,
+  number: number,
+): Promise<SimilarPageNumbers> {
+  return request<SimilarPageNumbers>(
+    `${pageUrl(editionId, number)}/similar-page-numbers`,
+  )
+}
+
 /**
  * Calls POST /editions/{editionId}/pages/{number}/line-splits: the backend turns
  * the space between `words` (two neighbouring words of one line) into a line
