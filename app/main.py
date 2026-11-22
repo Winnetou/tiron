@@ -15,6 +15,7 @@ from app.persistence.ontology import (
     LegalSpelling,
     MissingHyphen,
     PageMatches,
+    PageRubbish,
     SimilarPageNumbers,
 )
 from app.polona.polona_connector import PolonaError
@@ -24,6 +25,7 @@ from app.text_tools.tei_xml import (
     CannotInsert,
     CannotJoin,
     CannotJoinLines,
+    CannotRemoveLine,
     CannotReplace,
     CannotSplit,
     CannotTag,
@@ -33,6 +35,7 @@ from app.text_tools.tei_xml import (
     join_lines_at,
     join_text_range,
     mark_section,
+    remove_line_at,
     replace_text_range,
     split_line_at,
     tag_text_range,
@@ -45,6 +48,8 @@ from app.view_models import (
     EntityTag,
     HyphenFixes,
     LineJoin,
+    LineRemoval,
+    LineRemoved,
     LineSplit,
     NerRequest,
     NerResult,
@@ -543,6 +548,50 @@ def get_similar_page_numbers(
     return found
 
 
+@app.get("/editions/{edition_id}/rubbish-lines", response_model=list[PageRubbish])
+def get_rubbish_lines(edition_id: UUID) -> list[PageRubbish]:
+    """List the lines of the edition that are OCR rubbish, not text: the OCR reads
+    a fleuron, a printer's ornament, or the print that shows through from the other
+    side of the page, as letters and signs (`I *>• ' -V. ^oSkv. ;-'. i M , . ypton`).
+    They can then be removed (`POST .../line-removals`), in bulk. Only whole lines
+    are found, never a token in the middle of a good line.
+
+    A line is a candidate when signs outnumber letters in it (the letters are less
+    than 60 % of the letters and signs together; digits do not count). It is
+    `sure` if no correct word of three letters or more is in it: the spellings that
+    are legal in the edition count as correct. If there is one, the line may be text
+    with a lot of punctuation, and a human has to say. Never found: a line
+    shorter than three characters, a line of one and the same sign, `?` `.` `-` or
+    `!`, several times (`...`, `---`), a line with digits and no letters (a page
+    number), a Roman numeral (`II.`), and a line in a section that is marked (a
+    header, a footer, a page number, a table of contents, a note).
+
+    The response is a list with an item for each page that has such lines, in the
+    order of the page numbers: `{"page_number": 18, "lines": [{"start": 14, "end":
+    51, "text": "I *>• ...", "sure": true}]}`. `start` and `end` are offsets in the
+    text of the page that `POST /tei/text` gives (counted in code points), so
+    text[start:end] is the line. The pages are searched in their corrected content,
+    as the user sees them; one without lines like that, or whose XML cannot be
+    read, is left out. Nothing is changed, and Polona is not called.
+
+    404 if the edition is not stored, 503 if the dictionary is not available.
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        found = db.get_rubbish_lines(edition_id)
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    logger.info(
+        "%s pages of edition %s have rubbish lines (%s lines)",
+        len(found),
+        edition_id,
+        sum(len(page.lines) for page in found),
+    )
+    return found
+
+
 @app.get(
     "/editions/{edition_id}/pages/{number}/missing-hyphens",
     response_model=list[MissingHyphen],
@@ -949,6 +998,70 @@ def join_lines(
         join.end,
     )
     return PageView.from_page(page)
+
+
+@app.post(
+    "/editions/{edition_id}/pages/{number}/line-removals", response_model=LineRemoved
+)
+def remove_line(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], removal: LineRemoval
+) -> LineRemoved:
+    """Remove a whole line of a stored page, with the line break that goes with it:
+    OCR rubbish that `GET .../rubbish-lines` found, and the user approved.
+
+    The body is `{"start": 14, "end": 51, "text": "I *>• ..."}`: the characters
+    `start` to `end` of the text that `POST /tei/text` gives for this page, which
+    are `text`, a whole line (the text before it ends with a line break, and the
+    text after it starts with one, or it is at an end of the text). The backend
+    finds the line in the XML and removes it and its `<lb/>`: the one before it, or
+    after it if it is the first line of its paragraph. A line that is all of its
+    paragraph takes the paragraph with it (and so the empty line next to it). The
+    line must be plain text of one paragraph: a line with an element in it is not
+    removed.
+
+    The new XML is saved as the page's corrected content. No Correction is
+    recorded: removing a line is not correcting a word. The text of the page
+    changes, so the offsets of what follows the line are no longer valid.
+
+    The response is `{"page": {...}, "removed": 38}`: the updated page, and how
+    many characters of its text went (the line and its line break or breaks), so
+    that the offsets after it can be moved by that.
+
+    404 if the page is not stored. 409 if the text at the offsets is not `text`,
+    because the page has changed since. 422 if the page has no valid TEI XML, or
+    the line cannot be removed (not a whole line, markup in it).
+    """
+    removed = 0
+
+    def remove_in_xml(xml: str) -> str:
+        nonlocal removed
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to remove a line from")
+        new_xml = remove_line_at(xml, removal.start, removal.end, removal.text)
+        removed = len(tei_xml_to_text(xml)) - len(tei_xml_to_text(new_xml))
+        return new_xml
+
+    try:
+        page = db.apply_correction(
+            edition_id, number, remove_in_xml, removal.text, "", record=False
+        )
+    except TextChanged as exc:
+        logger.warning("Line not removed on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotRemoveLine) as exc:
+        logger.warning("Line not removed on page %s of %s: %s", number, edition_id, exc)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Line removed on page %s of %s (%s-%s)",
+        number,
+        edition_id,
+        removal.start,
+        removal.end,
+    )
+    return LineRemoved(page=PageView.from_page(page), removed=removed)
 
 
 @app.post("/editions/{edition_id}/legal-spellings", response_model=LegalSpelling)

@@ -68,6 +68,25 @@ class MissingHyphen(BaseModel):
     ambiguous: bool = False
 
 
+class RubbishLine(BaseModel):
+    """A line of a page that is OCR rubbish, not text (an ornament read as
+    letters): the characters `start` to `end` of the text of the page (offsets,
+    counted in code points) are `text`, a whole line. `sure` is false if it has a
+    correct word in it, so that it may be text with a lot of punctuation."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str
+    sure: bool
+
+
+class PageRubbish(BaseModel):
+    """The lines of one page of an edition that are OCR rubbish, in order."""
+
+    page_number: int = Field(ge=0)
+    lines: list[RubbishLine]
+
+
 class PageNumberMatch(BaseModel):
     """A printed page number found in the text of a page: the characters `start`
     to `end` (offsets in the text, counted in code points) are `text`, which is

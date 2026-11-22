@@ -293,6 +293,33 @@ class LineJoin(BaseModel):
         return self
 
 
+class LineRemoval(BaseModel):
+    """A whole line of the text of a page to be removed (OCR rubbish): the
+    characters `start` to `end`, which are `text`, and the line break that goes
+    with it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def check_range(self) -> LineRemoval:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class LineRemoved(BaseModel):
+    """The page after a line was removed, and how many characters of its text
+    went with it (the line and its line break or breaks), so that the client can
+    move the offsets of what follows."""
+
+    page: PageView
+    removed: int = Field(ge=1)
+
+
 class NewLegalSpelling(BaseModel):
     """A spelling to be made legal in an edition (the edition is in the path).
     "Legal", not "correct": see `LegalSpelling`."""

@@ -881,3 +881,38 @@ class TestApplyCorrections:
 
     def test_none_if_the_page_is_not_stored(self, db, edition):
         assert db.apply_corrections(edition.id, 9, lambda xml: xml, []) is None
+
+
+class TestRubbishLines:
+    def page(self, db, edition, number, text, mark=None):
+        xml = str(text_to_tei_xml(text))
+        if mark:
+            xml = mark_section(xml, *mark, "header", text[mark[0] : mark[1]])
+        db.create_page(
+            Page(
+                edition_id=edition.id,
+                number=number,
+                raw_ocr_content=text,
+                xml_content_corrected=xml,
+            )
+        )
+
+    def test_finds_the_rubbish_lines_of_the_edition_page_by_page(self, db, edition):
+        self.page(
+            db, edition, 1, "Ala ma kota\n\nI *>• ' -V. ^oSkv. ;-'. i M , . ypton"
+        )
+        self.page(db, edition, 2, "Ala ma kota")
+        self.page(db, edition, 3, "Ala\n;;; ,,,\nkota", (4, 11))
+        self.page(db, edition, 4, "***\n\n12")
+
+        found = db.get_rubbish_lines(edition.id)
+
+        assert [
+            (p.page_number, [(x.text, x.sure) for x in p.lines]) for p in found
+        ] == [
+            (1, [("I *>• ' -V. ^oSkv. ;-'. i M , . ypton", True)]),
+            (4, [("***", True)]),
+        ]
+
+    def test_none_for_an_edition_without_pages(self, db, edition):
+        assert db.get_rubbish_lines(edition.id) == []

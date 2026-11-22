@@ -360,6 +360,55 @@ export function getSimilarPageNumbers(
   )
 }
 
+/** A line of a page that is OCR rubbish, not text (RubbishLine). */
+export interface RubbishLine {
+  /** The whole line: offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  text: string
+  /** False if the line has a correct word in it: it may be text with punctuation. */
+  sure: boolean
+}
+
+/** The rubbish lines of one page of an edition (PageRubbish). */
+export interface PageRubbish {
+  page_number: number
+  lines: RubbishLine[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/rubbish-lines: the backend finds the lines of
+ * the whole edition that are OCR rubbish (an ornament read as letters and signs),
+ * page by page, with the offsets of each. Nothing is changed.
+ */
+export function getRubbishLines(editionId: string): Promise<PageRubbish[]> {
+  return request<PageRubbish[]>(`/editions/${editionId}/rubbish-lines`)
+}
+
+/** The page after a line was removed, and how many characters of its text went. */
+export interface LineRemoved {
+  page: Page
+  removed: number
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/line-removals: the backend
+ * removes the whole `line` (and its line break) from the XML of the page. The
+ * answer is the updated page and how many characters of the text went, to move
+ * the offsets of what follows by. No correction is recorded for it.
+ */
+export function removeLine(
+  editionId: string,
+  number: number,
+  line: RubbishLine,
+): Promise<LineRemoved> {
+  return request<LineRemoved>(`${pageUrl(editionId, number)}/line-removals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start: line.start, end: line.end, text: line.text }),
+  })
+}
+
 /** A line end of a page where the OCR dropped a hyphen (MissingHyphen). */
 export interface MissingHyphen {
   /** What to replace: offsets in the text of the page, counted in code points. */
