@@ -55,9 +55,6 @@ worker (`docker-compose.yml`):
   It only waits for the backend to be started, not healthy, so for the first
   minutes the main page shows an error until the backend has loaded its models.
   `make frontend` still runs the dev server on the host instead.
-<<<<<<< HEAD
-- A new database is empty, and the main page lists the editions of the
-=======
 - **`rabbitmq`** (RabbitMQ 4) is the message broker for the Celery worker. It keeps
   its data in the named volume `rabbitmq-data` (and has a fixed hostname, because
   RabbitMQ stores it under the node name), and waits for nobody. Its port is not
@@ -72,7 +69,6 @@ worker (`docker-compose.yml`):
   mounted, so restart the container after editing the tasks
   (`docker compose restart celery-worker`).
 - A new database is empty. Pages can only be opened for editions in the
->>>>>>> a6fbda1 (feat: add celery worked with container and rabbit container)
   `collection` table, so add one first, for example:
 
   ```
@@ -839,33 +835,16 @@ checked again. While the request runs the field is disabled; if it fails, the
 reason is shown and the field is kept so it can be tried again. The misspelled
 words can also be reached with the Tab key, and Enter on one starts editing.
 
-**Finding a page number on the other pages.** In the structure view, a button
-**Find this on other pages** is next to the hint. It can be used when a page number
-is marked on the page (an `<fw type="pageNum">` in the sections that the view
-shows), and says "Mark the page number on this page first" otherwise. It does
-nothing until the user clicks it: the page number is the example, and the big box
-that opens is the same as the one for a correction of the entire edition, with the
-pages that `GET .../similar-page-numbers` lists, one row each:
-
-- the page, the number as printed (`“9”`), the line next to it, and whether it
-  follows the numbering of the example (`fits`, or `does not follow the numbering:
-  expected 9`, on a yellow row);
-- an **Approve** button, which marks the page number on that page alone
-  (`POST .../sections`, `"section": "page_number"`, with the offsets) and turns into
-  "✓ Approved"; the button carries the edition, the page and the offsets
-  (`data-edition-id`, `data-page`, `data-start`, `data-end`);
-- a box, "Include page N in Approve all", to take the page out of **Approve all**.
-  The pages that follow the numbering are in by default and the others are out, as
-  they are probably something else; any can be put in or out. **Include all**,
-  **Include none** and **Include only those that follow the numbering** do it for
-  all the rows.
-
-**Approve all (N)** marks the page number on every page that is in and not
-approved yet, one after the other, in the order of the pages, and says "Approving 3
-of 40 …" meanwhile; everything else is disabled until it is done. A page that the
-backend refuses (409 when it has changed, for example) shows the reason in its row,
-and the rest go on; it stays, and the next Approve all takes just the pages that are
-left. Nothing is marked by opening the box. It is closed with **Close** or Escape.
+**The buttons of the word editor float over the text.** The buttons of a word
+that is being edited (Legal spelling, Join with previous / next, New line here,
+Remove line break / empty line) are one group, `role="group"`, that is out of the
+line: it is positioned (`position: absolute`) under the field, with a white
+background, a border and a shadow, over the text below it. Only the field is in the
+line, so the rest of the line stays where it is and does not jump to the next one.
+Near the right edge of the text box the group lines up with the right edge of the
+field instead of the left one, and near the bottom edge it goes above the field,
+when there is room there. The buttons keep the focus in the field (as before), so
+clicking one does not cancel the edit.
 
 **Applying a correction to the entire edition.** The OCR makes the same mistake
 again and again, so when a word was corrected (the backend has answered, and the
