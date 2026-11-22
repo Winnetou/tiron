@@ -4,7 +4,7 @@ import type { Decision, Entity } from './entities'
 import PageText from './PageText'
 import type { Word } from './segments'
 import type { SectionKind, TextSelection } from './sections'
-import Sidebar, { type SidebarView } from './Sidebar'
+import Sidebar, { type SidebarTool, type SidebarView } from './Sidebar'
 import StructureView from './StructureView'
 import XmlView from './XmlView'
 
@@ -102,7 +102,8 @@ interface Props {
   dock: ReactNode
   /** Look for the hyphens that the OCR dropped at the line ends of this page. */
   onFindHyphens: () => void
-  /** Look for the page number that is marked on this page on the other pages. */
+  /** Look for the page number that is marked on this page on the other pages (a
+   * tool of the structure view). */
   onFindPageNumbers: () => void
   /** The user selected some text in the NER view and chose a label for it. */
   onCreateEntity: (selection: TextSelection, label: string) => void
@@ -204,6 +205,44 @@ export default function PageViewer({
     const box = event.target as HTMLElement
     if (box.classList?.contains('page-box')) follow(box, scanHalf.current)
   }
+
+  // A page number is marked on the page (told by the structure view).
+  const [pageNumberMarked, setPageNumberMarked] = useState(false)
+
+  // What the cog wheel of the sidebar offers: different tools in each view.
+  const tools: SidebarTool[] =
+    view === 'correction'
+      ? [
+          {
+            label: 'Find missing hyphens',
+            onSelect: onFindHyphens,
+            disabled: busy || text.trim() === '',
+            title:
+              'Put back the hyphens that the OCR dropped at the end of the lines of this page',
+          },
+        ]
+      : view === 'structure'
+        ? [
+            {
+              label: 'Find this on other pages',
+              onSelect: onFindPageNumbers,
+              disabled: !pageNumberMarked || busy,
+              title: pageNumberMarked
+                ? 'Look for a page number like the one marked here on the other pages of the edition'
+                : 'Mark the page number on this page first',
+            },
+          ]
+        : view === 'ner'
+          ? [
+              {
+                // a stub: it does nothing yet
+                label: 'Find this NER on other pages',
+                onSelect: () => {},
+                disabled: true,
+                title: 'Not available yet',
+              },
+            ]
+          : []
 
   return (
     <div className="viewer">
@@ -311,18 +350,6 @@ export default function PageViewer({
         )}
         {/* The correction view is where the spelling is corrected: the entities are not
             shown in it, and the NER view does not show the spelling. */}
-        {view === 'correction' && (
-          <div className="correction-bar">
-            <button
-              type="button"
-              disabled={busy || text.trim() === ''}
-              title="Put back the hyphens that the OCR dropped at the end of the lines of this page"
-              onClick={onFindHyphens}
-            >
-              Find missing hyphens
-            </button>
-          </div>
-        )}
         {(view === 'correction' || view === 'ner') && (
           <PageText
             text={text}
@@ -367,13 +394,14 @@ export default function PageViewer({
             xml={page.content}
             busy={busy}
             onMark={onMarkSection}
-            onFindPageNumbers={onFindPageNumbers}
+            onPageNumberMarked={setPageNumberMarked}
           />
         )}
         {view === 'correction' && dock}
       </section>
       <Sidebar
         view={view}
+        tools={tools}
         onShow={setView}
         canRecognize={text.trim() !== ''}
         recognizing={recognizing}
