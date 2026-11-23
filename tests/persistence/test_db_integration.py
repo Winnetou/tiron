@@ -5,7 +5,7 @@ disposable database (tables are dropped and recreated).
 """
 
 import os
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -15,6 +15,7 @@ from fastapi_pagination import Params, set_page, set_params
 from app.persistence.db import Database, get_conninfo
 from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
 from app.text_tools.tei_xml import mark_section, text_to_tei_xml
+from app.view_models import CollectionEdition
 from tests.conftest import real_connect
 
 pytestmark = pytest.mark.skipif(
@@ -661,13 +662,36 @@ def test_list_collection_pages_the_ids_in_order(db):
     ids = sorted(uuid4() for _ in range(5))
     for edition_id in ids:
         db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (edition_id,))
-    set_page(PaginatedPage[UUID])
+    set_page(PaginatedPage[CollectionEdition])
 
     with set_params(Params(page=2, size=2)):
         page = db.list_collection()
 
-    assert page.items == ids[2:4]
+    assert [item.id for item in page.items] == ids[2:4]
     assert (page.total, page.page, page.size) == (5, 2, 2)
+
+
+def test_list_collection_has_the_author_and_title_of_the_work(db):
+    work = db.create_work(Work(author="Kraszewski", title="Stara baśń"))
+    stored = db.create_edition(Edition(work_id=work.id, year=1876))
+    no_title = db.create_edition(
+        Edition(work_id=db.create_work(Work(author="Prus")).id, year=1890)
+    )
+    not_stored = uuid4()
+    for edition_id in (stored.id, no_title.id, not_stored):
+        db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (edition_id,))
+    set_page(PaginatedPage[CollectionEdition])
+
+    with set_params(Params(page=1, size=10)):
+        found = {
+            item.id: (item.author, item.title) for item in db.list_collection().items
+        }
+
+    assert found == {
+        stored.id: ("Kraszewski", "Stara baśń"),
+        no_title.id: ("Prus", None),
+        not_stored: (None, None),
+    }
 
 
 def test_update_edition_sets_the_page_count_only(db, edition):

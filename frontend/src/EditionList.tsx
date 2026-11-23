@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getEditions, pageUrl, type EditionsPage, DEFAULT_PAGE_NUMBER } from './api'
+import { editionLabel } from './editionLabel'
 
 /** The page of the list that the address names (?page=, from 1), or the first. */
 function listPageFromAddress(): number {
@@ -52,9 +53,9 @@ export default function EditionList() {
     <nav className="editions" aria-label="Editions">
       <h1>Editions</h1>
       <ul>
-        {items.map((id) => (
-          <li key={id}>
-            <a href={pageUrl(id, DEFAULT_PAGE_NUMBER)}>{id}</a>
+        {items.map((item) => (
+          <li key={item.id}>
+            <a href={pageUrl(item.id, DEFAULT_PAGE_NUMBER)}>{editionLabel(item)}</a>
           </li>
         ))}
       </ul>

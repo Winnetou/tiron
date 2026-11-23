@@ -61,9 +61,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json()
 }
 
-/** A page of the collection: GET /editions, 100 edition ids on a page. */
+/** An edition of the collection: its id and the metadata of its book, if known. */
+export interface EditionItem {
+  id: string
+  author: string | null
+  title: string | null
+}
+
+/** A page of the collection: GET /editions, 100 editions on a page. */
 export interface EditionsPage {
-  items: string[]
+  items: EditionItem[]
   total: number | null
   /** The number of this page, from 1. */
   page: number | null
@@ -72,7 +79,7 @@ export interface EditionsPage {
   pages: number | null
 }
 
-/** Calls GET /editions?page=: the ids of the editions of the collection. */
+/** Calls GET /editions?page=: the editions of the collection, with their authors and titles. */
 export function getEditions(page: number = 1): Promise<EditionsPage> {
   return request<EditionsPage>(`/editions?page=${page}`)
 }

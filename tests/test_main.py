@@ -108,13 +108,14 @@ class TestListEditions:
     @pytest.fixture
     def collection(self, monkeypatch):
         ids = [uuid4() for _ in range(250)]
-        monkeypatch.setattr(db, "list_collection", lambda: paginate(ids))
+        items = [{"id": i, "author": None, "title": None} for i in ids]
+        monkeypatch.setattr(db, "list_collection", lambda: paginate(items))
         return ids
 
     def test_the_first_page_has_100_ids(self, collection):
         body = client.get("/editions").json()
 
-        assert body["items"] == [str(i) for i in collection[:100]]
+        assert [i["id"] for i in body["items"]] == [str(i) for i in collection[:100]]
         assert (body["total"], body["page"], body["size"], body["pages"]) == (
             250,
             1,
@@ -126,8 +127,25 @@ class TestListEditions:
         second = client.get("/editions?page=2").json()
         last = client.get("/editions?page=3").json()
 
-        assert second["items"] == [str(i) for i in collection[100:200]]
-        assert last["items"] == [str(i) for i in collection[200:]]
+        assert [i["id"] for i in second["items"]] == [
+            str(i) for i in collection[100:200]
+        ]
+        assert [i["id"] for i in last["items"]] == [str(i) for i in collection[200:]]
+
+    def test_each_edition_has_its_author_and_title_or_null(self, monkeypatch):
+        known, unknown = uuid4(), uuid4()
+        items = [
+            {"id": known, "author": "Kraszewski", "title": "Stara baśń"},
+            {"id": unknown, "author": None, "title": None},
+        ]
+        monkeypatch.setattr(db, "list_collection", lambda: paginate(items))
+
+        body = client.get("/editions").json()
+
+        assert body["items"] == [
+            {"id": str(known), "author": "Kraszewski", "title": "Stara baśń"},
+            {"id": str(unknown), "author": None, "title": None},
+        ]
 
     def test_a_page_past_the_last_is_empty(self, collection):
         body = client.get("/editions?page=4").json()

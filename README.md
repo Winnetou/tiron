@@ -86,18 +86,28 @@ each page once and keeps it in PostgreSQL.
 
 ### The main page: the editions of the collection
 
-`GET /editions` lists the editions in the `collection` table, as the ids of the
-editions (Polona object UUIDs), 100 on a page. It is paginated with
+`GET /editions` lists the editions in the `collection` table, each with its id
+(a Polona object UUID) and the author and title of its work, 100 on a page. It is paginated with
 [fastapi-pagination](https://uriyyo-fastapi-pagination.netlify.app/):
 
 - `?page=` is the page, from 1 (the default);
-- `?size=` is how many ids are on a page: 100 by default, and 100 at most (more
+- `?size=` is how many editions are on a page: 100 by default, and 100 at most (more
   is 422).
 
-The response is `{"items": ["<uuid>", ...], "total": 187597, "page": 1,
-"size": 100, "pages": 1876}`. The ids are in the order of the ids, so a page is
-the same on every request. A page past the last one has no items. Each id is an
-edition whose first page is at `GET /editions/{id}/pages/0`.
+The response is `{"items": [{"id": "<uuid>", "author": "Kraszewski", "title":
+"Stara baśń"}, ...], "total": 187597, "page": 1, "size": 100, "pages": 1876}`.
+The `collection` table is joined with `editions` and `works` on the edition id: an
+edition that is not stored yet, or whose work has no author or no title, has
+`null` for what is missing. The editions are in the order of the ids, so a page is
+the same on every request. A page past the last one has no items. Each is an
+edition whose first page is at `GET /editions/{id}/pages/0`. The main page links
+each one by what is known of its book: "Kraszewski J.; Stara baśń", the author as
+the last name and the first letter of the first name (the catalogue writes "Last
+name, First names (years)"), `NN` if the author is not known, and the title cut to
+its first five words with `...` after them if it is longer (`Bez tytułu` if the
+title is not known). An edition whose book is not known at all, neither author nor
+title, is linked by its id. (This is done by the frontend, in
+`editionLabel.ts`; the endpoint gives the author and title as they are stored.)
 
 ### Requesting a page
 
