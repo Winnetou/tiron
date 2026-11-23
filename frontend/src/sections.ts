@@ -33,11 +33,12 @@ export const SECTIONS: SectionOption[] = [
 
 /**
  * The languages that a quotation can be in, by the code that goes into
- * `xml:lang`: the most used European ones, and Latin. The backend has the same
+ * `xml:lang`: the most used European ones, Latin and Ancient Greek (`grc`). The backend has the same
  * list and refuses any other.
  */
 export const LANGUAGES: { code: string; label: string }[] = [
   { code: 'la', label: 'Latin' },
+  { code: 'grc', label: 'Ancient Greek' },
   { code: 'de', label: 'German' },
   { code: 'fr', label: 'French' },
   { code: 'en', label: 'English' },

@@ -2159,6 +2159,7 @@ describe('structure view', () => {
         ).toEqual([
           'Choose a language…',
           'Latin',
+          'Ancient Greek',
           'German',
           'French',
           'English',

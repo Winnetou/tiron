@@ -1166,13 +1166,13 @@ class TestMarkSectionQuote:
 
         assert tei_xml_to_text(xml) == tei_xml_to_text(original)
 
-    @pytest.mark.parametrize("lang", ["ru", "en", "de", "es", "fr", "it", "la"])
+    @pytest.mark.parametrize("lang", ["ru", "en", "de", "es", "fr", "it", "la", "grc"])
     def test_each_language_of_the_list(self, lang):
         xml = mark(generated("Ala ma kota"), "ma", "quote", lang=lang)
 
         assert f'<quote xml:lang="{lang}">ma</quote>' in xml
 
-    @pytest.mark.parametrize("lang", [None, "", "pl", "xx", "Latin"])
+    @pytest.mark.parametrize("lang", [None, "", "pl", "xx", "Latin", "el", "Greek"])
     def test_a_language_that_is_not_in_the_list_is_refused(self, lang):
         with pytest.raises(CannotTag, match="language"):
             mark(generated("Ala ma kota"), "ma", "quote", lang=lang)
@@ -1203,6 +1203,17 @@ class TestForeignLanguageRanges:
         )
 
         assert foreign_language_ranges(xml) == [(13, 22)]
+
+    def test_a_quotation_in_ancient_greek_is_foreign_too(self):
+        xml = mark(
+            generated("Ala ma kota. Γνῶθι σεαυτόν tu."),
+            "Γνῶθι σεαυτόν",
+            "quote",
+            lang="grc",
+        )
+
+        assert '<quote xml:lang="grc">Γνῶθι σεαυτόν</quote>' in xml
+        assert foreign_language_ranges(xml) == [(13, 26)]
 
     def test_none_without_a_quote(self):
         assert foreign_language_ranges(generated("Ala ma kota")) == []
