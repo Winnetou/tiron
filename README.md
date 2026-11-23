@@ -403,7 +403,7 @@ offered for the whole edition. It changes nothing.
   The panel shows the doubtful ones in a separate group, below the sure ones.
 - **The response** is a list with an item for each page that has matches, in the
   order of the page numbers: `{"page_number": 8, "tokens": [{"text": "jćj", "start":
-  383, "end": 386, "suggestion": "jéj", "sure": true}, ...]}`. `start` and `end` are offsets in
+  383, "end": 386, "suggestion": "jéj", "sure": true, "before": "To", "after": "i"}, ...]}`. `start` and `end` are offsets in
   that text, counted in code points like the offsets of a correction, so
   `text[start:end]` is the token. The `suggestion` is the token with the mistake
   corrected in it, every occurrence of the cluster and with the capital letters kept
@@ -411,6 +411,11 @@ offered for the whole edition. It changes nothing.
   (`POST .../corrections`) that applies it, with the token as `before` and these
   offsets. A page without matches is not in the list, and an edition without matches
   gets `[]`.
+- **Context**: each token has `before` and `after`, the nearest word before it and the
+  nearest word after it with the signs between them and the token, as they are written
+  (`"dniu."`, `", raz"`), so that a full stop or a comma next to it does not leave nothing to
+  read (the same rule as in the other edition-wide tools). The panel shows each place as
+  `before misspelling → suggestion after`.
 - **404** if the edition is not stored, **422** if a spelling is empty or longer than
   100 characters, if one is missing, or if the two are the same, **503** if the dictionary
   is not available. Polona is not called. The search is `Database.get_similar_misspellings`.

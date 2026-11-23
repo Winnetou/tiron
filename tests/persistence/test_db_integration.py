@@ -747,6 +747,13 @@ class TestSimilarMisspellings:
             ("bardzićj", "bardziéj"),
         ]
 
+    def test_each_token_comes_with_its_context(self, db, edition):
+        self.pages(db, edition, {1: "Raz. To samćj, a nie."})
+
+        (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [(t.before, t.after) for t in match.tokens] == [("To", ", a")]
+
     def test_the_offsets_are_those_of_the_text_of_the_page(self, db, edition):
         text = "To samćj i jćj tu."
         self.pages(db, edition, {1: text})

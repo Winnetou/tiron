@@ -36,13 +36,19 @@ class TokenMatch(BaseModel):
     in code points, so text[start:end] is `text`. `suggestion` is what the token
     would be corrected to (the same mistake corrected in it). `sure` is true if the
     suggestion is a correct word (or a legal spelling of the edition); false if it
-    is not, so the suggestion is doubtful (a wrong word to another wrong word)."""
+    is not, so the suggestion is doubtful (a wrong word to another wrong word).
+    `before` and `after` are its context: the nearest word before it and the nearest
+    word after it, with the signs between them and the token, as they are written
+    ("dniu." and "raz"), so that a full stop or a comma next to it does not leave
+    nothing to read (empty at the ends of the text, where there is no word)."""
 
     text: str
     start: int = Field(ge=0)
     end: int = Field(ge=1)
     suggestion: str = Field(min_length=1)
     sure: bool = True
+    before: str
+    after: str
 
 
 class TokenOccurrence(BaseModel):

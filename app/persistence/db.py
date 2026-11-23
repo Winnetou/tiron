@@ -54,7 +54,7 @@ from app.text_tools.page_numbers import (
     pattern_of,
 )
 from app.text_tools.rubbish import find_rubbish_lines
-from app.text_tools.spelling import check_words, word_verdict
+from app.text_tools.spelling import check_words, tokenize, word_verdict
 from app.text_tools.spelling_chunks import find_chunk_matches
 from app.text_tools.tei_xml import (
     InvalidTei,
@@ -62,7 +62,12 @@ from app.text_tools.tei_xml import (
     tei_xml_sections,
     tei_xml_to_text,
 )
-from app.text_tools.token_occurrences import check_token, find_token
+from app.text_tools.token_occurrences import (
+    check_token,
+    context_after,
+    context_before,
+    find_token,
+)
 
 
 def get_conninfo() -> str:
@@ -397,6 +402,8 @@ class Database:
             if not candidates:
                 continue
             correct_here = {w.start: w.correct for w in check_words(text, legal)}
+            all_tokens = tokenize(text)
+            index_at = {match.start(): i for i, match in enumerate(all_tokens)}
             tokens = [
                 TokenMatch(
                     text=token,
@@ -404,6 +411,8 @@ class Database:
                     end=end,
                     suggestion=suggestion,
                     sure=correct_suggestion(suggestion),
+                    before=context_before(text, all_tokens, index_at[start]),
+                    after=context_after(text, all_tokens, index_at[start]),
                 )
                 for token, start, end, suggestion in candidates
                 # only a wrong word is ever corrected, never a correct one
