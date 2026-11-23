@@ -935,9 +935,15 @@ describe('named entity recognition', () => {
 
     expect(nerButton()).toBeDisabled()
     expect(nerButton()).toHaveAttribute('aria-busy', 'true')
+    // the skull is shown in the button while the model runs
+    expect(nerButton().querySelector('img')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif',
+    )
     finish([entity('Jan Kowalski', 0)])
     await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
     expect(nerButton()).toBeEnabled()
+    expect(nerButton().querySelector('img')).toBeNull() // the icon is back
   })
 
   it('shows the backend error and keeps the text as it was', async () => {
@@ -4155,6 +4161,10 @@ describe('the scan', () => {
 
     expect(spinner()).toBeInTheDocument()
     expect(spinner()).toHaveTextContent('Loading the scan')
+    expect(spinner()!.querySelector('img')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif', // the small skull is the indicator
+    )
 
     fireEvent.load(scan())
 
@@ -6151,6 +6161,42 @@ describe('page view', () => {
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+})
+
+describe('the main page while the editions come', () => {
+  it('shows the large skull loop and a text', async () => {
+    window.history.pushState({}, '', '/')
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) // the list never comes
+    render(<App />)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading the editions')
+    expect(document.querySelector('img.page-loading-image')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif',
+    )
+  })
+})
+
+describe('opening an edition', () => {
+  it('shows the skull and crossbones loop and a text while the first page loads', async () => {
+    window.history.pushState({}, '', `/editions/${UUID}/pages/0`)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) // the page never comes
+    render(<App />)
+
+    const status = await screen.findByRole('status')
+
+    expect(status).toHaveTextContent('Loading the page')
+    const image = document.querySelector('img.page-loading-image')!
+    expect(image).toHaveAttribute('src', '/skull-crossbones-loop.gif')
+    expect(image).toHaveAttribute('alt', '') // only to look at: the text says it
+  })
+
+  it('shows the page, and no loop, when it has come', async () => {
+    await openPage()
+
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    expect(document.querySelector('.page-loading-image')).toBeNull()
   })
 })
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getMissingHyphens, type MissingHyphen } from './api'
+import { Loading } from './Loading'
 
 /** The page whose line ends are looked at. */
 export interface HyphenPage {
@@ -215,7 +216,7 @@ export function MissingHyphensReview({
       {!folded && (
         <div className="review-body">
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the missing hyphens on this page …</p>
+            <Loading>Looking for the missing hyphens on this page …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && rows.length === 0 && (

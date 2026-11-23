@@ -4,6 +4,7 @@ import {
   updateEditionMetadata,
   type EditionMetadata,
 } from './api'
+import { Loading } from './Loading'
 
 type Loaded =
   | { kind: 'loading' }
@@ -140,7 +141,7 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
           </button>
         </header>
         <div className="review-body">
-          {loaded.kind === 'loading' && <p role="status">Loading the metadata …</p>}
+          {loaded.kind === 'loading' && <Loading>Loading the metadata …</Loading>}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && (
             <>

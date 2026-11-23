@@ -164,6 +164,52 @@ button {
   color: #555;
 }
 
+/* The page of an edition that is opened: an animated skull while it loads. */
+.page-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  color: #555;
+}
+
+/* on the main page it is on a sheet, over the picture */
+.main-page .page-loading {
+  width: fit-content;
+  margin: 2rem auto;
+  padding: 1.25rem 2rem;
+  background: rgba(255, 252, 244, 0.88);
+  border-radius: 1rem;
+}
+
+.page-loading-image {
+  display: block;
+  max-width: 40vw;
+  height: auto;
+}
+
+.page-loading p {
+  margin: 0;
+}
+
+/* A line of loading text with the small skull before it. */
+.loading-text {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.loading-text-image {
+  flex: none;
+  height: auto;
+}
+
+/* the small skull in the indicator that is laid over the scan while it loads */
+.scan-loading-image {
+  display: block;
+  height: auto;
+}
+
 .spinner {
   width: 1.5rem;
   height: 1.5rem;

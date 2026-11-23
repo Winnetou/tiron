@@ -4,6 +4,7 @@ import {
   type PageNumberMatch,
   type SimilarPageNumbers,
 } from './api'
+import { Loading } from './Loading'
 
 /*
  * Only the page number is looked for on the other pages for now. The same box can
@@ -168,7 +169,7 @@ export function SimilarPageNumbersReview({ example, onApprove, onClose }: Props)
         </header>
         <div className="review-body">
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the same page number in the edition …</p>
+            <Loading>Looking for the same page number in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && (

@@ -26,6 +26,7 @@ import {
 } from './api'
 import EditionList from './EditionList'
 import EditionMetadataPanel from './EditionMetadataPanel'
+import { PageLoading } from './Loading'
 import {
   SimilarEntitiesReview,
   type EntityExample,
@@ -766,7 +767,7 @@ export default function App() {
   if (status.kind === 'loading') {
     return (
       <main>
-        <p role="status">Loading the page …</p>
+        <PageLoading>Loading the page …</PageLoading>
       </main>
     )
   }

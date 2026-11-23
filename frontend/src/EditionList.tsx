@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getEditions, pageUrl, type EditionsPage, DEFAULT_PAGE_NUMBER } from './api'
 import { editionLabel } from './editionLabel'
+import { PageLoading } from './Loading'
 
 /** The page of the list that the address names (?page=, from 1), or the first. */
 function listPageFromAddress(): number {
@@ -46,7 +47,9 @@ export default function EditionList() {
   }
 
   if (state.kind === 'error') return <p role="alert">{state.message}</p>
-  if (state.kind === 'loading') return <p role="status">Loading the editions …</p>
+  if (state.kind === 'loading') {
+    return <PageLoading>Loading the editions …</PageLoading>
+  }
 
   const { items, pages } = state.list
   return (

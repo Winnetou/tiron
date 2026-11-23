@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getRubbishLines, type PageRubbish, type RubbishLine } from './api'
+import { Loading } from './Loading'
 
 /** The edition whose lines are looked at. */
 export interface RubbishEdition {
@@ -187,7 +188,7 @@ export function RubbishReview({ edition, onApprove, onClose }: Props) {
         </header>
         <div className="review-body">
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the OCR rubbish in the edition …</p>
+            <Loading>Looking for the OCR rubbish in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && rows.length === 0 && (
