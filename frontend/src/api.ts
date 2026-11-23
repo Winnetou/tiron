@@ -208,6 +208,33 @@ export function tagEntity(
 }
 
 /**
+ * Calls POST /spellcheck/suggestions: the best replacements for the misspelled
+ * word of `text` at `start` to `end`, closest first (at most three). The backend
+ * gives none for a word at the start or the end of a line, as it may be a part of a
+ * word that is split over two lines, nor for a word that is spelled correctly.
+ */
+export async function getSpellingSuggestions(
+  text: string,
+  word: { start: number; end: number },
+  editionId?: string,
+): Promise<string[]> {
+  const { suggestions } = await request<{ suggestions: string[] }>(
+    '/spellcheck/suggestions',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        start: word.start,
+        end: word.end,
+        ...(editionId === undefined ? {} : { edition_id: editionId }),
+      }),
+    },
+  )
+  return suggestions
+}
+
+/**
  * Calls POST /spellcheck: the backend lists every word of a plain text, with
  * its character offsets and whether it is spelled correctly. The backend alone
  * decides what a word is. With the edition the text is from, the spellings that

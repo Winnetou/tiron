@@ -176,6 +176,11 @@ interface WordEditorProps {
   nextLineKind?: LineGap
   /** The spelling is legal in this edition (only offered for a misspelled word). */
   onLegal: () => void
+  /**
+   * The best replacements for the word, closest first (the backend gives none for
+   * a word at the start or the end of a line). Asked for a misspelled word only.
+   */
+  onSuggest?: (word: Word) => Promise<string[]>
   onCancel: () => void
 }
 
@@ -183,7 +188,9 @@ interface WordEditorProps {
  * The word as a text field, to be edited in place. Enter confirms and Escape
  * (or leaving the field) cancels. Nothing is sent if the text is empty or is
  * the same as before. A misspelled word also has a "Legal spelling" button next
- * to the field, to say that the spelling as it is, is legal in the edition.
+ * to the field, to say that the spelling as it is, is legal in the edition, and
+ * the replacements that the backend suggests (if it does), each a button that
+ * corrects the word to it.
  * ("Legal", not "correct": the dictionary is a modern one, and what was correct
  * in the 19th century often is not anymore; we have no better word for it.)
  * Next to a word that has another one right before or after it, with only a
@@ -208,9 +215,24 @@ function WordEditor({
   previousLineKind = 'break',
   nextLineKind = 'break',
   onLegal,
+  onSuggest,
   onCancel,
 }: WordEditorProps) {
   const [value, setValue] = useState(word.text)
+  // The replacements for a misspelled word. If they cannot be had the user can still
+  // type the word, so a failure shows nothing.
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  useEffect(() => {
+    if (word.correct || !onSuggest) return
+    let current = true
+    onSuggest(word)
+      .then((found) => current && setSuggestions(found))
+      .catch(() => current && setSuggestions([]))
+    return () => {
+      current = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [word])
   const input = useRef<HTMLInputElement>(null)
   // The buttons float over the text, under the field, and take no room in the
   // line. Near the edge of the box they are put on the other side instead.
@@ -278,6 +300,19 @@ function WordEditor({
         role="group"
         aria-label={`Actions for "${word.text}"`}
       >
+        {suggestions.map((suggestion) => (
+          <button
+            key={suggestion}
+            type="button"
+            className="suggestion-button"
+            title={`Correct "${word.text}" to "${suggestion}"`}
+            disabled={busy}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onSubmit(suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
         {!word.correct && (
           <button
             type="button"
@@ -381,6 +416,11 @@ interface Props {
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
   /**
+   * The best replacements for a misspelled word, closest first: shown as buttons
+   * when the word is edited. Without it there are none.
+   */
+  onSuggestSpelling?: (word: Word) => Promise<string[]>
+  /**
    * The user selected some text and chose a label for it: an entity that the
    * recognition did not find. Without it (outside the NER view) a selection
    * does nothing.
@@ -440,6 +480,7 @@ export default function PageText({
   onReject,
   onCorrectWord,
   onLegalSpelling,
+  onSuggestSpelling,
   onCreateEntity,
   onAddToken,
   onJoinWords,
@@ -638,6 +679,7 @@ export default function PageText({
           }
           nextLineKind={next ? (lineGap(word, next) ?? undefined) : undefined}
           onLegal={() => onLegalSpelling(word)}
+          onSuggest={onSuggestSpelling}
           onCancel={() => setEditing(null)}
         />
       )

@@ -694,6 +694,7 @@ button {
   box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
 }
 
+.suggestion-button,
 .legal-button,
 .join-button {
   padding: 0.1rem 0.45rem;
@@ -707,6 +708,15 @@ button {
   cursor: pointer;
 }
 
+/* A replacement that the backend suggests: the one to click, so it stands out. */
+.suggestion-button {
+  border-color: #2e7d32;
+  background: #e6f4ea;
+  color: #1b5e20;
+  font-weight: 600;
+}
+
+.suggestion-button:disabled,
 .legal-button:disabled,
 .join-button:disabled {
   opacity: 0.5;

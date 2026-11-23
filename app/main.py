@@ -24,7 +24,13 @@ from app.persistence.ontology import (
 )
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
-from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools.spelling import (
+    NotAWord,
+    SpellcheckUnavailable,
+    check_words,
+    get_checker,
+    suggest_spelling,
+)
 from app.text_tools.spelling_chunks import InvalidChunk, chunk_substrings
 from app.text_tools.tei_xml import (
     CannotInsert,
@@ -69,6 +75,8 @@ from app.view_models import (
     SectionMark,
     SpellcheckRequest,
     SpellcheckResult,
+    SuggestionRequest,
+    Suggestions,
     TeiEntities,
     TeiSections,
     TeiText,
@@ -531,6 +539,43 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
     except SpellcheckUnavailable as exc:
         logger.error(
             "Spellcheck requested, but the dictionary is not available: %s", exc
+        )
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@app.post("/spellcheck/suggestions", response_model=Suggestions)
+def spelling_suggestions(request: SuggestionRequest) -> Suggestions:
+    """The best replacements for a misspelled word, as an ordinary spell check
+    suggests them: closest first, at most three (Hunspell's suggestions for the
+    Polish dictionary), so that the user can click one instead of typing the word.
+
+    The body is `{"text": "...", "start": 4, "end": 9}`: the plain text of the page
+    and the word in it, `text[start:end]`, with offsets counted in code points as
+    `POST /spellcheck` gives them (and the optional `edition_id`, whose legal
+    spellings count as correct). The response is `{"suggestions": ["kotka", ...]}`.
+
+    **Only a word in the middle of its line is given any**: the first and the last
+    word of a line may be the parts of a word that is split over two lines, and a
+    suggestion for them would be mostly wrong. The line is what is between two line
+    breaks. A word that is spelled correctly, or is legal in the edition, has none
+    either; the list is then empty. Each suggestion is one word, different from the
+    word. Nothing is stored.
+
+    422 if the characters at the offsets are not one word, 503 if the dictionary is
+    not available.
+    """
+    try:
+        legal = db.get_legal_spellings(request.edition_id) if request.edition_id else ()
+        return Suggestions(
+            suggestions=suggest_spelling(
+                request.text, request.start, request.end, legal
+            )
+        )
+    except NotAWord as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except SpellcheckUnavailable as exc:
+        logger.error(
+            "Suggestions requested, but the dictionary is not available: %s", exc
         )
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 

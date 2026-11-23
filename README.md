@@ -391,6 +391,37 @@ frontend sends the edition with every check.
   is not available the backend still starts, logs a warning, and the endpoint
   answers 503. The text can have up to 100,000 characters (422 if longer).
 
+### Suggesting the spelling of a word
+
+For a misspelled word the correction view offers the replacements that an ordinary
+spell check would: the closest ones, each a button that corrects the word to it, so
+that the user clicks instead of typing. `POST /spellcheck/suggestions` gives them:
+
+```json
+{"text": "Ala ma kótka tu", "start": 7, "end": 12}
+```
+
+`text` is the plain text of the page and `start`/`end` the word in it, counted in code
+points like the offsets of `POST /spellcheck` (the optional `edition_id` makes the legal
+spellings of the edition count as correct). The response is `{"suggestions": ["kotka",
+"kotką", "krótka"]}`: Hunspell's suggestions for the Polish dictionary, closest first,
+**at most three**, each one word and different from the word.
+
+- **Only a word in the middle of its line gets any.** The first and the last word of a
+  line (a line is what is between two line breaks) get none, and so does a word that is
+  alone on its line: they may be the parts of a word that is split over two lines
+  ("kó-" / "tka"), and a suggestion for them would be mostly wrong. A sign after the last
+  word does not make it mid-line (`"Ala ma kótka."`: `kótka` is the last word).
+- **A word that is spelled correctly, or is a legal spelling of the edition, gets none**
+  either; the list is then empty, and so it is when the dictionary has nothing to offer.
+- 422 if the characters at the offsets are not one word (a sign, part of a word, or
+  several words), 503 if the dictionary is not available. Nothing is stored.
+- **In the frontend**, the field that opens when a misspelled word is clicked asks for
+  the suggestions and shows them as green buttons next to "Legal spelling". A click
+  corrects the word exactly as if it was typed (the correction is recorded, and the
+  new spelling is made a legal one, as always). If there are none, or they cannot be
+  had, nothing is shown and the word can be typed as before.
+
 ### Correcting a word
 
 `POST /editions/{edition_id}/pages/{number}/corrections` replaces a word of the

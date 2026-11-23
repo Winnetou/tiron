@@ -105,6 +105,66 @@ def test_get_page_invalid_args(path):
     assert client.get(path).status_code == 422
 
 
+class TestSpellingSuggestions:
+    URL = "/spellcheck/suggestions"
+    TEXT = "Ala ma kótka tu\nkótka\nAla kótka"
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        class Checker:
+            def lookup(self, word):
+                return word in {"Ala", "ma", "tu", "kotka"}
+
+            def suggest(self, word):
+                yield from {"kótka": ["kotka", "kotką", "krótka", "kitka"]}.get(
+                    word, []
+                )
+
+        monkeypatch.setattr(spelling, "get_checker", lambda: Checker())
+
+    def post(self, start, end, **extra):
+        return client.post(
+            self.URL, json={"text": self.TEXT, "start": start, "end": end, **extra}
+        )
+
+    def test_gives_the_closest_replacements_of_a_word_in_the_middle_of_a_line(self):
+        response = self.post(7, 12)
+
+        assert response.status_code == 200
+        assert response.json() == {"suggestions": ["kotka", "kotką", "krótka"]}
+
+    def test_the_first_and_the_last_word_of_a_line_get_none(self):
+        alone = self.TEXT.index("\nkótka\n") + 1
+        last = self.TEXT.rindex("kótka")
+
+        assert self.post(alone, alone + 5).json() == {"suggestions": []}
+        assert self.post(last, last + 5).json() == {"suggestions": []}
+
+    def test_a_legal_spelling_of_the_edition_gets_none(self, monkeypatch):
+        monkeypatch.setattr(
+            db, "get_legal_spellings", mock.Mock(return_value={"kótka"})
+        )
+
+        response = self.post(7, 12, edition_id=str(uuid4()))
+
+        assert response.json() == {"suggestions": []}
+
+    def test_offsets_that_are_not_a_word_are_422(self):
+        assert self.post(0, 2).status_code == 422
+
+    @pytest.mark.parametrize("body", [{"start": 5, "end": 5}, {"start": 5, "end": 2}])
+    def test_bad_offsets_are_422(self, body):
+        assert client.post(self.URL, json={"text": "Ala", **body}).status_code == 422
+
+    def test_the_dictionary_not_available_is_503(self, monkeypatch):
+        def unavailable():
+            raise spelling.SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        assert self.post(7, 12).status_code == 503
+
+
 class TestEditionMetadata:
     META = EditionMetadata(
         id=uuid4(),

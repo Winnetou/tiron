@@ -111,6 +111,13 @@ interface Options {
   page?: (number: number) => Partial<Page> | Error
   /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
   tei?: (xml: string) => { text: string } | Error
+  /** Answer of POST /spellcheck/suggestions; defaults to no suggestion. */
+  suggest?: (body: {
+    text: string
+    start: number
+    end: number
+    edition_id?: string
+  }) => string[] | Error
   /** Answer of GET /editions/{id}/metadata; defaults to a book that is known. */
   metadata?: EditionMetadata | Error
   /** Answer of PATCH /editions/{id}/metadata; defaults to the fields changed. */
@@ -262,6 +269,12 @@ function fakeBackend(options: Options = {}) {
       const query = Object.fromEntries(new URLSearchParams(url.split('?')[1]))
       const answer = options.similar ? options.similar(query as never) : []
       return answer instanceof Error ? failure(404, answer) : reply(true, 200, answer)
+    }
+    if (url === '/spellcheck/suggestions') {
+      const answer = options.suggest ? options.suggest(body) : []
+      return answer instanceof Error
+        ? failure(503, answer)
+        : reply(true, 200, { suggestions: answer })
     }
     if (url === '/spellcheck') {
       const answer = options.spell ? options.spell(body.text) : []
@@ -542,6 +555,9 @@ function openMainPage(options?: Options, search = '') {
 
 const pageText = () => screen.getByRole('region', { name: 'Page text' })
 const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
+/** The calls, without the asks for suggestions that the editor of a misspelled word makes. */
+const withoutSuggestions = () =>
+  calls.filter((c) => !c.url.endsWith('/spellcheck/suggestions'))
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -3572,7 +3588,8 @@ describe('correcting a word', () => {
       await waitFor(() =>
         expect(pageText().textContent).toBe('Ala ma kota, a jej tey nie ma.'),
       )
-      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      // (the editor of the misspelled word asked for suggestions: not what is looked at)
+      expect(withoutSuggestions().map((c) => `${c.method} ${c.url}`)).toEqual([
         `POST /editions/${UUID}/pages/0/corrections`,
         // "jey" was misspelled, so its new spelling is also made legal
         `POST /editions/${UUID}/legal-spellings`,
@@ -5645,7 +5662,7 @@ describe('legal spellings', () => {
       await edit('jey', 'jeyy')
 
       await waitFor(() => expect(legalCalls()).toHaveLength(1))
-      expect(calls.map((c) => `${c.method} ${c.url}`).slice(0, 2)).toEqual([
+      expect(withoutSuggestions().map((c) => `${c.method} ${c.url}`).slice(0, 2)).toEqual([
         `POST /editions/${UUID}/pages/0/corrections`,
         `POST /editions/${UUID}/legal-spellings`,
       ])
@@ -5671,7 +5688,7 @@ describe('legal spellings', () => {
       await edit('jey', 'jeyy')
 
       await waitFor(() => expect(pageText().textContent).toContain('jeyy'))
-      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      expect(withoutSuggestions().map((c) => `${c.method} ${c.url}`)).toEqual([
         `POST /editions/${UUID}/pages/0/corrections`,
         `POST /editions/${UUID}/legal-spellings`,
         'POST /tei/text',
@@ -8671,5 +8688,92 @@ describe('editing the metadata of the edition', () => {
     await userEvent.keyboard('{Escape}')
 
     expect(panel()).toBeNull()
+  })
+})
+
+describe('suggestions for a misspelled word', () => {
+  const TEXT = 'Ala ma kota, a jey tey nie ma. Jey!'
+  const WRONG = ['jey', 'Jey', 'tey']
+  const open = (extra: Options = {}) =>
+    openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text, WRONG),
+      ...extra,
+    }).then(() =>
+      waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0)),
+    )
+  const word = (text: string) => screen.getAllByText(text, { selector: '.word' })[0]
+  const suggestionCalls = () =>
+    calls.filter((c) => c.url.endsWith('/spellcheck/suggestions'))
+  const suggestionButtons = () =>
+    screen
+      .queryAllByRole('button')
+      .filter((button) => button.classList.contains('suggestion-button'))
+      .map((button) => button.textContent)
+
+  it('asks the backend for the word, with its offsets, the text and the edition', async () => {
+    await open({ suggest: () => ['jej'] })
+
+    await userEvent.click(word('jey'))
+
+    await waitFor(() => expect(suggestionCalls()).toHaveLength(1))
+    expect(suggestionCalls()[0].method).toBe('POST')
+    expect(suggestionCalls()[0].body).toEqual({
+      text: TEXT,
+      start: TEXT.indexOf('jey'),
+      end: TEXT.indexOf('jey') + 3,
+      edition_id: UUID,
+    })
+  })
+
+  it('shows what it gives as buttons, closest first', async () => {
+    await open({ suggest: () => ['jej', 'jeż', 'bej'] })
+
+    await userEvent.click(word('jey'))
+
+    await waitFor(() => expect(suggestionButtons()).toEqual(['jej', 'jeż', 'bej']))
+  })
+
+  it('a click on one corrects the word to it, as if it was typed', async () => {
+    await open({ suggest: () => ['jej', 'jeż'] })
+    await userEvent.click(word('jey'))
+    await waitFor(() => expect(suggestionButtons()).toEqual(['jej', 'jeż']))
+
+    await userEvent.click(screen.getByRole('button', { name: 'jej' }))
+
+    await waitFor(() => expect(pageText().textContent).toContain('a jej tey'))
+    const correction = calls.find((c) => c.url.endsWith('/corrections'))!
+    expect(correction.body).toMatchObject({ before: 'jey', after: 'jej' })
+  })
+
+  it('shows none when the backend gives none (the word is at the end of a line, say)', async () => {
+    await open({ suggest: () => [] })
+
+    await userEvent.click(word('jey'))
+
+    await waitFor(() => expect(suggestionCalls()).toHaveLength(1))
+    expect(suggestionButtons()).toEqual([])
+    expect(screen.getByRole('button', { name: 'Legal spelling' })).toBeInTheDocument()
+  })
+
+  it('does not ask for a word that is spelled correctly', async () => {
+    await open({ suggest: () => ['x'] })
+
+    await userEvent.click(word('kota'))
+
+    expect(screen.getByRole('textbox', { name: /^Correct / })).toBeInTheDocument()
+    expect(suggestionCalls()).toEqual([])
+    expect(suggestionButtons()).toEqual([])
+  })
+
+  it('the word can still be typed when the suggestions cannot be had', async () => {
+    await open({ suggest: () => new Error('The dictionary is not available') })
+
+    await userEvent.click(word('jey'))
+
+    await waitFor(() => expect(suggestionCalls()).toHaveLength(1))
+    expect(suggestionButtons()).toEqual([])
+    expect(screen.getByRole('textbox', { name: /^Correct / })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

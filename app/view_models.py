@@ -227,6 +227,27 @@ class SpellcheckResult(BaseModel):
     words: list[Word]
 
 
+class SuggestionRequest(BaseModel):
+    """The word of `text` at `start` to `end` (offsets, counted in code points) to
+    suggest a spelling for; `edition_id` is the edition the text is from, whose legal
+    spellings count as correct."""
+
+    text: str = Field(max_length=100_000)
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    edition_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def check_range(self) -> SuggestionRequest:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class Suggestions(BaseModel):
+    suggestions: list[str]
+
+
 class WordCorrection(BaseModel):
     """A word of the text of a page that the user corrected: the characters
     `start` to `end`, which are `before`, become `after`."""

@@ -202,3 +202,74 @@ def check_words(
         )
     logger.debug("%d words in %d characters", len(words), len(text))
     return words
+
+
+# The most suggestions that are given for a word.
+_MOST_SUGGESTIONS = 3
+
+
+class NotAWord(ValueError):
+    """The characters at the offsets are not one word."""
+
+
+def _is_mid_line(text: str, tokens: list[re.Match[str]], index: int) -> bool:
+    """Is the token a word that has another word before it and another after it in
+    its line (the line is what is between two line breaks)? The first and the last
+    word of a line are not: a word at the end of a line may be a part of a word that
+    is split over two lines, and the one at the start the rest of it."""
+    token = tokens[index]
+    line_start = text.rfind("\n", 0, token.start()) + 1
+    line_end = text.find("\n", token.end())
+    if line_end < 0:
+        line_end = len(text)
+    words = [
+        other
+        for other in tokens
+        if line_start <= other.start()
+        and other.end() <= line_end
+        and _WORD.fullmatch(other.group())
+    ]
+    return words[0].start() != token.start() and words[-1].start() != token.start()
+
+
+def suggest_spelling(
+    text: str, start: int, end: int, legal: Collection[str] = ()
+) -> list[str]:
+    """The best replacements, closest first, for the word of `text` at `start` to
+    `end` (offsets, counted in code points), as an ordinary spell check would
+    suggest them (Hunspell's suggestions for the Polish dictionary).
+
+    Only a word that is spelled wrong (see `check_words`; the `legal` spellings of
+    the edition count as correct) and is in the middle of its line is given any:
+    the first and the last word of a line are left alone, as they may be the parts
+    of a word split over two lines, and a suggestion for them would be mostly wrong.
+    No suggestion is given for a word that is correct either. The suggestions are
+    single words (not two), different from the word. The list is empty if there is
+    nothing to suggest.
+
+    Raises NotAWord if the characters at the offsets are not one word, and
+    SpellcheckUnavailable if the dictionary cannot be loaded.
+    """
+    tokens = tokenize(text)
+    found = [
+        index
+        for index, match in enumerate(tokens)
+        if match.start() == start and match.end() == end
+    ]
+    if not found or not _WORD.fullmatch(tokens[found[0]].group()):
+        raise NotAWord("There is no word at these offsets")
+    index = found[0]
+    word = tokens[index].group()
+    if word_verdict(legal)(word) or not _is_mid_line(text, tokens, index):
+        return []
+    suggestions: list[str] = []
+    for suggestion in get_checker().suggest(word):
+        if (
+            suggestion != word
+            and suggestion not in suggestions
+            and _WORD.fullmatch(suggestion)
+        ):
+            suggestions.append(suggestion)
+        if len(suggestions) == _MOST_SUGGESTIONS:
+            break
+    return suggestions
