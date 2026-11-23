@@ -38,6 +38,18 @@ main.main-page {
   max-height: 88vh;
 }
 
+.metadata-group {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.9rem 0.25rem;
+  border: 1px solid #d8d8d8;
+  border-radius: 0.9rem;
+}
+
+.metadata-group legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+
 .metadata-field {
   display: flex;
   flex-direction: column;

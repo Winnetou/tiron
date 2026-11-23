@@ -34,11 +34,13 @@ interface Props {
 }
 
 /**
- * The panel where the metadata of the edition is edited, for when what was fetched
- * from Polona is not complete (`GET` and `PATCH /editions/{id}/metadata`): the
- * author and title of the book, and the place and year of the edition. Save sends
- * the four fields; an empty one clears it. The backend is the judge of what is
- * valid (the year from 1500 to 2030): its reason is shown if it refuses.
+ * The panel where what is known of the edition is edited, for when what was fetched
+ * from Polona is not complete (`GET` and `PATCH /editions/{id}/metadata`). It has two
+ * parts: the work, its author and title (the work is the book, and the editions that
+ * share it have the change too, which the panel says), and the edition itself, its
+ * place and year. Save sends the fields that were changed; an empty one clears it.
+ * The backend is the judge of what is valid (the year from 1500 to 2030): its reason
+ * is shown if it refuses.
  */
 export default function EditionMetadataPanel({ editionId, onClose }: Props) {
   const [loaded, setLoaded] = useState<Loaded>({ kind: 'loading' })
@@ -87,11 +89,13 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
   }
 
   const saved = loaded.kind === 'done' ? fieldsOf(loaded.saved) : null
-  const changed =
-    saved !== null &&
-    (Object.keys(fields) as (keyof Fields)[]).some(
-      (name) => fields[name].trim() !== saved[name],
-    )
+  const changedNames =
+    saved === null
+      ? []
+      : (Object.keys(fields) as (keyof Fields)[]).filter(
+          (name) => fields[name].trim() !== saved[name],
+        )
+  const changed = changedNames.length > 0
   const valid = isYear(fields.year)
 
   async function save(event: FormEvent) {
@@ -100,12 +104,14 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const metadata = await updateEditionMetadata(editionId, {
-        author: fields.author.trim() || null,
-        title: fields.title.trim() || null,
-        place: fields.place.trim() || null,
-        year: fields.year.trim() === '' ? null : Number(fields.year.trim()),
-      })
+      // only what was changed: the others are left as they are
+      const sent: Parameters<typeof updateEditionMetadata>[1] = {}
+      for (const name of changedNames) {
+        const text = fields[name].trim()
+        if (name === 'year') sent.year = text === '' ? null : Number(text)
+        else sent[name] = text || null
+      }
+      const metadata = await updateEditionMetadata(editionId, sent)
       setFields(fieldsOf(metadata))
       setLoaded({ kind: 'done', saved: metadata })
       setDone(true)
@@ -115,6 +121,8 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
       setBusy(false)
     }
   }
+
+  const others = loaded.kind === 'done' ? loaded.saved.work_editions - 1 : 0
 
   return (
     <div className="review-backdrop">
@@ -137,52 +145,64 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
           {loaded.kind === 'done' && (
             <>
               <p className="structure-hint">
-                The metadata fetched from Polona is not always complete. The author as
-                “Last name, First names (years)”. An empty field is cleared.
+                The metadata fetched from Polona is not always complete. An empty field
+                is cleared.
               </p>
-              <label className="metadata-field">
-                Author
-                <input
-                  className="styled-input"
-                  value={fields.author}
-                  maxLength={300}
-                  disabled={busy}
-                  onChange={(event) => change('author', event.target.value)}
-                />
-              </label>
-              <label className="metadata-field">
-                Title
-                <input
-                  className="styled-input"
-                  value={fields.title}
-                  maxLength={1000}
-                  disabled={busy}
-                  onChange={(event) => change('title', event.target.value)}
-                />
-              </label>
-              <label className="metadata-field">
-                Place
-                <input
-                  className="styled-input"
-                  value={fields.place}
-                  maxLength={300}
-                  disabled={busy}
-                  onChange={(event) => change('place', event.target.value)}
-                />
-              </label>
-              <label className="metadata-field">
-                Year
-                <input
-                  className="styled-input"
-                  value={fields.year}
-                  inputMode="numeric"
-                  maxLength={4}
-                  size={6}
-                  disabled={busy}
-                  aria-invalid={!valid}
-                  onChange={(event) => change('year', event.target.value)}
-                />
-              </label>
+              <fieldset className="metadata-group">
+                <legend>Work</legend>
+                <p className="structure-hint">
+                  The author as “Last name, First names (years)”.{' '}
+                  {others > 0
+                    ? `The work has ${others} other ${others === 1 ? 'edition' : 'editions'}, which are changed too.`
+                    : 'No other edition has this work.'}
+                </p>
+                <label className="metadata-field">
+                  Author
+                  <input
+                    className="styled-input"
+                    value={fields.author}
+                    maxLength={300}
+                    disabled={busy}
+                    onChange={(event) => change('author', event.target.value)}
+                  />
+                </label>
+                <label className="metadata-field">
+                  Title
+                  <input
+                    className="styled-input"
+                    value={fields.title}
+                    maxLength={1000}
+                    disabled={busy}
+                    onChange={(event) => change('title', event.target.value)}
+                  />
+                </label>
+              </fieldset>
+              <fieldset className="metadata-group">
+                <legend>This edition</legend>
+                <label className="metadata-field">
+                  Place
+                  <input
+                    className="styled-input"
+                    value={fields.place}
+                    maxLength={300}
+                    disabled={busy}
+                    onChange={(event) => change('place', event.target.value)}
+                  />
+                </label>
+                <label className="metadata-field">
+                  Year
+                  <input
+                    className="styled-input"
+                    value={fields.year}
+                    inputMode="numeric"
+                    maxLength={4}
+                    size={6}
+                    disabled={busy}
+                    aria-invalid={!valid}
+                    onChange={(event) => change('year', event.target.value)}
+                  />
+                </label>
+              </fieldset>
               {!valid && (
                 <p role="alert" className="review-error">
                   The year is a number, like 1890.

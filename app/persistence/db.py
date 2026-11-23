@@ -139,6 +139,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
 """
 
 
+class WorkExists(ValueError):
+    """Another work has the author and title that were asked for."""
+
+
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 
@@ -235,11 +239,14 @@ class Database:
         return Edition.model_validate(row) if row else None
 
     def get_edition_metadata(self, edition_id: UUID) -> EditionMetadata | None:
-        """The author and title of the edition's work, and its place and year; None
-        if there is no such edition."""
+        """What is known of an edition: the `author` and `title` of its work (and
+        the work's id, and how many editions the work has), and the `place` and `year`
+        of the edition itself. None if there is no such edition."""
         row = self.conn.execute(
-            "SELECT e.id, w.author, w.title, e.place, e.year FROM editions e"
-            " JOIN works w ON w.id = e.work_id WHERE e.id = %s",
+            "SELECT e.id, e.work_id, w.author, w.title, e.place, e.year,"
+            " (SELECT count(*) FROM editions o WHERE o.work_id = e.work_id)"
+            " AS work_editions"
+            " FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = %s",
             (edition_id,),
         ).fetchone()
         return EditionMetadata.model_validate(row) if row else None
@@ -247,61 +254,46 @@ class Database:
     def update_edition_metadata(
         self, edition_id: UUID, changes: dict[str, str | int | None]
     ) -> EditionMetadata | None:
-        """Change the metadata of an edition: `changes` has some of `author`,
+        """Change what is known of an edition: `changes` has some of `author`,
         `title`, `place` and `year` with their new values (None clears one); the
         others are left as they are. Returns the metadata as it is now, or None if
         there is no such edition.
 
-        `place` and `year` are of the edition. `author` and `title` are of its work,
-        which other editions may share, so the work is not changed: the edition is
-        moved to the work that has the new author and title (the one that is stored
-        already, if there is one: a work is one per author and title, case does not
-        matter), and a work that no edition has any more is deleted.
+        `place` and `year` are changed in the edition. `author` and `title` are
+        changed in its work, in place: the other editions of the work have the
+        change too. A work is one per author and title (case does not matter), so
+        if another work has the new author and title already nothing is changed
+        and WorkExists is raised.
         """
         unknown = set(changes) - {"author", "title", "place", "year"}
         if unknown:
             raise ValueError(f"Cannot change {', '.join(sorted(unknown))}")
-        with self.conn.transaction():
-            row = self.conn.execute(
-                "SELECT e.work_id, w.author, w.title FROM editions e"
-                " JOIN works w ON w.id = e.work_id WHERE e.id = %s FOR UPDATE OF e",
-                (edition_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            old_work = row["work_id"]
-            author = changes.get("author", row["author"])
-            title = changes.get("title", row["title"])
-            if (author, title) != (row["author"], row["title"]):
-                found = None
-                if author is not None and title is not None:
-                    found = self.conn.execute(
-                        "SELECT id FROM works"
-                        " WHERE lower(author) = lower(%s) AND lower(title) = lower(%s)",
-                        (author, title),
-                    ).fetchone()
-                if found is not None:
-                    work_id = found["id"]
-                else:
-                    work_id = self.create_work(Work(author=author, title=title)).id
-                self.conn.execute(
-                    "UPDATE editions SET work_id = %s WHERE id = %s",
-                    (work_id, edition_id),
-                )
-                if work_id != old_work:
-                    self.conn.execute(
-                        "DELETE FROM works WHERE id = %s AND NOT EXISTS"
-                        " (SELECT 1 FROM editions WHERE work_id = %s)",
-                        (old_work, old_work),
-                    )
-            for column in ("place", "year"):
-                if column in changes:
-                    self.conn.execute(
-                        sql.SQL("UPDATE editions SET {} = %s WHERE id = %s").format(
-                            sql.Identifier(column)
-                        ),
-                        (changes[column], edition_id),
-                    )
+        try:
+            with self.conn.transaction():
+                row = self.conn.execute(
+                    "SELECT e.work_id FROM editions e WHERE e.id = %s FOR UPDATE",
+                    (edition_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                for column in ("author", "title"):
+                    if column in changes:
+                        self.conn.execute(
+                            sql.SQL("UPDATE works SET {} = %s WHERE id = %s").format(
+                                sql.Identifier(column)
+                            ),
+                            (changes[column], row["work_id"]),
+                        )
+                for column in ("place", "year"):
+                    if column in changes:
+                        self.conn.execute(
+                            sql.SQL("UPDATE editions SET {} = %s WHERE id = %s").format(
+                                sql.Identifier(column)
+                            ),
+                            (changes[column], edition_id),
+                        )
+        except psycopg.errors.UniqueViolation as exc:
+            raise WorkExists("Another work has this author and title already") from exc
         return self.get_edition_metadata(edition_id)
 
     # Pages

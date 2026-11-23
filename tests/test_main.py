@@ -12,6 +12,7 @@ import app.page_provider as page_provider
 import app.text_tools.ner as ner
 import app.text_tools.spelling as spelling
 from app.main import app, db
+from app.persistence.db import WorkExists
 from app.persistence.ontology import Edition, EditionMetadata, LegalSpelling, Page
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import NerModelUnavailable
@@ -106,7 +107,13 @@ def test_get_page_invalid_args(path):
 
 class TestEditionMetadata:
     META = EditionMetadata(
-        id=uuid4(), author="Prus, Bolesław", title="Lalka", place="Warszawa", year=1890
+        id=uuid4(),
+        work_id=uuid4(),
+        work_editions=2,
+        author="Prus, Bolesław",
+        title="Lalka",
+        place="Warszawa",
+        year=1890,
     )
 
     def url(self, edition_id=None):
@@ -122,6 +129,8 @@ class TestEditionMetadata:
         assert response.status_code == 200
         assert response.json() == {
             "id": str(self.META.id),
+            "work_id": str(self.META.work_id),
+            "work_editions": 2,
             "author": "Prus, Bolesław",
             "title": "Lalka",
             "place": "Warszawa",
@@ -164,6 +173,18 @@ class TestEditionMetadata:
         monkeypatch.setattr(db, "update_edition_metadata", mock.Mock(return_value=None))
 
         assert client.patch(self.url(), json={"year": 1890}).status_code == 404
+
+    def test_a_work_that_exists_already_is_a_409(self, monkeypatch):
+        monkeypatch.setattr(
+            db,
+            "update_edition_metadata",
+            mock.Mock(side_effect=WorkExists("Another work has this author and title")),
+        )
+
+        response = client.patch(self.url(), json={"title": "Faraon"})
+
+        assert response.status_code == 409
+        assert "Another work" in response.json()["detail"]
 
     @pytest.mark.parametrize(
         "body",

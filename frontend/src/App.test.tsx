@@ -506,6 +506,8 @@ function fakeBackend(options: Options = {}) {
 /** The metadata that the fake backend has of the edition. */
 const METADATA: EditionMetadata = {
   id: UUID,
+  work_id: '11111111-1111-4111-8111-111111111111',
+  work_editions: 3,
   author: 'Prus, Bolesław (1847-1912)',
   title: 'Lalka',
   place: null,
@@ -8529,6 +8531,33 @@ describe('editing the metadata of the edition', () => {
     expect(panel()).toHaveClass('review-styled') // the look of the other boxes
   })
 
+  it('has two parts: the work (author and title) and the edition (place and year)', async () => {
+    await open()
+    await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
+
+    const work = within(screen.getByRole('group', { name: 'Work' }))
+    const edition = within(screen.getByRole('group', { name: 'This edition' }))
+
+    expect(work.getByRole('textbox', { name: 'Author' })).toBeInTheDocument()
+    expect(work.getByRole('textbox', { name: 'Title' })).toBeInTheDocument()
+    expect(edition.getByRole('textbox', { name: 'Place' })).toBeInTheDocument()
+    expect(edition.getByRole('textbox', { name: 'Year' })).toBeInTheDocument()
+  })
+
+  it('says that the other editions of the work are changed too', async () => {
+    await open()
+
+    expect(
+      await screen.findByText(/The work has 2 other editions, which are changed too/),
+    ).toBeInTheDocument()
+  })
+
+  it('says so when no other edition has the work', async () => {
+    await open({ metadata: { ...METADATA, work_editions: 1 } })
+
+    expect(await screen.findByText(/No other edition has this work/)).toBeInTheDocument()
+  })
+
   it('Save waits for a change', async () => {
     await open()
     await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
@@ -8539,7 +8568,7 @@ describe('editing the metadata of the edition', () => {
     expect(saveButton()).toBeEnabled()
   })
 
-  it('saves the four fields with PATCH, an empty one as null, and says so', async () => {
+  it('saves only the fields that were changed with PATCH, an empty one as null, and says so', async () => {
     await open()
     await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
 
@@ -8550,12 +8579,7 @@ describe('editing the metadata of the edition', () => {
     expect(await screen.findByText('✓ Saved')).toBeInTheDocument()
     const patch = metadataCalls().find((c) => c.method === 'PATCH')!
     expect(patch.url).toBe(`/editions/${UUID}/metadata`)
-    expect(patch.body).toEqual({
-      author: 'Prus, Bolesław (1847-1912)',
-      title: null,
-      place: 'Warszawa',
-      year: 1890,
-    })
+    expect(patch.body).toEqual({ title: null, place: 'Warszawa' })
     expect(field('Place')).toHaveValue('Warszawa')
     expect(saveButton()).toBeDisabled() // nothing changed since
   })

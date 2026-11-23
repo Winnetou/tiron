@@ -22,11 +22,14 @@ class Edition(BaseModel):
 
 
 class EditionMetadata(BaseModel):
-    """What is known of an edition and its book: the `author` and `title` (of its
-    work), and the `place` and `year` of the edition. Each is None if it is not
+    """What is known of an edition: the `author` and `title` belong to its work
+    (`work_id`; `work_editions` is how many editions the work has, this one
+    included), the `place` and `year` to the edition. Each is None if it is not
     known (the metadata fetched from Polona is not always complete)."""
 
     id: UUID
+    work_id: UUID
+    work_editions: int = Field(ge=1)
     author: str | None = None
     title: str | None = None
     place: str | None = None
