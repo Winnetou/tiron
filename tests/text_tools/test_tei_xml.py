@@ -15,6 +15,7 @@ from app.text_tools.tei_xml import (
     CannotTag,
     InvalidTei,
     TextChanged,
+    foreign_language_ranges,
     insert_text_at,
     join_lines_at,
     join_text_range,
@@ -940,10 +941,15 @@ def test_random_words_replaced_only_change_the_word(seed):
 
 
 def mark(
-    xml: str, selection: str, section: str, occurrence: int = 0, n: str | None = None
+    xml: str,
+    selection: str,
+    section: str,
+    occurrence: int = 0,
+    n: str | None = None,
+    lang: str | None = None,
 ) -> str:
     start, end = where(tei_xml_to_text(xml), selection, occurrence)
-    return mark_section(xml, start, end, section, selection, n)
+    return mark_section(xml, start, end, section, selection, n, lang)
 
 
 def text_without_spaces(xml: str) -> str:
@@ -1137,6 +1143,81 @@ class TestMarkSectionNotes:
         xml = mark(xml, "2 dwa", "note", n="2")
 
         delb.Document(mark(xml, "1 jeden 2 dwa", "note_group"))
+
+
+class TestMarkSectionQuote:
+    """A quotation in another language is <quote xml:lang="...">."""
+
+    def test_a_quotation_in_latin(self):
+        xml = mark(
+            generated("Jak mówił: mens sana in corpore sano."),
+            "mens sana",
+            "quote",
+            lang="la",
+        )
+
+        assert inner(xml) == (
+            '<p>Jak mówił: <quote xml:lang="la">mens sana</quote> in corpore sano.</p>'
+        )
+
+    def test_the_text_does_not_change(self):
+        original = generated("Jak mówił: mens sana in corpore sano.")
+        xml = mark(original, "mens sana", "quote", lang="la")
+
+        assert tei_xml_to_text(xml) == tei_xml_to_text(original)
+
+    @pytest.mark.parametrize("lang", ["ru", "en", "de", "es", "fr", "it", "la"])
+    def test_each_language_of_the_list(self, lang):
+        xml = mark(generated("Ala ma kota"), "ma", "quote", lang=lang)
+
+        assert f'<quote xml:lang="{lang}">ma</quote>' in xml
+
+    @pytest.mark.parametrize("lang", [None, "", "pl", "xx", "Latin"])
+    def test_a_language_that_is_not_in_the_list_is_refused(self, lang):
+        with pytest.raises(CannotTag, match="language"):
+            mark(generated("Ala ma kota"), "ma", "quote", lang=lang)
+
+    def test_a_language_is_only_for_a_quote(self):
+        with pytest.raises(CannotTag, match="language"):
+            mark(generated("Ala ma kota"), "ma", "header", lang="la")
+
+    def test_it_is_a_section_of_the_xml_with_its_tags(self):
+        xml = mark(generated("Ala ma kota"), "ma", "quote", lang="la")
+
+        (section,) = tei_xml_sections(xml)
+
+        assert section["open"] == '<quote xml:lang="la">'
+        assert section["close"] == "</quote>"
+        assert tei_xml_to_text(xml)[section["start"] : section["end"]] == "ma"
+
+    def test_marking_it_again_changes_nothing(self):
+        xml = mark(generated("Ala ma kota"), "ma", "quote", lang="la")
+
+        assert mark(xml, "ma", "quote", lang="la") == xml
+
+
+class TestForeignLanguageRanges:
+    def test_the_stretches_in_another_language(self):
+        xml = mark(
+            generated("Ala ma kota. Mens sana tu."), "Mens sana", "quote", lang="la"
+        )
+
+        assert foreign_language_ranges(xml) == [(13, 22)]
+
+    def test_none_without_a_quote(self):
+        assert foreign_language_ranges(generated("Ala ma kota")) == []
+
+    def test_a_quote_in_polish_is_not_foreign(self):
+        xml = str(generated("Ala ma kota")).replace(
+            "<p>Ala", '<p><quote xml:lang="pl">Ala</quote>'
+        )
+
+        assert foreign_language_ranges(xml) == []
+
+    def test_a_quote_without_a_language_is_not_foreign(self):
+        xml = generated("Ala ma kota").replace("<p>Ala", "<p><quote>Ala</quote>")
+
+        assert foreign_language_ranges(xml) == []
 
 
 class TestMarkSectionToc:

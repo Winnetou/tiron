@@ -797,6 +797,22 @@ class TestSimilarMisspellings:
 
         assert [t.text for m in found for t in m.tokens] == ["samśmy"]
 
+    def test_a_word_in_a_quotation_in_another_language_is_left_alone(self, db, edition):
+        xml = str(text_to_tei_xml("To samćj i jćj tu."))
+        xml = xml.replace("samćj", '<quote xml:lang="la">samćj</quote>')
+        db.create_page(
+            Page(
+                edition_id=edition.id,
+                number=1,
+                raw_ocr_content="x",
+                xml_content_corrected=xml,
+            )
+        )
+
+        (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [t.text for t in match.tokens] == ["jćj"]
+
     def test_pages_of_other_editions_are_not_looked_at(self, db, edition):
         work = db.create_work(Work(author="Other"))
         other = db.create_edition(Edition(work_id=work.id, year=1900))

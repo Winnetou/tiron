@@ -101,7 +101,7 @@ async function withText(page: Page): Promise<PageWithText> {
       text,
       textError: null,
       // the edition's legal spellings count as correct
-      words: await spellcheck(text, page.edition_id),
+      words: await spellcheck(text, page.edition_id, page.content),
       spellError: null,
     }
   } catch (error) {
@@ -259,7 +259,7 @@ export default function App() {
     if (status.kind !== 'done' || status.page.edition_id !== editionId) return
     const { text } = status
     try {
-      const words = await spellcheck(text, editionId)
+      const words = await spellcheck(text, editionId, status.page.content)
       setStatus((previous) =>
         previous.kind === 'done' && previous.text === text
           ? { ...previous, words, spellError: null }
@@ -556,7 +556,7 @@ export default function App() {
       let update: Pick<PageWithText, 'words' | 'spellError'>
       try {
         update = {
-          words: await spellcheck(text, page.edition_id),
+          words: await spellcheck(text, page.edition_id, page.content),
           spellError: null,
         }
       } catch (error) {
@@ -583,8 +583,11 @@ export default function App() {
     selection: TextSelection,
     section: SectionKind,
     n?: string,
+    lang?: string,
   ) {
-    return run(markSection(page.edition_id, page.number, selection, section, n), () =>
+    return run(
+      markSection(page.edition_id, page.number, selection, section, n, lang),
+      () =>
       setNotice(`Marked as ${sectionLabel(section).toLowerCase()}.`),
     )
   }
@@ -644,8 +647,8 @@ export default function App() {
           onCreateEntity={(selection, label) =>
             createEntity(page, selection, label)
           }
-          onMarkSection={(selection, section, n) =>
-            markPageSection(page, selection, section, n)
+          onMarkSection={(selection, section, n, lang) =>
+            markPageSection(page, selection, section, n, lang)
           }
           onFindPageNumbers={() =>
             setFindingPageNumbers({

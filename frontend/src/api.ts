@@ -204,18 +204,24 @@ export function tagEntity(
  * Calls POST /spellcheck: the backend lists every word of a plain text, with
  * its character offsets and whether it is spelled correctly. The backend alone
  * decides what a word is. With the edition the text is from, the spellings that
- * were made legal in that edition count as correct.
+ * were made legal in that edition count as correct. With the XML the text is of,
+ * the words in a quotation in another language are not checked.
  */
 export async function spellcheck(
   text: string,
   editionId?: string,
+  xml?: string,
 ): Promise<Word[]> {
   const { words } = await request<{ words: Word[] }>('/spellcheck', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(
-      editionId === undefined ? { text } : { text, edition_id: editionId },
-    ),
+    body: JSON.stringify({
+      text,
+      ...(editionId === undefined ? {} : { edition_id: editionId }),
+      // the XML the text is of: a quotation in another language is not Polish,
+      // so the backend does not check it
+      ...(xml === undefined ? {} : { xml }),
+    }),
   })
   return words
 }
@@ -673,6 +679,7 @@ export function markSection(
   selection: TextSelection,
   section: SectionKind,
   n?: string,
+  lang?: string,
 ): Promise<Page> {
   return request<Page>(`${pageUrl(editionId, number)}/sections`, {
     method: 'POST',
@@ -684,6 +691,8 @@ export function markSection(
       section,
       // the number of a note, if given: <note n="1">
       ...(n ? { n } : {}),
+      // the language of a quotation: <quote xml:lang="la">
+      ...(lang ? { lang } : {}),
     }),
   })
 }

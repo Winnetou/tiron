@@ -1903,6 +1903,7 @@ describe('structure view', () => {
         'Table of contents',
         'Note group',
         'Note',
+        'Quote in another language',
       ])
       expect(confirmButton()).toBeInTheDocument()
     })
@@ -2067,6 +2068,73 @@ describe('structure view', () => {
         end: 10,
         text: '84 KATEDRA',
         section,
+      })
+    })
+
+    describe('the language of a quote', () => {
+      const language = () => screen.queryByRole('combobox', { name: 'Language' })
+
+      it('is asked for only when the section is a quote, from a list', async () => {
+        await openStructure()
+        select('I. Alfa')
+        expect(language()).toBeNull()
+
+        await userEvent.selectOptions(dropdown(), 'Quote in another language')
+
+        expect(
+          within(language()!).getAllByRole('option').map((o) => o.textContent),
+        ).toEqual([
+          'Choose a language…',
+          'Latin',
+          'German',
+          'French',
+          'English',
+          'Italian',
+          'Spanish',
+          'Russian',
+        ])
+        await userEvent.selectOptions(dropdown(), 'Note')
+        expect(language()).toBeNull()
+      })
+
+      it('Confirm waits for a language', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Quote in another language')
+        expect(confirmButton()).toBeDisabled()
+
+        await userEvent.selectOptions(language()!, 'Latin')
+
+        expect(confirmButton()).toBeEnabled()
+      })
+
+      it('is sent as lang with the quote', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Quote in another language')
+        await userEvent.selectOptions(language()!, 'Latin')
+        await userEvent.click(confirmButton())
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).toEqual({
+          start: TEXT.indexOf('I. Alfa'),
+          end: TEXT.indexOf('I. Alfa') + 7,
+          text: 'I. Alfa',
+          section: 'quote',
+          lang: 'la',
+        })
+      })
+
+      it('is not sent when the section is changed to another after choosing it', async () => {
+        await openStructure()
+        select('I. Alfa')
+        await userEvent.selectOptions(dropdown(), 'Quote in another language')
+        await userEvent.selectOptions(language()!, 'German')
+        await userEvent.selectOptions(dropdown(), 'Note')
+        await userEvent.click(confirmButton())
+
+        await waitFor(() => expect(sectionCalls()).toHaveLength(1))
+        expect(sectionCalls()[0].body).not.toHaveProperty('lang')
       })
     })
 
@@ -2359,10 +2427,10 @@ describe('spell check', () => {
     ])
   })
 
-  it('sends the text, not the XML', async () => {
+  it('sends the text, and the XML it is of (a quotation in another language is not checked)', async () => {
     await open()
 
-    expect(spellCalls()[0].body).toEqual({ text: TEXT, edition_id: UUID })
+    expect(spellCalls()[0].body).toEqual({ text: TEXT, edition_id: UUID, xml: xmlOf(TEXT) })
   })
 
   it('shows the misspelled words in red and the others as they are', async () => {
@@ -2452,8 +2520,8 @@ describe('spell check', () => {
 
     await waitFor(() => expect(misspelled()).toEqual(['teksz']))
     expect(spellCalls().map((c) => c.body)).toEqual([
-      { text: TEXT, edition_id: UUID },
-      { text: 'Inny teksz', edition_id: UUID },
+      { text: TEXT, edition_id: UUID, xml: xmlOf(TEXT) },
+      { text: 'Inny teksz', edition_id: UUID, xml: xmlOf('Inny teksz') },
     ])
   })
 
@@ -3434,6 +3502,7 @@ describe('correcting a word', () => {
       expect(calls.at(-1)!.body).toEqual({
         text: 'Ala ma kota, a jej tey nie ma.',
         edition_id: UUID,
+        xml: expect.stringContaining('a jej tey nie ma.'),
       })
     })
 
@@ -5311,7 +5380,7 @@ describe('legal spellings', () => {
         `POST /editions/${UUID}/legal-spellings`,
         'POST /spellcheck', // the backend counts it as correct now
       ])
-      expect(calls[1].body).toEqual({ text: TEXT, edition_id: UUID })
+      expect(calls[1].body).toEqual({ text: TEXT, edition_id: UUID, xml: xmlOf(TEXT) })
     })
 
     it('does not decide what is red: it shows what the backend says', async () => {

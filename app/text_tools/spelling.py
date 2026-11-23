@@ -141,7 +141,11 @@ def word_verdict(legal: Collection[str] = ()) -> Callable[[str], bool]:
     return verdict
 
 
-def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
+def check_words(
+    text: str,
+    legal: Collection[str] = (),
+    ignore: Collection[tuple[int, int]] = (),
+) -> list[Word]:
     """Every word of `text`, in order, and whether it is spelled correctly.
 
     `start` and `end` are character offsets in `text` (counted in code points),
@@ -169,6 +173,11 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
     "JEY" correct (a sentence can start with it), but a legal "Jey" does not make
     "jey" correct.
 
+    `ignore` are stretches of `text` (`start`, `end`: offsets, counted in code
+    points) that are not Polish, a quotation in Latin: the words in them are not
+    checked, they are reported as correct. (The dictionary is Polish; what is in
+    another language is not misspelt for it.)
+
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """
     verdict = word_verdict(legal)
@@ -184,7 +193,10 @@ def check_words(text: str, legal: Collection[str] = ()) -> list[Word]:
     words = []
     for index, match in enumerate(tokens):
         word = match.group()
-        correct = whole[split[index][0]] if index in split else verdict(word)
+        if any(a <= match.start() and match.end() <= b for a, b in ignore):
+            correct = True
+        else:
+            correct = whole[split[index][0]] if index in split else verdict(word)
         words.append(
             Word(text=word, start=match.start(), end=match.end(), correct=correct)
         )

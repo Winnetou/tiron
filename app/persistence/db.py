@@ -58,6 +58,7 @@ from app.text_tools.spelling import check_words, tokenize, word_verdict
 from app.text_tools.spelling_chunks import find_chunk_matches
 from app.text_tools.tei_xml import (
     InvalidTei,
+    foreign_language_ranges,
     tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
@@ -396,12 +397,15 @@ class Database:
                 continue
             try:
                 text = tei_xml_to_text(row["xml_content_corrected"])
+                foreign = foreign_language_ranges(row["xml_content_corrected"])
             except InvalidTei:
                 continue
             candidates = tokens_with_cluster(text, fix)
             if not candidates:
                 continue
-            correct_here = {w.start: w.correct for w in check_words(text, legal)}
+            correct_here = {
+                w.start: w.correct for w in check_words(text, legal, foreign)
+            }
             all_tokens = tokenize(text)
             index_at = {match.start(): i for i, match in enumerate(all_tokens)}
             tokens = [
@@ -443,10 +447,13 @@ class Database:
         if not row["xml_content_corrected"]:
             return []
         text = tei_xml_to_text(row["xml_content_corrected"])
+        foreign = foreign_language_ranges(row["xml_content_corrected"])
         legal = self.get_legal_spellings(edition_id)
         return [
             MissingHyphen.model_validate(vars(found))
             for found in find_missing_hyphens(text, legal)
+            # a word in a quotation in another language is not Polish
+            if not any(a <= found.start and found.end <= b for a, b in foreign)
         ]
 
     def get_token_occurrences(
@@ -515,9 +522,10 @@ class Database:
                 continue
             try:
                 text = tei_xml_to_text(xml)
+                foreign = foreign_language_ranges(xml)
             except InvalidTei:
                 continue
-            for match in find_chunk_matches(text, substrings, legal):
+            for match in find_chunk_matches(text, substrings, legal, foreign):
                 counts[match.text] = counts.get(match.text, 0) + 1
                 shown = places.setdefault(match.text, [])
                 if len(shown) < _OCCURRENCES_SHOWN:

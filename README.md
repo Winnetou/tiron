@@ -581,8 +581,8 @@ This is how a page that is opened again shows what was confirmed before.
 
 `POST /tei/sections` takes `{"xml": "..."}` like `POST /tei/text` (422 in the same
 cases) and lists the sections that are marked in it: the elements that
-`POST .../sections` makes (`<fw>`, `<div type="toc">`, `<noteGrp>`, `<note>`),
-outer ones first. Each has `start` and `end` (offsets into the text that
+`POST .../sections` makes (`<fw>`, `<div type="toc">`, `<noteGrp>`, `<note>`,
+`<quote xml:lang="…">`), outer ones first. Each has `start` and `end` (offsets into the text that
 `/tei/text` gives, counted the way Python does) and `open` and `close`, its tags
 as written in the XML, e.g. `<note n="1">` and `</note>`. Entities and the plain
 `<div>`s that follow a table of contents are not sections. Nothing is stored.
@@ -610,6 +610,7 @@ if it is not what is at those offsets the page has changed, and the answer is
 | `toc`         | `<div type="toc"><p>…</p></div>`    | the table of contents           |
 | `note`        | `<note>…</note>`, `<note n="1">…</note>` | one note (a footnote, say) |
 | `note_group`  | `<noteGrp><note>…</note>…</noteGrp>` | a group of notes               |
+| `quote`       | `<quote xml:lang="la">…</quote>`    | a quotation in another language |
 
 `fw` (forme work) is the TEI element for the furniture of a printed page.
 
@@ -642,6 +643,16 @@ if it is not what is at those offsets the page has changed, and the answer is
   notes cannot stay an `<lb/>` inside the group, so it becomes a newline in the
   XML, which the text extraction reads as a line break again: the text of the
   page does not change.
+- **`quote` goes around the text itself**, like the `<fw>` elements, and needs the
+  body's `lang`, the code of the language it is in: `ru`, `en`, `de`, `es`, `fr`, `it`
+  or `la` (Latin), which becomes `xml:lang` (`{"…": "…", "section": "quote", "lang":
+  "la"}`). A quote without `lang`, or with another one, is a 422, and so is a `lang`
+  on any other section. The frontend offers the languages in a dropdown. **What is
+  in such a quotation is not Polish, so the Polish spell check leaves it alone**: its
+  words are reported as correct by `POST /spellcheck` (when the request has the `xml`
+  the text is of; 422 if the `text` is not that XML's text) and are not found by the
+  edition-wide tools (the same mistake, the substring spellings, the missing hyphens
+  and the OCR rubbish). Spell-checking the other languages is not done (yet).
 - The documents this produces were checked against the official TEI schema
   (`tei_all`), including random pages with several marks one after the other.
 - 404 if the page is not stored, 422 if it has no valid TEI XML or the section
