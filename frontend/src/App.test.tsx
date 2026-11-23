@@ -6153,6 +6153,28 @@ describe('page view', () => {
   })
 })
 
+describe('opening an edition', () => {
+  it('shows the skull and crossbones loop and a text while the first page loads', async () => {
+    window.history.pushState({}, '', `/editions/${UUID}/pages/0`)
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) // the page never comes
+    render(<App />)
+
+    const status = await screen.findByRole('status')
+
+    expect(status).toHaveTextContent('Loading the page')
+    const image = document.querySelector('img.page-loading-image')!
+    expect(image).toHaveAttribute('src', '/skull-crossbones-loop.gif')
+    expect(image).toHaveAttribute('alt', '') // only to look at: the text says it
+  })
+
+  it('shows the page, and no loop, when it has come', async () => {
+    await openPage()
+
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    expect(document.querySelector('.page-loading-image')).toBeNull()
+  })
+})
+
 describe('page navigation', () => {
   const open = (number: number) => openPage({}, number)
 

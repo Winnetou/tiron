@@ -766,7 +766,17 @@ export default function App() {
   if (status.kind === 'loading') {
     return (
       <main>
-        <p role="status">Loading the page …</p>
+        <div className="page-loading">
+          {/* a loop of a skull and crossbones, only to look at: the text says it */}
+          <img
+            src="/skull-crossbones-loop.gif"
+            alt=""
+            width={160}
+            height={175}
+            className="page-loading-image"
+          />
+          <p role="status">Loading the page …</p>
+        </div>
       </main>
     )
   }
