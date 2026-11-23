@@ -179,7 +179,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="Accept spellings of the edition"
-        className="review-box review-box-substring"
+        className="review-box review-box-substring review-styled"
       >
         <header className="review-header">
           <h2>Accept spellings of the edition</h2>
@@ -236,6 +236,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
                     <span>{pill}</span>
                     <button
                       type="button"
+                      className="review-pill-remove"
                       aria-label={`Remove the ending ${pill} of the set`}
                       title="Remove this ending"
                       disabled={working}

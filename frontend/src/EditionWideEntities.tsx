@@ -213,7 +213,7 @@ export function SimilarEntitiesReview({
         role="dialog"
         aria-modal="true"
         aria-label="The same named entity in the edition"
-        className="review-box"
+        className="review-box review-styled"
       >
         <header className="review-header">
           <h2>

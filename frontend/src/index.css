@@ -839,31 +839,75 @@ button {
   cursor: pointer;
 }
 
-/* The yellowish effect of a box that is written in, on Find and Close when the
-   pointer is over them (or the keyboard is on them). */
-.review-chunk .review-find:hover:not(:disabled),
-.review-chunk .review-find:focus-visible,
-.review-box-substring .review-header button:hover:not(:disabled),
-.review-box-substring .review-header button:focus-visible {
-  border-color: #e0a800;
-  background: #fff8d6;
-  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
-  outline: none;
-}
-
-.review-chunk .review-find,
-.review-box-substring .review-header button {
+/*
+ * The look of the boxes of the tools (the substring, the missing hyphens, the OCR
+ * rubbish, the named entities, the page numbers): round buttons that get the
+ * yellowish effect of a box that is written in when the pointer is over them or the
+ * keyboard is on them, rounded boxes to choose from with a yellowish frame, and
+ * yellowish check boxes. The rules do not weigh on the ones that are more
+ * particular (:where), so each button can still be sized by its own class. The small
+ * round buttons and the pills' own do not take the shape of the others.
+ */
+:where(.review-styled) button:where(:not(.review-round-button, .review-pill-remove)) {
+  padding: 0.4rem 1.1rem;
+  border-radius: 999px;
+  cursor: pointer;
   transition:
     border-color 0.12s,
     background 0.12s,
     box-shadow 0.12s;
 }
 
-/* The Close button of this box is round too. */
-.review-box-substring .review-header button {
-  padding: 0.4rem 1.1rem;
-  border-radius: 999px;
+:where(.review-styled) button:where(:not(.review-round-button, .review-pill-remove)):hover:not(:disabled),
+:where(.review-styled) button:where(:not(.review-round-button, .review-pill-remove)):focus-visible,
+:where(.review-styled) .review-round-button:hover:not(:disabled),
+:where(.review-styled) .review-round-button:focus-visible {
+  border-color: #e0a800;
+  background: #fff8d6;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
+  outline: none;
+}
+
+:where(.review-styled) button:disabled {
+  cursor: not-allowed;
+}
+
+/* the buttons of a row are smaller than the ones of the header and the toolbar */
+:where(.review-styled) .review-row button {
+  padding: 0.25rem 0.9rem;
+  font-size: 0.9rem;
+}
+
+:where(.review-styled) select {
+  box-sizing: border-box;
+  padding: 0.55rem 1rem;
+  border: 1px solid #b8b8b8;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: #1a1a1a;
+  font: inherit;
+  font-size: 1rem;
+  outline: none;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+:where(.review-styled) select:focus {
+  border-color: #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
+}
+
+:where(.review-styled) input[type='checkbox'] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: #e0a800;
   cursor: pointer;
+}
+
+:where(.review-styled) input[type='checkbox']:focus-visible {
+  outline: 2px solid #e0a800;
+  outline-offset: 2px;
 }
 
 /* The small round buttons that add and remove an ending. */

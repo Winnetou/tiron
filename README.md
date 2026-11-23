@@ -1194,6 +1194,19 @@ a whole line, and approving *removes* it.
 - The box says "No OCR rubbish found in the edition" when there is none, shows the
   backend's reason if the search fails, and is closed with **Close** or Escape.
 
+**The look of the tools.** The boxes of the tools that find things in the edition share one
+look (the class `review-styled`): the **substring** box, the **missing hyphens** panel, the
+**OCR rubbish** box, the **named entity** box and the **page number** box ("Find this on other
+pages"). Their buttons are **round** (Close, Fold, Approve, Approve all, Include …), and get a
+**yellowish effect** (a gold border, a soft glow and a pale yellow fill) when the pointer is over
+them or the keyboard is on them, as a box that is written in does; a disabled button does not.
+The dropdown that chooses the named entity is a big rounded box with the same yellowish frame while
+it is in use, and the check boxes are yellow-gold. The small round **+** and **×** buttons and the
+**×** on a pill keep their own shape, and the buttons of a row are smaller than those of the header
+and the toolbar. The styles are in `frontend/src/index.css`; they use `:where`, so they do not
+outweigh a more particular rule. The boxes that find the same mistake in the edition (corrections)
+are not changed.
+
 **The tools of the sidebar.** At the bottom of the sidebar, set apart from the
 buttons above it by a horizontal bar, a **cog wheel** button (tooltip "Tools")
 reveals the tools of the view that is shown: each view has its own. The list closes
