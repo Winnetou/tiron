@@ -561,16 +561,17 @@ def get_spelling_chunk_matches(
     core: Annotated[str, Query(min_length=1)],
     ending: Annotated[list[str] | None, Query()] = None,
 ) -> list[SpellingGroup]:
-    """List the words of the edition that have a chunk in them and are flagged by
+    """List the words of the edition that have a substring in them and are flagged by
     the spell check, so that they can be accepted as legal spellings (`POST
     .../legal-spellings`), all at once. Nothing is corrected: old print has
     spellings that repeat, "Konwencya" and "tendencyę" have a "y" where we write
     "j", and the dictionary is a modern one. We call them "legal", not "correct".
 
-    A chunk is a `core` (`cy`) and `ending`, given once for each ending (`a`, `i`,
+    A substring is a `core` (`cy`) and `ending`, given once for each ending (`a`, `i`,
     `ami`): what is looked for is the core with each ending, `cya`, `cyi` and
     `cyami`, anywhere in the word, whatever the case of the letters. An empty
-    ending is the core alone. At most ten endings; the core and each ending are at
+    ending is the core alone. At most forty endings (the frontend offers sets of
+    them: the endings of the Polish cases); the core and each ending are at
     most 30 letters (a hyphen or an apostrophe inside is fine).
 
     The response is a list with an item for each word, the ones that are in the

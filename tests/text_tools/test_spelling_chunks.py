@@ -45,6 +45,14 @@ class TestChunkSubstrings:
         assert chunk_substrings("ó-j", ["ę"]) == ["ó-ję"]
         assert chunk_substrings("a'b", ["c"]) == ["a'bc"]
 
+    def test_the_most_endings_are_forty(self):
+        assert MOST_ENDINGS == 40
+        endings = [a + b for a in "ab" for b in "abcdefghijklmnopqrstuvwxyz"]
+
+        assert len(chunk_substrings("cy", endings[:MOST_ENDINGS])) == MOST_ENDINGS
+        with pytest.raises(InvalidChunk, match="at most 40"):
+            chunk_substrings("cy", endings[: MOST_ENDINGS + 1])
+
     def test_the_core_must_not_be_empty(self):
         with pytest.raises(InvalidChunk, match="core"):
             chunk_substrings("  ", ["a"])

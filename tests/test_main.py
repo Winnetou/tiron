@@ -3124,7 +3124,12 @@ class TestSpellingChunkMatches:
             {"core": "  ", "ending": ["a"]},
             {"core": "c y", "ending": ["a"]},
             {"core": "cy", "ending": ["1"]},
-            {"core": "cy", "ending": [chr(97 + n) for n in range(11)]},
+            {
+                "core": "cy",
+                "ending": [a + b for a in "ab" for b in "abcdefghijklmnopqrstuvwxyz"][
+                    :41
+                ],
+            },
             {"ending": ["a"]},
         ],
     )

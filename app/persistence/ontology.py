@@ -82,7 +82,7 @@ class SpellingOccurrence(BaseModel):
 
 
 class SpellingGroup(BaseModel):
-    """A spelling that is flagged and has a chunk in it, with how many times it is
+    """A spelling that is flagged and has a substring in it, with how many times it is
     in the edition (`count`) and the first of the places (`occurrences`, a few)."""
 
     text: str

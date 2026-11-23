@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getSpellingChunkMatches, type SpellingGroup } from './api'
+import { ENDING_SETS, type EndingSet } from './nounEndings'
 
 /** One flagged spelling, and what became of it. */
 interface Row {
@@ -18,8 +19,18 @@ type Loaded =
   | { kind: 'error'; message: string }
   | { kind: 'done'; rows: Row[] }
 
-/** The most endings of a chunk (the backend's limit too). */
+/** The most boxes for endings (what is sent is at most the backend's limit, 40). */
 const MOST_ENDINGS = 10
+
+/** How many of the substrings are named in the line that says what is looked for. */
+const NAMED = 6
+
+/** What an ending box says inside it, grey: its name, and an example. */
+const endingHint = (index: number) => {
+  const example = ['a', 'i', 'ami'][index]
+  const name = index === 0 ? 'Ending of the substring' : `Ending ${index + 1}`
+  return example ? `${name}, e.g. ${example}` : name
+}
 
 const rowsOf = (groups: SpellingGroup[]): Row[] =>
   groups.map((group, id) => ({ id, group, include: true, state: 'waiting' }))
@@ -35,12 +46,16 @@ interface Props {
 }
 
 /**
- * The big box to accept the spellings of the edition that have a chunk in common,
+ * The big box to accept the spellings of the edition that have a substring in common,
  * as legal spellings, without correcting anything. Old print has spellings that
  * repeat ("Konwencya", "tendencyę"): the dictionary flags them, and a person
  * accepts them one by one with the "legal spelling" button of a word. Here the
- * person gives the core of the chunk (`cy`) in a box and, below it, an ending in
- * another box (`a`); a plus sign adds a box for another ending (`i`, `ami`). The
+ * person gives the core of the substring (`cy`) in a box and, below it, an ending in
+ * another box (`a`); a plus sign adds a box for another ending (`i`, `ami`). So that
+ * the predictable endings of a Polish noun need not be typed each time, four buttons
+ * (masculine, feminine, neuter, adjectival) put a whole set into a frozen field of
+ * pills below the core: one set at a time, and a pill can be removed. The set and the
+ * boxes are searched together. The
  * backend (`GET .../spelling-chunk-matches`) finds the flagged words of the
  * edition that have `cya`, `cyi` or `cyami` in them, and the box lists each once,
  * with how many times it is in the edition and its first places, each in its
@@ -55,6 +70,10 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
   const [core, setCore] = useState('')
   // The boxes for the endings: at least one.
   const [endings, setEndings] = useState<string[]>([''])
+  // The set of noun endings that is chosen (one at a time), and the endings of it
+  // that are left: a frozen field of pills, from which a pill can be removed.
+  const [chosen, setChosen] = useState<EndingSet['id'] | null>(null)
+  const [pills, setPills] = useState<string[]>([])
   const [loaded, setLoaded] = useState<Loaded>({ kind: 'idle' })
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
@@ -69,10 +88,20 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
   }, [onClose])
 
   const trimmed = core.trim()
-  // A box left empty is left out; if all are empty, the core alone is looked for.
-  const given = endings.map((ending) => ending.trim()).filter((ending) => ending !== '')
-  const sent = given.length > 0 ? given : ['']
+  // A box left empty is left out. Find needs the core and an ending at least, from
+  // the pills of the set, or the boxes, or both.
+  const typed = endings.map((ending) => ending.trim()).filter((ending) => ending !== '')
+  const sent = [...new Set([...pills, ...typed])]
   const substrings = [...new Set(sent.map((ending) => trimmed + ending))]
+  const ready = trimmed !== '' && sent.length > 0
+
+  /** Choose a set of endings (the one that was chosen is replaced); the same one
+   * again takes it away. */
+  function choose(set: EndingSet) {
+    const off = chosen === set.id
+    setChosen(off ? null : set.id)
+    setPills(off ? [] : [...set.endings])
+  }
 
   function find() {
     setLoaded({ kind: 'loading' })
@@ -150,7 +179,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="Accept spellings of the edition"
-        className="review-box"
+        className="review-box review-box-substring"
       >
         <header className="review-header">
           <h2>Accept spellings of the edition</h2>
@@ -163,46 +192,89 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
             className="review-chunk"
             onSubmit={(event) => {
               event.preventDefault()
-              if (trimmed !== '' && !busy) find()
+              if (ready && !busy) find()
             }}
           >
-            <label>
-              Core of the chunk
-              <input
-                aria-label="Core of the chunk"
-                placeholder="cy"
-                size={12}
-                maxLength={30}
-                spellCheck={false}
-                value={core}
-                disabled={working}
-                onChange={(event) => setCore(event.target.value)}
-              />
-            </label>
+            <input
+              aria-label="Core of the substring"
+              placeholder="Core of the substring, e.g. cy"
+              maxLength={30}
+              spellCheck={false}
+              value={core}
+              disabled={working}
+              onChange={(event) => setCore(event.target.value)}
+            />
+            <div className="review-sets" role="group" aria-label="Noun endings">
+              {ENDING_SETS.map((set) => (
+                <button
+                  key={set.id}
+                  type="button"
+                  className="review-set-button"
+                  aria-pressed={chosen === set.id}
+                  disabled={working || trimmed === ''}
+                  title={
+                    trimmed === ''
+                      ? 'Write the core of the substring first'
+                      : set.description
+                  }
+                  onClick={() => choose(set)}
+                >
+                  {set.label}
+                </button>
+              ))}
+            </div>
+            {chosen !== null && (
+              <ul
+                className="review-pills"
+                aria-label="Endings of the chosen set"
+              >
+                {pills.length === 0 && (
+                  <li className="review-context">No ending of the set is left.</li>
+                )}
+                {pills.map((pill) => (
+                  <li key={pill} className="review-pill">
+                    <span>{pill}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove the ending ${pill} of the set`}
+                      title="Remove this ending"
+                      disabled={working}
+                      onClick={() =>
+                        setPills((now) => now.filter((other) => other !== pill))
+                      }
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="review-endings">
               {endings.map((ending, index) => (
                 <div key={index} className="review-ending">
-                  <label>
-                    {index === 0 ? 'Ending of the chunk' : `Ending ${index + 1}`}
-                    <input
-                      aria-label={`Ending ${index + 1}`}
-                      placeholder={['a', 'i', 'ami'][index] ?? ''}
-                      size={12}
-                      maxLength={30}
-                      spellCheck={false}
-                      value={ending}
-                      disabled={working}
-                      onChange={(event) =>
-                        setEndings((now) =>
-                          now.map((e, i) => (i === index ? event.target.value : e)),
-                        )
-                      }
-                    />
-                  </label>
+                  <input
+                    aria-label={`Ending ${index + 1}`}
+                    placeholder={endingHint(index)}
+                    maxLength={30}
+                    spellCheck={false}
+                    value={ending}
+                    // an ending is an ending of the core: no core, no ending
+                    disabled={working || trimmed === ''}
+                    title={
+                      trimmed === '' ? 'Write the core of the substring first' : undefined
+                    }
+                    onChange={(event) =>
+                      setEndings((now) =>
+                        now.map((e, i) => (i === index ? event.target.value : e)),
+                      )
+                    }
+                  />
                   {index > 0 && (
                     <button
                       type="button"
+                      className="review-round-button"
                       aria-label={`Remove ending ${index + 1}`}
+                      title="Remove this ending"
                       disabled={working}
                       onClick={() =>
                         setEndings((now) => now.filter((_, i) => i !== index))
@@ -215,7 +287,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
               ))}
               <button
                 type="button"
-                className="review-add-ending"
+                className="review-round-button"
                 aria-label="Add another ending"
                 title="Add another ending"
                 disabled={working || endings.length >= MOST_ENDINGS}
@@ -224,13 +296,24 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
                 +
               </button>
             </div>
-            {trimmed !== '' && (
+            {ready && (
               <p className="review-context">
-                Looking for words that have <strong>{substrings.join(', ')}</strong> in
-                them.
+                Looking for words that have{' '}
+                <strong>{substrings.slice(0, NAMED).join(', ')}</strong>
+                {substrings.length > NAMED && ` and ${substrings.length - NAMED} more`}{' '}
+                in them.
               </p>
             )}
-            <button type="submit" disabled={trimmed === '' || busy}>
+            <button
+              type="submit"
+              className="review-find"
+              disabled={!ready || busy}
+              title={
+                ready
+                  ? undefined
+                  : 'Write the core of the substring and at least one ending first'
+              }
+            >
               Find
             </button>
           </form>
@@ -239,7 +322,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && rows.length === 0 && (
-            <p role="status">No flagged word of the edition has this chunk.</p>
+            <p role="status">No flagged word of the edition has this substring.</p>
           )}
           {rows.length > 0 && (
             <>

@@ -164,7 +164,7 @@ export default function App() {
     useState<PageNumberExample | null>(null)
   // The page whose line ends are looked at for the hyphens that the OCR dropped.
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
-  // The edition whose flagged spellings the user wants to accept by their chunk.
+  // The edition whose flagged spellings the user wants to accept by their substring.
   const [acceptingChunk, setAcceptingChunk] = useState<{ editionId: string } | null>(
     null,
   )

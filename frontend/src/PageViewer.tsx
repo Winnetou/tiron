@@ -103,7 +103,7 @@ interface Props {
   dock: ReactNode
   /**
    * Accept, as legal spellings, the flagged words of the whole edition that have a
-   * chunk (a core and its endings) in common.
+   * substring (a core and its endings) in common.
    */
   onApplyRule: () => void
   /**
@@ -256,7 +256,7 @@ export default function PageViewer({
             onSelect: onApplyRule,
             disabled: busy,
             title:
-              'Give a chunk of letters, such as cy with the endings a, i, ami, and accept the flagged words of the whole edition that have it as legal spellings',
+              'Give a substring of letters, such as cy with the endings a, i, ami, and accept the flagged words of the whole edition that have it as legal spellings',
           },
           {
             label: 'Find OCR rubbish in the edition',

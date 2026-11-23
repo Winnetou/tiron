@@ -371,7 +371,7 @@ export interface SpellingOccurrence {
   after: string
 }
 
-/** A flagged spelling that has a chunk in it, with its places (SpellingGroup). */
+/** A flagged spelling that has a substring in it, with its places (SpellingGroup). */
 export interface SpellingGroup {
   text: string
   /** How many times it is in the edition. */
@@ -382,10 +382,10 @@ export interface SpellingGroup {
 
 /**
  * Calls GET /editions/{editionId}/spelling-chunk-matches: the backend finds the
- * words of the whole edition that the spell check flags and that have the chunk
+ * words of the whole edition that the spell check flags and that have the substring
  * (`core` with each of the `endings`: `cy` and `a`, `i` is `cya` and `cyi`) in
  * them, each once, with how many times it is there and its first places. Nothing
- * is changed. A chunk that cannot be looked for is refused with the reason.
+ * is changed. A substring that cannot be looked for is refused with the reason.
  */
 export function getSpellingChunkMatches(
   editionId: string,

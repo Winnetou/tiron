@@ -1,8 +1,8 @@
-"""Spellings of the 19th century that a person accepts by their chunk.
+"""Spellings of the 19th century that a person accepts by their substring.
 
 Old print has spellings that repeat: "Konwencya" and "tendencyę" have a "y" where we
 write "j". The dictionary is a modern one and flags them, and making every word a
-legal spelling by hand is no work for a human. The person gives the chunk that these
+legal spelling by hand is no work for a human. The person gives the substring that these
 words have in common: its core (`cy`) and the endings that can follow it (`a`, `i`,
 `ami`), and this finds the words of the edition that have `cya`, `cyi` or `cyami`
 in them, anywhere in the word, that are flagged. Nothing is corrected or replaced:
@@ -20,14 +20,14 @@ from dataclasses import dataclass
 
 from app.text_tools.spelling import _WORD, check_words
 
-# The most endings of a chunk, and the longest core or ending.
-MOST_ENDINGS = 10
+# The most endings of a substring, and the longest core or ending.
+MOST_ENDINGS = 40
 MOST_LENGTH = 30
 _CHUNK = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
 
 
 class InvalidChunk(ValueError):
-    """A chunk that cannot be looked for; the message says why."""
+    """A substring that cannot be looked for; the message says why."""
 
 
 def chunk_substrings(core: str, endings: Collection[str]) -> list[str]:
@@ -42,7 +42,7 @@ def chunk_substrings(core: str, endings: Collection[str]) -> list[str]:
     """
     core = core.strip()
     if not core:
-        raise InvalidChunk("The core of the chunk must not be empty")
+        raise InvalidChunk("The core of the substring must not be empty")
     if not endings:
         raise InvalidChunk("There must be at least one ending")
     if len(endings) > MOST_ENDINGS:
@@ -50,7 +50,9 @@ def chunk_substrings(core: str, endings: Collection[str]) -> list[str]:
     parts = [core] + [ending.strip() for ending in endings]
     for part in parts:
         if len(part) > MOST_LENGTH:
-            raise InvalidChunk(f"A part of the chunk is at most {MOST_LENGTH} letters")
+            raise InvalidChunk(
+                f"A part of the substring is at most {MOST_LENGTH} letters"
+            )
         if part and not _CHUNK.fullmatch(part):
             raise InvalidChunk(f"{part!r} is not made of letters")
     return list(dict.fromkeys(core + part for part in parts[1:]))
