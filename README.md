@@ -724,6 +724,36 @@ spelling. 404 if the page is not stored, 409 if the text at an offset is not
 The search is `Database.get_missing_hyphens`, on `app/text_tools/hyphens.py`;
 saving is `Database.apply_corrections`, the `apply_correction` for several.
 
+### Every place of a token
+
+The OCR makes the same mistake again and again, and the spell check does not flag it when
+the wrong word is a word too: `tem` is read as `tern`, and `tern` passes. A person who has
+seen it on the scan gives the token as it is wrong, and every place of it in the edition is
+found, each in its context, to be corrected one by one or all at once.
+
+`GET /editions/{edition_id}/token-occurrences?token=tern` changes nothing.
+
+- **The token** is one token as the spell check makes tokens: a word (a hyphen or an
+  apostrophe inside it is part of it: `biało-czerwony`) or a run of signs (`(|}`). Spaces
+  at its ends, spaces inside it, or a word with signs glued to it (`tern,`) is not one: 422
+  with the reason. It is at most 100 characters.
+- **The match is exact**: whole tokens only, and the case of the letters counts, so `tern` is
+  not `Tern`, and it is not in `terne` or `intern`. No dictionary is used, so it is found
+  whether the spell check flags it or not.
+- **The response**: a list with an item for each page that has the token, in the order of the
+  pages: `{"page_number": 8, "occurrences": [{"start": 383, "end": 387, "text": "tern",
+  "before": "o", "after": "dniu"}]}`. `start` and `end` are offsets in the text of the page (as
+  `POST /tei/text` gives it), so `text[start:end]` is the token. `before` and `after` are its
+  **context**: the nearest *word* before it and the nearest word after it, with the signs between
+  them and the token, as they are written. A full stop or a comma next to the token does not use
+  up the context: `Ala ma dom. tern, kota` gives `dom.` and `, kota`, so a person always has a word
+  to read on each side. A line break is a space. Where there is no word (the end of the text, or
+  only signs) it is the signs, or empty.
+- **The correction** of a place is `POST /editions/{id}/pages/{n}/corrections` with `before` the
+  token and `after` the replacement (see "Correcting a word"), the same as for a word.
+- 404 if the edition is not stored, 422 if the token is not one. The search is
+  `Database.get_token_occurrences`, on `app/text_tools/token_occurrences.py`.
+
 ### Accepting the spellings that have a substring in common
 
 Old print has spellings that repeat: `Konwencya` and `tendencyę` have a `y` where we
@@ -751,8 +781,11 @@ changes nothing.
   "start": 383, "end": 392, "before": "w", "after": "z"}]}`. `occurrences` are the first
   places of the word (at most five, in the order of the pages); `count` is how many there
   are in all. `start` and `end` are offsets in the text of the page (as `POST /tei/text`
-  gives it), so `text[start:end]` is the word. `before` and `after` are the token before and
-  after it (a sign counts): the 3-gram that shows it in its context.
+  gives it), so `text[start:end]` is the word. `before` and `after` are its
+  **context**: the nearest *word* before it and the nearest word after it, with the signs between
+  them and the word, as they are written (`dom.` and `, kota`), so a full stop or a semicolon next to
+  it does not leave nothing to read. A line break is a space; the same rule as in "Every place of a
+  token".
 - **Accepting** is the request that the "legal spelling" button sends: `POST
   /editions/{id}/legal-spellings` with `{"spelling": "Konwencya"}`. It is of the word,
   wherever it is, so one request is for all its places.
@@ -800,7 +833,9 @@ nothing.
   `forms` are what was looked for, so that a human can see them. `start` and `end` are
   offsets in the text of the page (as `POST /tei/text` gives it), so `text[start:end]` is
   `text`, which is what `POST .../entities` is to mark, with the `label`. `before` and
-  `after` are the token before and after (a sign counts), the context for a human.
+  `after` are its **context**: the nearest *word* before it and the nearest word after it, with the
+  signs between them and the match, as they are written (`dom.` and `, kota`), so a full stop or a
+  comma next to it does not leave nothing to read; the same rule as in "Every place of a token".
 - **`sure`** is true if the NER model also finds an entity at that place with the same
   label. The model is run only on the pages that have a match, which takes a few seconds
   for a whole edition. A match that is not sure may be a word that only looks like the
@@ -1106,6 +1141,31 @@ the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
 
+**Replacing a token in the edition.** The **Replace a token in the edition** tool of the correction
+view (in the cog wheel of the sidebar) opens a big box over the page, in the look of the
+substring box (see "The look of the tools"), with two boxes: the **incorrect token**, as it is
+wrong (`tern`), and the **replacement token** (`tem`). **Find** is inactive until both are
+written and they differ (spaces at the ends do not count). It asks `GET .../token-occurrences`
+for the incorrect token only (see "Every place of a token"), and the box lists every place by
+page, each **in its context**: the nearest word before it (with the signs between, `dom.`), the
+token with the change (`tern → tem`, the replacement marked in yellow), and the nearest word after
+it (`, kota`): a full stop or a comma next to the token does not leave nothing to read. If the backend says that what was written
+is not a single token, its reason is shown. The list does not change if a box is changed
+afterwards: it shows what was looked for and what it is to be replaced with; **Find** again.
+
+- Each place has a **Replace** button (`data-edition-id`, `data-page`, `data-start`, `data-end`)
+  and a box to take it out of **Replace all (N)**. All are in by default, as the match is exact;
+  **Include all** and **Include none** set the boxes.
+- It is applied the way the same mistake in the edition is: **Replace** corrects that token alone
+  (`POST .../corrections`, `before` the token, `after` the replacement) and makes the replacement a
+  legal spelling of the edition (once, however many places). **Replace all** does it for the places
+  that are in, one request at a time, in the order of the pages, with "Replacing x of y …". A place
+  that the backend refuses is marked with the reason and the others go on. A correction changes the
+  length of the page, so the offsets of the places after it on its page are moved by the difference.
+- If a place is on the page on the screen, that page is shown again with its new text.
+- The box says "The token “tern” is nowhere in the edition" when there is none, and is closed with
+  **Close** or Escape.
+
 **Accepting the spellings that have a substring in common.** The **Apply spelling rule to the
 edition** tool of the correction view (in the cog wheel of the sidebar) opens a big box over
 the page, which accepts spellings as legal without changing the text (see "Accepting the
@@ -1131,8 +1191,8 @@ one ending is given, and, like **Close** (also round), it gets the same yellowis
 backend cannot look for the substring, its reason is shown. The substring can be changed and sent again.
 
 - Each flagged word is listed **once**, with how many times it is in the edition (`×7`) and
-  its first places, each **in its context**: the token before it, the word (marked in yellow)
-  and the token after it, with its page; "and 5 more" says how many places are not shown. No
+  its first places, each **in its context**: the nearest word before it (with the signs between,
+  `dom.`), the word (marked in yellow) and the nearest word after it (`; kota`), with its page; "and 5 more" says how many places are not shown. No
   correction or replacement is shown, as none is made.
 - Each has an **Accept** button, which makes the word a legal spelling of the edition (`POST
   .../legal-spellings`, the request of the word's own "legal spelling" button), and a box to
@@ -1154,8 +1214,9 @@ forms") for the entity and its label, and lists the places of the edition by pag
 
 - If several entities are confirmed, a dropdown "Named entity" chooses which one is looked
   for; the list is made again for the other one.
-- Each place is shown **in its context**: the token before it, the name (marked in
-  yellow), and the token after it, so that it can be judged without the page. It has an
+- Each place is shown **in its context**: the nearest word before it (with the signs between,
+  `dom.`), the name (marked in yellow), and the nearest word after it (`, kota`), so that it can be
+  judged without the page. It has an
   **Approve** button (it carries `data-edition-id`, `data-page`, `data-start` and
   `data-end`) and a box to take it out of "Approve all". The sure ones are included by
   default; the others say "the model does not take it for this entity". **Include all**,
@@ -1218,6 +1279,7 @@ the cog wheel disabled.
 |---|---|---|
 | Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
 | Correction | **Apply spelling rule to the edition** | accepts, as legal spellings, the flagged words of the whole edition that have a substring in common, such as `cy` with the endings `a`, `i`, `ami` (above) |
+| Correction | **Replace a token in the edition** | finds every place of a token as it is wrong, such as `tern`, and replaces it with another, such as `tem`, place by place or all at once (above) |
 | Correction | **Find OCR rubbish in the edition** | finds the lines of the whole edition that are not text, to remove them (above) |
 | Structure | **Find this on other pages** | looks for the page number marked on this page on the other pages; disabled until a page number is marked (its tooltip says "Mark the page number on this page first") |
 | Named entity recognition | **Find this NER on other pages** | finds a confirmed entity, in all its forms in the cases, in the whole edition; disabled until an entity is confirmed on the page (above) |

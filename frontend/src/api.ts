@@ -360,6 +360,39 @@ export function getSimilarPageNumbers(
   )
 }
 
+/** A place of a token in the text of a page (TokenOccurrence). */
+export interface TokenOccurrence {
+  /** Offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  text: string
+  /** The token before it and the one after it: its context. */
+  before: string
+  after: string
+}
+
+/** The places of a token in one page (PageTokenOccurrences). */
+export interface PageTokenOccurrences {
+  page_number: number
+  occurrences: TokenOccurrence[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/token-occurrences: the backend finds every place
+ * of the token in the whole edition, exactly (whole tokens, the case counts),
+ * whether the spell check flags it or not, each with the tokens around it. Nothing
+ * is changed. Something that is not a single token is refused with the reason.
+ */
+export function getTokenOccurrences(
+  editionId: string,
+  token: string,
+): Promise<PageTokenOccurrences[]> {
+  const query = new URLSearchParams({ token })
+  return request<PageTokenOccurrences[]>(
+    `/editions/${editionId}/token-occurrences?${query}`,
+  )
+}
+
 /** A place in a page where a spelling is (SpellingOccurrence). */
 export interface SpellingOccurrence {
   page_number: number

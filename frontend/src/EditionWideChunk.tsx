@@ -59,7 +59,8 @@ interface Props {
  * backend (`GET .../spelling-chunk-matches`) finds the flagged words of the
  * edition that have `cya`, `cyi` or `cyami` in them, and the box lists each once,
  * with how many times it is in the edition and its first places, each in its
- * context: the token before it, the word, the token after it. Each has an Accept
+ * context: the nearest word before it, with the signs between, the word, and the
+ * nearest word after it. Each has an Accept
  * button, which makes it a legal spelling of the edition, and a box to take it out
  * of "Accept all". Nothing is accepted until the user accepts.
  *

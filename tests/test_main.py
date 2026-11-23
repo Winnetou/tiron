@@ -2845,8 +2845,8 @@ class TestSimilarEntities:
         assert [p["page_number"] for p in pages] == [3, 5]
         assert [(m["text"], m["before"], m["after"]) for m in pages[0]["matches"]] == [
             ("Machnickiego", "panem", "i"),
-            ("Machnickiej", "i", ","),
-            ("Machnickimi", ",", "."),
+            ("Machnickiej", "i", ", Machnickimi"),
+            ("Machnickimi", "Machnickiej,", "."),
         ]
 
     def test_offsets_are_those_of_the_text(self, stored):
@@ -3041,7 +3041,7 @@ class TestSpellingChunkMatches:
                         "page_number": 3,
                         "start": 28,
                         "end": 37,
-                        "before": ",",
+                        "before": "Policya,",
                         "after": ".",
                     },
                     {
@@ -3154,5 +3154,121 @@ class TestSpellingChunkMatches:
 
         assert "get" in schema["paths"]["/editions/{edition_id}/spelling-chunk-matches"]
         assert {"SpellingGroup", "SpellingOccurrence"} <= schema["components"][
+            "schemas"
+        ].keys()
+
+
+class TestTokenOccurrences:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/token-occurrences"
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        rows = [
+            {"number": 0, "xml_content_corrected": str(text_to_tei_xml("Ala ma kota"))},
+            {
+                "number": 3,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("W tern dniu terne, tern.")
+                ),
+            },
+            {"number": 4, "xml_content_corrected": None},
+            {
+                "number": 5,
+                "xml_content_corrected": str(text_to_tei_xml("Znów\ntern tu.")),
+            },
+            {"number": 6, "xml_content_corrected": "<not tei/>"},
+        ]
+        monkeypatch.setattr(
+            db,
+            "conn",
+            mock.Mock(**{"execute.return_value.fetchall.return_value": rows}),
+        )
+        return edition_id
+
+    def get(self, edition_id, token="tern"):
+        return client.get(self.url(edition_id), params={"token": token})
+
+    def test_lists_every_place_page_by_page_with_its_context(self, stored):
+        response = self.get(stored)
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "page_number": 3,
+                "occurrences": [
+                    {
+                        "start": 2,
+                        "end": 6,
+                        "text": "tern",
+                        "before": "W",
+                        "after": "dniu",
+                    },
+                    {
+                        "start": 19,
+                        "end": 23,
+                        "text": "tern",
+                        "before": "terne,",
+                        "after": ".",
+                    },
+                ],
+            },
+            {
+                "page_number": 5,
+                "occurrences": [
+                    {
+                        "start": 5,
+                        "end": 9,
+                        "text": "tern",
+                        "before": "Znów",
+                        "after": "tu",
+                    }
+                ],
+            },
+        ]
+
+    def test_the_offsets_are_those_of_the_text(self, stored):
+        text = "W tern dniu terne, tern."
+
+        for place in self.get(stored).json()[0]["occurrences"]:
+            assert text[place["start"] : place["end"]] == "tern"
+
+    def test_it_is_exact(self, stored):
+        assert self.get(stored, "Tern").json() == []
+        assert self.get(stored, "ter").json() == []
+
+    def test_edition_not_stored_is_404(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = client.get(self.url(), params={"token": "tern"})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    @pytest.mark.parametrize(
+        "token", ["", " ", "dwa słowa", "tern,", " tern", "x" * 101]
+    )
+    def test_a_token_that_is_not_one_is_422(self, stored, token):
+        assert self.get(stored, token).status_code == 422
+
+    def test_no_token_is_422(self, stored):
+        assert client.get(self.url(stored)).status_code == 422
+
+    def test_the_reason_is_given(self, stored):
+        response = self.get(stored, "tern,")
+
+        assert "not a single token" in response.json()["detail"]
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "get" in schema["paths"]["/editions/{edition_id}/token-occurrences"]
+        assert {"PageTokenOccurrences", "TokenOccurrence"} <= schema["components"][
             "schemas"
         ].keys()

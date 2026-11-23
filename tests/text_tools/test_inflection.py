@@ -181,10 +181,27 @@ class TestFindForms:
     def test_case_matters(self):
         assert find_forms("machnicki", {"Machnicki"}) == []
 
-    def test_the_signs_around_are_the_context(self):
-        (match,) = find_forms("Ala, Machnicki.", {"Machnicki"})
+    def test_the_context_is_the_nearest_word_before_and_after(self):
+        (match,) = find_forms("Ala ma Machnicki tu", {"Machnicki"})
 
-        assert (match.before, match.after) == (",", ".")
+        assert (match.before, match.after) == ("ma", "tu")
+
+    def test_a_sign_next_to_it_does_not_leave_the_context_without_a_word(self):
+        (match,) = find_forms("Ala ma dom. Machnicki; kota", {"Machnicki"})
+
+        assert (match.before, match.after) == ("dom.", "; kota")
+        (match,) = find_forms("Ala, Machnicki.", {"Machnicki"})
+        assert (match.before, match.after) == ("Ala,", ".")
+
+    def test_the_context_of_a_name_of_several_words_is_outside_the_whole_name(self):
+        (match,) = find_forms("Pan Jan\nMachnicki, jest tu", {"Jan Machnicki"})
+
+        assert (match.before, match.after) == ("Pan", ", jest")
+
+    def test_signs_on_both_sides_are_kept_as_they_are_written(self):
+        (match,) = find_forms("Jak (Machnicki) ma — kota", {"Machnicki"})
+
+        assert (match.before, match.after) == ("Jak (", ") ma")
 
     def test_at_the_ends_of_the_text_there_is_no_context(self):
         (match,) = find_forms("Machnicki", {"Machnicki"})

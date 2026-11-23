@@ -42,6 +42,28 @@ class TokenMatch(BaseModel):
     suggestion: str = Field(min_length=1)
 
 
+class TokenOccurrence(BaseModel):
+    """A place of a token in the text of a page: the characters `start` to `end`
+    (offsets, counted in code points) are `text`. `before` and `after` are its
+    context: the nearest word before it and the nearest word after it, with the signs
+    between them and the token, as they are written ("dniu." and "raz"), so that a
+    full stop or a comma next to it does not leave nothing to read (empty at the ends
+    of the text, where there is no word)."""
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    text: str
+    before: str
+    after: str
+
+
+class PageTokenOccurrences(BaseModel):
+    """The places of a token in one page, in the order of the text."""
+
+    page_number: int = Field(ge=0)
+    occurrences: list[TokenOccurrence]
+
+
 class PageMatches(BaseModel):
     """The tokens of one page that match something, in the order of the text."""
 
@@ -71,8 +93,10 @@ class MissingHyphen(BaseModel):
 class SpellingOccurrence(BaseModel):
     """A place in a page where a spelling is: the characters `start` to `end`
     (offsets in the text, counted in code points) of the page. `before` and `after`
-    are the token before it and the one after it (empty at the ends of the text), so
-    that it is seen in its context."""
+    are its context: the nearest word before it and the nearest word after it, with
+    the signs between them and the word, as they are written ("dom." and ", kota"),
+    so that a full stop or a comma next to it does not leave nothing to read (empty at
+    the ends of the text, where there is no word)."""
 
     page_number: int = Field(ge=0)
     start: int = Field(ge=0)
@@ -102,9 +126,11 @@ class EntityForm(BaseModel):
 class EntityMatch(BaseModel):
     """A form of a named entity found in the text of a page: the characters `start`
     to `end` (offsets, counted in code points) are `text`. `before` and `after` are
-    the token before it and the one after it (empty at the ends of the text), so
-    that it is seen in its context. `sure` is true if the NER model also takes it
-    for an entity, with the same label."""
+    its context: the nearest word before it and the nearest word after it, with the
+    signs between them and the match, as they are written ("dom." and ", kota"), so
+    that a full stop or a comma next to it does not leave nothing to read (empty at
+    the ends of the text, where there is no word). `sure` is true if the NER model
+    also takes it for an entity, with the same label."""
 
     start: int = Field(ge=0)
     end: int = Field(ge=1)

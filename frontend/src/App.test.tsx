@@ -12,6 +12,7 @@ import type {
   Page,
   PageMatches,
   PageRubbish,
+  PageTokenOccurrences,
   SectionSpan,
   SpellingGroup,
   SimilarEntities,
@@ -131,6 +132,8 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../token-occurrences; defaults to none. */
+  occurrences?: (token: string) => PageTokenOccurrences[] | Error
   /** Answer of GET .../spelling-chunk-matches; defaults to none. */
   chunkMatches?: (query: { core: string; endings: string[] }) => SpellingGroup[] | Error
   /** Answer of GET .../similar-entities; defaults to no form and no place. */
@@ -287,6 +290,11 @@ function fakeBackend(options: Options = {}) {
       const answer = options.similarNumbers
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.includes('/token-occurrences?')) {
+      const token = new URLSearchParams(url.split('?')[1]).get('token') ?? ''
+      const answer = options.occurrences ? options.occurrences(token) : []
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     if (url.includes('/spelling-chunk-matches?')) {
@@ -5687,6 +5695,7 @@ describe('page view', () => {
       expect(names()).toEqual([
         'Find missing hyphens',
         'Apply spelling rule to the edition',
+        'Replace a token in the edition',
         'Find OCR rubbish in the edition',
       ])
     })
@@ -6935,6 +6944,26 @@ describe('the same named entity in all its forms', () => {
       expect(item.textContent).toContain('wczoraj')
     })
 
+    it('shows the signs that are next to the name with the nearest word', async () => {
+      const withSigns: SimilarEntities = {
+        ...FOUND,
+        pages: [
+          {
+            page_number: 1,
+            matches: [match('Machnickiego', 10, 'dom.', '; kota')],
+          },
+        ],
+      }
+      await openReview({ similarEntities: () => withSigns })
+
+      const item = within(
+        within(review()!).getByRole('region', { name: 'Page 1' }),
+      ).getAllByRole('listitem')[0]
+      expect(item.textContent).toContain('dom.')
+      expect(item.textContent).toContain('; kota')
+      expect(item.querySelector('mark')!.textContent).toBe('Machnickiego')
+    })
+
     it('lists the places by page', async () => {
       await openReview()
 
@@ -7733,6 +7762,21 @@ describe('accepting spellings by their substring', () => {
       expect(first.textContent).toContain('(page 1)')
     })
 
+    it('shows the signs that are next to the word with the nearest word', async () => {
+      const withSigns: SpellingGroup[] = [
+        {
+          text: 'Konwencya',
+          count: 1,
+          occurrences: [place(1, 7, 'dom.', '; kota')],
+        },
+      ]
+      await openFound({ chunkMatches: () => withSigns })
+
+      const item = within(review()!).getAllByRole('listitem')[1]
+      expect(item.textContent).toContain('dom.')
+      expect(item.textContent).toContain('; kota')
+    })
+
     it('says how many more places there are than are shown', async () => {
       await openFound()
 
@@ -7874,6 +7918,365 @@ describe('accepting spellings by their substring', () => {
       await waitFor(() => expect(legalCalls()).toHaveLength(2))
       expect(screen.getByText(/1 failed/)).toBeInTheDocument()
       expect(screen.getAllByText('✓ Accepted')).toHaveLength(1)
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})
+
+describe('replacing a token in the edition', () => {
+  const TEXT = 'W tern dniu tern raz.'
+  const place = (start: number, before: string, after: string, text = 'tern') => ({
+    start,
+    end: start + [...text].length,
+    text,
+    before,
+    after,
+  })
+  const FOUND: PageTokenOccurrences[] = [
+    {
+      page_number: 1,
+      occurrences: [place(2, 'W', 'dniu'), place(12, 'dniu', 'raz')],
+    },
+    { page_number: 3, occurrences: [place(0, '', 'jest')] },
+  ]
+  const review = () => screen.queryByRole('dialog', { name: 'Replace a token in the edition' })
+  const wrong = () => screen.getByRole('textbox', { name: 'Incorrect token' })
+  const right = () => screen.getByRole('textbox', { name: 'Replacement token' })
+  const find = () => within(review()!).getByRole('button', { name: 'Find' })
+  const replaceAll = () => screen.getByRole('button', { name: /^Replace all/ })
+  const replaceOne = (page: number, at: number, to = 'tem') =>
+    screen.getByRole('button', { name: `Replace tern with ${to} on page ${page} at ${at}` })
+  const include = (page: number, at: number) =>
+    screen.getByRole('checkbox', {
+      name: `Include tern on page ${page} at ${at} in Replace all`,
+    })
+  const occurrenceCalls = () => calls.filter((c) => c.url.includes('/token-occurrences?'))
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      occurrences: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Replace a token in the edition' }))
+  }
+  async function openFound(extra: Options = {}) {
+    await open(extra)
+    await userEvent.type(wrong(), 'tern')
+    await userEvent.type(right(), 'tem')
+    await userEvent.click(find())
+    await screen.findByText(/places? of “tern” on/)
+  }
+
+  describe('the tool', () => {
+    it('is in the cog wheel of the correction view', async () => {
+      await open()
+
+      expect(review()).toBeInTheDocument()
+      expect(review()).toHaveClass('review-styled')
+    })
+
+    it('is not in the structure view', async () => {
+      await openPage()
+      await screen.findByRole('img')
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(screen.queryByRole('button', { name: 'Replace a token in the edition' })).toBeNull()
+    })
+
+    it('asks nothing of the backend until Find is pressed', async () => {
+      await open()
+
+      expect(occurrenceCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('the two boxes', () => {
+    it('have their label inside, grey', async () => {
+      await open()
+
+      expect(wrong()).toHaveAttribute('placeholder', 'Incorrect token, e.g. tern')
+      expect(right()).toHaveAttribute('placeholder', 'Replacement token, e.g. tem')
+    })
+
+    it('keep Find inactive until both are written, and different', async () => {
+      await open()
+      expect(find()).toBeDisabled()
+
+      await userEvent.type(wrong(), 'tern')
+      expect(find()).toBeDisabled()
+
+      await userEvent.type(right(), '  ')
+      expect(find()).toBeDisabled()
+
+      await userEvent.clear(right())
+      await userEvent.type(right(), 'tern')
+      expect(find()).toBeDisabled()
+      expect(find()).toHaveAttribute('title', 'Write the incorrect token and a different replacement first')
+
+      await userEvent.clear(right())
+      await userEvent.type(right(), 'tem')
+      expect(find()).toBeEnabled()
+      expect(find()).not.toHaveAttribute('title')
+    })
+
+    it('send only the incorrect token to find the places, as it is', async () => {
+      await open()
+      await userEvent.type(wrong(), ' tern ')
+      await userEvent.type(right(), 'tem')
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(occurrenceCalls()).toHaveLength(1))
+      expect(occurrenceCalls()[0].url).toBe(`/editions/${UUID}/token-occurrences?token=tern`)
+    })
+
+    it('show the reason when the backend says it is not a token', async () => {
+      await open({ occurrences: () => new Error("'dwa słowa' is not a single token") })
+      await userEvent.type(wrong(), 'dwa słowa')
+      await userEvent.type(right(), 'tem')
+
+      await userEvent.click(find())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('is not a single token')
+    })
+  })
+
+  describe('the box', () => {
+    it('shows each place in its context: the token before, the change, the token after', async () => {
+      await openFound()
+
+      const item = within(within(review()!).getByRole('region', { name: 'Page 1' })).getAllByRole(
+        'listitem',
+      )[0]
+      expect(item.querySelector('.misspelling')!.textContent).toBe('tern')
+      expect(item.querySelector('mark')!.textContent).toBe('tem')
+      expect(item.textContent).toContain('W')
+      expect(item.textContent).toContain('dniu')
+    })
+
+    it('shows the signs that are next to the token with the nearest word', async () => {
+      const withSigns: PageTokenOccurrences[] = [
+        { page_number: 1, occurrences: [place(8, 'dom.', ', kota')] },
+      ]
+      await open({ occurrences: () => withSigns })
+      await userEvent.type(wrong(), 'tern')
+      await userEvent.type(right(), 'tem')
+      await userEvent.click(find())
+      await screen.findByText(/place of “tern” on/)
+
+      const item = within(review()!).getByRole('listitem')
+      expect(item.textContent).toContain('dom.')
+      expect(item.textContent).toContain(', kota')
+      expect(item.querySelector('mark')!.textContent).toBe('tem')
+    })
+
+    it('lists the places by page and counts them', async () => {
+      await openFound()
+
+      expect(within(review()!).getByRole('region', { name: 'Page 1' })).toBeInTheDocument()
+      expect(within(review()!).getByRole('region', { name: 'Page 3' })).toBeInTheDocument()
+      expect(screen.getByText('3 places of “tern” on 2 pages')).toBeInTheDocument()
+    })
+
+    it('includes every place by default', async () => {
+      await openFound()
+
+      expect(include(1, 2)).toBeChecked()
+      expect(replaceAll()).toHaveTextContent('Replace all (3)')
+    })
+
+    it('has Include all and Include none', async () => {
+      await openFound()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(replaceAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(replaceAll()).toHaveTextContent('Replace all (3)')
+    })
+
+    it('says so when the token is nowhere', async () => {
+      await open({ occurrences: () => [] })
+      await userEvent.type(wrong(), 'tern')
+      await userEvent.type(right(), 'tem')
+      await userEvent.click(find())
+
+      expect(await screen.findByText('The token “tern” is nowhere in the edition.')).toBeInTheDocument()
+    })
+
+    it('does not change the list when a box is changed afterwards: Find again', async () => {
+      await openFound()
+
+      await userEvent.clear(right())
+      await userEvent.type(right(), 'xyz')
+
+      expect(screen.getAllByText('tem', { selector: 'mark' })).toHaveLength(3)
+      expect(replaceOne(1, 2, 'tem')).toBeInTheDocument()
+    })
+
+    it('closes with Close and with Escape', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Replace a token in the edition' }))
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+
+    it('changes nothing until the user replaces', async () => {
+      await openFound()
+
+      expect(correctionCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('replacing one place', () => {
+    it('corrects that token alone, with the offsets the button carries', async () => {
+      await openFound()
+      const button = replaceOne(1, 2)
+      expect(button).toHaveAttribute('data-edition-id', UUID)
+      expect(button).toHaveAttribute('data-page', '1')
+      expect(button).toHaveAttribute('data-start', '2')
+      expect(button).toHaveAttribute('data-end', '6')
+
+      await userEvent.click(button)
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+      expect(correctionCalls()[0].url).toBe(`/editions/${UUID}/pages/1/corrections`)
+      expect(correctionCalls()[0].body).toEqual({
+        start: 2,
+        end: 6,
+        before: 'tern',
+        after: 'tem',
+      })
+      expect(await screen.findByText('✓ Replaced')).toBeInTheDocument()
+    })
+
+    it('shows the page on the screen with the change', async () => {
+      await openFound()
+
+      await userEvent.click(replaceOne(1, 2))
+      await screen.findByText('✓ Replaced')
+
+      // page 0 is on the screen, and it is not page 1: its text is as it was
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('makes the replacement a legal spelling, once', async () => {
+      await openFound()
+
+      await userEvent.click(replaceOne(1, 2))
+      await screen.findByText('✓ Replaced')
+      await userEvent.click(replaceOne(1, 11))
+      await screen.findAllByText('✓ Replaced')
+
+      expect(calls.filter((c) => c.url.endsWith('/legal-spellings'))).toHaveLength(1)
+    })
+
+    it('moves the places that follow it on its page when the replacement is shorter', async () => {
+      await openFound()
+
+      await userEvent.click(replaceOne(1, 2))
+      await screen.findByText('✓ Replaced')
+
+      // "tem" is one character shorter than "tern"
+      expect(replaceOne(1, 11)).toHaveAttribute('data-start', '11')
+      expect(replaceOne(1, 11)).toHaveAttribute('data-end', '15')
+      expect(replaceOne(3, 0)).toHaveAttribute('data-start', '0')
+    })
+
+    it('moves them when the replacement is longer, and not the places of other pages', async () => {
+      await open()
+      await userEvent.type(wrong(), 'tern')
+      await userEvent.type(right(), 'temat')
+      await userEvent.click(find())
+      await screen.findByText(/places? of “tern” on/)
+
+      await userEvent.click(replaceOne(1, 2, 'temat'))
+      await screen.findByText('✓ Replaced')
+
+      expect(replaceOne(1, 13, 'temat')).toHaveAttribute('data-start', '13')
+      expect(replaceOne(3, 0, 'temat')).toHaveAttribute('data-start', '0')
+    })
+
+    it('shows the reason when the backend refuses, and the place can be tried again', async () => {
+      await openFound({ correct: () => new Error('The page has changed') })
+
+      await userEvent.click(replaceOne(1, 2))
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      expect(replaceOne(1, 2)).toBeEnabled()
+    })
+  })
+
+  describe('replace all', () => {
+    it('corrects the places that are in, one request each, in order', async () => {
+      await openFound()
+
+      await userEvent.click(replaceAll())
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(3))
+      expect(correctionCalls().map((c) => c.url)).toEqual([
+        `/editions/${UUID}/pages/1/corrections`,
+        `/editions/${UUID}/pages/1/corrections`,
+        `/editions/${UUID}/pages/3/corrections`,
+      ])
+      expect(await screen.findAllByText('✓ Replaced')).toHaveLength(3)
+      expect(replaceAll()).toBeDisabled()
+    })
+
+    it('sends the offsets as the earlier replacements left them', async () => {
+      await open()
+      await userEvent.type(wrong(), 'tern')
+      await userEvent.type(right(), 'temat')
+      await userEvent.click(find())
+      await screen.findByText(/places? of “tern” on/)
+
+      await userEvent.click(replaceAll())
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(3))
+      // the second place of page 1 follows the first, which is one character longer now
+      expect(correctionCalls()[1].body).toMatchObject({ start: 13, end: 17 })
+    })
+
+    it('leaves out a place that was taken out', async () => {
+      await openFound()
+      await userEvent.click(include(1, 12))
+
+      await userEvent.click(replaceAll())
+
+      await waitFor(() => expect(correctionCalls()).toHaveLength(2))
+      expect(correctionCalls().map((c) => (c.body as { start: number }).start)).toEqual([2, 0])
+    })
+
+    it('goes on after a place that was refused, and says which', async () => {
+      await openFound({
+        correct: (body, page) =>
+          body.start === 2 && page.number === 1
+            ? new Error('The page has changed')
+            : { content: page.content.replace(body.before, body.after) },
+      })
+
+      await userEvent.click(replaceAll())
+
+      expect(await screen.findByText('The page has changed')).toBeInTheDocument()
+      await waitFor(() => expect(correctionCalls()).toHaveLength(3))
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+      expect(screen.getAllByText('✓ Replaced')).toHaveLength(2)
     })
   })
 

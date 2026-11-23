@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.text_tools.spelling import tokenize
+from app.text_tools.token_occurrences import context_after, context_before
 
 # The most forms of a name of several words that are made (the product of the
 # forms of its words, in the same case).
@@ -331,8 +332,10 @@ def forms_of_phrase(phrase: str, label: str = "") -> list[Form]:
 @dataclass(frozen=True)
 class PhraseMatch:
     """A form found in a text: the characters `start` to `end` are `text`; `before`
-    and `after` are the token before and the token after it (empty at the ends of
-    the text), to show it in its context."""
+    and `after` are its context: the nearest word before it and the nearest word after
+    it, with the signs between them and the form ("dom." and ", kota"), so that a full
+    stop or a comma next to it does not leave nothing to read (empty at the ends of
+    the text, where there is no word)."""
 
     start: int
     end: int
@@ -370,12 +373,8 @@ def find_forms(text: str, forms: Iterable[str]) -> list[PhraseMatch]:
                         start=token.start(),
                         end=last.end(),
                         text=text[token.start() : last.end()],
-                        before=tokens[index - 1].group() if index else "",
-                        after=(
-                            tokens[index + size].group()
-                            if index + size < len(tokens)
-                            else ""
-                        ),
+                        before=context_before(text, tokens, index),
+                        after=context_after(text, tokens, index + size - 1),
                     )
                 )
                 taken_to = last.end()

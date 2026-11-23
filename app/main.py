@@ -16,6 +16,7 @@ from app.persistence.ontology import (
     MissingHyphen,
     PageMatches,
     PageRubbish,
+    PageTokenOccurrences,
     SimilarEntities,
     SimilarPageNumbers,
     SpellingGroup,
@@ -46,6 +47,7 @@ from app.text_tools.tei_xml import (
     tei_xml_sections,
     tei_xml_to_text,
 )
+from app.text_tools.token_occurrences import InvalidToken
 from app.view_models import (
     CollectionPage,
     EntityLabel,
@@ -553,6 +555,58 @@ def get_similar_page_numbers(
 
 
 @app.get(
+    "/editions/{edition_id}/token-occurrences",
+    response_model=list[PageTokenOccurrences],
+)
+def get_token_occurrences(
+    edition_id: UUID, token: Annotated[str, Query(min_length=1, max_length=100)]
+) -> list[PageTokenOccurrences]:
+    """List every place of a token in the edition, exactly, so that it can be
+    corrected everywhere (`POST .../corrections`, a place at a time). The OCR makes
+    the same mistake again and again, and the spell check does not flag a mistake
+    that is a word too: "tem" is read as "tern". The person sees it on the scan and
+    gives the token as it is wrong.
+
+    `token` is one token as the spell check makes tokens: a word (a hyphen or an
+    apostrophe inside it is part of it) or a run of signs. The match is exact: whole
+    tokens only, and the case of the letters counts, so "tern" is neither "Tern", nor
+    in "terne" or "intern". It is found whether the spell check flags it or not.
+
+    The response is a list with an item for each page that has the token, in the
+    order of the page numbers: `{"page_number": 8, "occurrences": [{"start": 383,
+    "end": 387, "text": "tern", "before": "o", "after": "dniu"}]}`. `start` and `end`
+    are offsets in the text of the page that `POST /tei/text` gives (counted in code
+    points), so text[start:end] is the token, and the correction of it is `POST
+    .../corrections` with `before` the token. `before` and `after` are its context: the
+    nearest word before it and the nearest word after it, with the signs between them
+    and the token, as they are written (`"dniu."` and `"raz"`), so that a full stop or a
+    comma next to it does not leave nothing to read; empty at the ends of the text,
+    where there is no word. The pages are
+    searched in their corrected content, as the user sees them; one without the token,
+    or whose XML cannot be read, is left out. Nothing is changed, and Polona is not
+    called.
+
+    404 if the edition is not stored. 422 if the token is empty, longer than 100
+    characters, has spaces at its ends or inside, or is more than one token (with the
+    reason).
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        found = db.get_token_occurrences(edition_id, token)
+    except InvalidToken as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    logger.info(
+        "%s places of the token on %s pages of edition %s",
+        sum(len(page.occurrences) for page in found),
+        len(found),
+        edition_id,
+    )
+    return found
+
+
+@app.get(
     "/editions/{edition_id}/spelling-chunk-matches",
     response_model=list[SpellingGroup],
 )
@@ -580,8 +634,10 @@ def get_spelling_chunk_matches(
     `occurrences` are the first places of the word (at most five, in the order of
     the pages) and `count` is how many there are in all. `start` and `end` are
     offsets in the text of the page that `POST /tei/text` gives (counted in code
-    points), so text[start:end] is the word. `before` and `after` are the token
-    before it and the one after it (a sign counts), to see it in its context. Only
+    points), so text[start:end] is the word. `before` and `after` are its context:
+    the nearest word before it and the nearest word after it, with the signs between
+    them and the word, as they are written (`"dom."` and `", kota"`), so that a full
+    stop or a comma next to it does not leave nothing to read. Only
     words that the spell check flags are listed, in the way that `POST /spellcheck`
     does (a word split over two lines is judged as one word, and the legal
     spellings of the edition count as correct), so a word that is accepted already
@@ -641,10 +697,12 @@ def get_similar_entities(
     so that a human can see them, and a match is only one of them. `start` and `end`
     are offsets in the text of the page that `POST /tei/text` gives (counted in code
     points), so text[start:end] is `text`, which is what `POST .../entities` is to
-    mark, with `label`. `before` and `after` are the token before the match and the
-    one after it, to see it in its context. A match is `sure` if the NER model also
-    finds an entity there, with the same label: else it may be a word that only
-    looks like the name. The pages are searched in their corrected content, as the
+    mark, with `label`. `before` and `after` are its context: the nearest
+    word before the match and the nearest word after it, with the signs between them
+    and the match, as they are written (`"dom."` and `", kota"`), so that a full stop
+    or a comma next to it does not leave nothing to read. A match is `sure` if the NER
+    model also finds an entity there, with the same label: else it may be a word that
+    only looks like the name. The pages are searched in their corrected content, as the
     user sees them, in the order of the page numbers; a page without matches, or
     whose XML cannot be read, is left out, and so is a place that is inside a marked
     entity already. Nothing is changed, and Polona is not called.
