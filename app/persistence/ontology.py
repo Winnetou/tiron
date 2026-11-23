@@ -68,6 +68,28 @@ class MissingHyphen(BaseModel):
     ambiguous: bool = False
 
 
+class SpellingOccurrence(BaseModel):
+    """A place in a page where a spelling is: the characters `start` to `end`
+    (offsets in the text, counted in code points) of the page. `before` and `after`
+    are the token before it and the one after it (empty at the ends of the text), so
+    that it is seen in its context."""
+
+    page_number: int = Field(ge=0)
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    before: str
+    after: str
+
+
+class SpellingGroup(BaseModel):
+    """A spelling that is flagged and has a chunk in it, with how many times it is
+    in the edition (`count`) and the first of the places (`occurrences`, a few)."""
+
+    text: str
+    count: int = Field(ge=1)
+    occurrences: list[SpellingOccurrence]
+
+
 class EntityForm(BaseModel):
     """A form of a named entity in the cases: `text`, and the `cases` it can be in
     ("gen.sg", "dat.pl", ...; "any" if the word has no case: a name that does not

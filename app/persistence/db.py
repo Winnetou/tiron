@@ -36,6 +36,8 @@ from app.persistence.ontology import (
     RubbishLine,
     SimilarEntities,
     SimilarPageNumbers,
+    SpellingGroup,
+    SpellingOccurrence,
     TokenMatch,
     Work,
 )
@@ -50,6 +52,7 @@ from app.text_tools.page_numbers import (
     pattern_of,
 )
 from app.text_tools.rubbish import find_rubbish_lines
+from app.text_tools.spelling_chunks import find_chunk_matches
 from app.text_tools.tei_xml import (
     InvalidTei,
     tei_xml_entities,
@@ -128,6 +131,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 
+# The most places that are given for a spelling (it is counted all the same).
+_OCCURRENCES_SHOWN = 5
 # The most words of a named entity that its forms are looked for.
 _MOST_WORDS = 5
 
@@ -408,6 +413,57 @@ class Database:
         return [
             MissingHyphen.model_validate(vars(found))
             for found in find_missing_hyphens(text, legal)
+        ]
+
+    def get_chunk_matches(
+        self, edition_id: UUID, substrings: list[str]
+    ) -> list[SpellingGroup]:
+        """The words of the pages of an edition that have one of `substrings` in
+        them (see `app/text_tools/spelling_chunks.py`) and that the spell check
+        flags, so that they can be accepted as legal spellings of the edition. A
+        word is listed once, with how many times it is in the edition and the first
+        places (`_OCCURRENCES_SHOWN`) in the order of the pages. The spellings that
+        are legal in the edition count as correct, so a word that is accepted
+        already is not listed. The text is that of the corrected content, as the
+        user sees it; a page without XML, or with XML that cannot be read, is left
+        out. The words that are in the edition most often come first, then the
+        others in the order of their first place.
+
+        Raises SpellcheckUnavailable if the dictionary cannot be loaded.
+        """
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        legal = self.get_legal_spellings(edition_id)
+        places: dict[str, list[SpellingOccurrence]] = {}
+        counts: dict[str, int] = {}
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if not xml:
+                continue
+            try:
+                text = tei_xml_to_text(xml)
+            except InvalidTei:
+                continue
+            for match in find_chunk_matches(text, substrings, legal):
+                counts[match.text] = counts.get(match.text, 0) + 1
+                shown = places.setdefault(match.text, [])
+                if len(shown) < _OCCURRENCES_SHOWN:
+                    shown.append(
+                        SpellingOccurrence(
+                            page_number=row["number"],
+                            start=match.start,
+                            end=match.end,
+                            before=match.before,
+                            after=match.after,
+                        )
+                    )
+        order = {word: index for index, word in enumerate(counts)}
+        return [
+            SpellingGroup(text=word, count=counts[word], occurrences=places[word])
+            for word in sorted(counts, key=lambda w: (-counts[w], order[w]))
         ]
 
     def get_similar_entities(

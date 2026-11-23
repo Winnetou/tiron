@@ -360,6 +360,45 @@ export function getSimilarPageNumbers(
   )
 }
 
+/** A place in a page where a spelling is (SpellingOccurrence). */
+export interface SpellingOccurrence {
+  page_number: number
+  /** Offsets in the text of the page, counted in code points. */
+  start: number
+  end: number
+  /** The token before it and the one after it: its context. */
+  before: string
+  after: string
+}
+
+/** A flagged spelling that has a chunk in it, with its places (SpellingGroup). */
+export interface SpellingGroup {
+  text: string
+  /** How many times it is in the edition. */
+  count: number
+  /** The first of the places: a few, not all of them. */
+  occurrences: SpellingOccurrence[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/spelling-chunk-matches: the backend finds the
+ * words of the whole edition that the spell check flags and that have the chunk
+ * (`core` with each of the `endings`: `cy` and `a`, `i` is `cya` and `cyi`) in
+ * them, each once, with how many times it is there and its first places. Nothing
+ * is changed. A chunk that cannot be looked for is refused with the reason.
+ */
+export function getSpellingChunkMatches(
+  editionId: string,
+  core: string,
+  endings: string[],
+): Promise<SpellingGroup[]> {
+  const query = new URLSearchParams({ core })
+  for (const ending of endings) query.append('ending', ending)
+  return request<SpellingGroup[]>(
+    `/editions/${editionId}/spelling-chunk-matches?${query}`,
+  )
+}
+
 /** A form of a named entity in the cases (EntityForm). */
 export interface EntityForm {
   text: string

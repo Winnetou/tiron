@@ -102,6 +102,11 @@ interface Props {
   /** A panel that is docked under the text (the missing hyphens), if any. */
   dock: ReactNode
   /**
+   * Accept, as legal spellings, the flagged words of the whole edition that have a
+   * chunk (a core and its endings) in common.
+   */
+  onApplyRule: () => void
+  /**
    * Look for a named entity that was confirmed on this page, in all its forms in
    * the cases, in the whole edition: `examples` are the confirmed entities.
    */
@@ -164,6 +169,7 @@ export default function PageViewer({
   onFindHyphens,
   onFindRubbish,
   onFindEntities,
+  onApplyRule,
   highlight,
   dock,
   notice,
@@ -244,6 +250,13 @@ export default function PageViewer({
             disabled: busy || text.trim() === '',
             title:
               'Put back the hyphens that the OCR dropped at the end of the lines of this page',
+          },
+          {
+            label: 'Apply spelling rule to the edition',
+            onSelect: onApplyRule,
+            disabled: busy,
+            title:
+              'Give a chunk of letters, such as cy with the endings a, i, ami, and accept the flagged words of the whole edition that have it as legal spellings',
           },
           {
             label: 'Find OCR rubbish in the edition',

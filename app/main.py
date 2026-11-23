@@ -18,10 +18,12 @@ from app.persistence.ontology import (
     PageRubbish,
     SimilarEntities,
     SimilarPageNumbers,
+    SpellingGroup,
 )
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools.spelling_chunks import InvalidChunk, chunk_substrings
 from app.text_tools.tei_xml import (
     CannotInsert,
     CannotJoin,
@@ -546,6 +548,67 @@ def get_similar_page_numbers(
         len(found.candidates),
         edition_id,
         number,
+    )
+    return found
+
+
+@app.get(
+    "/editions/{edition_id}/spelling-chunk-matches",
+    response_model=list[SpellingGroup],
+)
+def get_spelling_chunk_matches(
+    edition_id: UUID,
+    core: Annotated[str, Query(min_length=1)],
+    ending: Annotated[list[str] | None, Query()] = None,
+) -> list[SpellingGroup]:
+    """List the words of the edition that have a chunk in them and are flagged by
+    the spell check, so that they can be accepted as legal spellings (`POST
+    .../legal-spellings`), all at once. Nothing is corrected: old print has
+    spellings that repeat, "Konwencya" and "tendencyę" have a "y" where we write
+    "j", and the dictionary is a modern one. We call them "legal", not "correct".
+
+    A chunk is a `core` (`cy`) and `ending`, given once for each ending (`a`, `i`,
+    `ami`): what is looked for is the core with each ending, `cya`, `cyi` and
+    `cyami`, anywhere in the word, whatever the case of the letters. An empty
+    ending is the core alone. At most ten endings; the core and each ending are at
+    most 30 letters (a hyphen or an apostrophe inside is fine).
+
+    The response is a list with an item for each word, the ones that are in the
+    edition most often first: `{"text": "Konwencya", "count": 7, "occurrences":
+    [{"page_number": 8, "start": 383, "end": 392, "before": "w", "after": "z"}]}`.
+    `occurrences` are the first places of the word (at most five, in the order of
+    the pages) and `count` is how many there are in all. `start` and `end` are
+    offsets in the text of the page that `POST /tei/text` gives (counted in code
+    points), so text[start:end] is the word. `before` and `after` are the token
+    before it and the one after it (a sign counts), to see it in its context. Only
+    words that the spell check flags are listed, in the way that `POST /spellcheck`
+    does (a word split over two lines is judged as one word, and the legal
+    spellings of the edition count as correct), so a word that is accepted already
+    is not. A word is listed with the case it has: "Konwencya" and "konwencya" are
+    two. The pages are searched in their corrected content, as the user sees them;
+    one whose XML cannot be read is left out. Nothing is changed, and Polona is not
+    called.
+
+    404 if the edition is not stored. 422 if the core is empty, there are no
+    endings or more than ten, or a part is too long or is not letters (with the
+    reason). 503 if the dictionary is not available.
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        substrings = chunk_substrings(core, ending or [])
+    except InvalidChunk as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    try:
+        found = db.get_chunk_matches(edition_id, substrings)
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    logger.info(
+        "%s flagged words of edition %s have %s",
+        len(found),
+        edition_id,
+        ", ".join(substrings),
     )
     return found
 

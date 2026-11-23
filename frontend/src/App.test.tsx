@@ -13,6 +13,7 @@ import type {
   PageMatches,
   PageRubbish,
   SectionSpan,
+  SpellingGroup,
   SimilarEntities,
   SimilarPageNumbers,
 } from './api'
@@ -130,6 +131,8 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../spelling-chunk-matches; defaults to none. */
+  chunkMatches?: (query: { core: string; endings: string[] }) => SpellingGroup[] | Error
   /** Answer of GET .../similar-entities; defaults to no form and no place. */
   similarEntities?: (query: { text: string; label: string }) => SimilarEntities | Error
   /** Answer of GET .../rubbish-lines; defaults to none. */
@@ -284,6 +287,12 @@ function fakeBackend(options: Options = {}) {
       const answer = options.similarNumbers
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.includes('/spelling-chunk-matches?')) {
+      const query = new URLSearchParams(url.split('?')[1])
+      const asked = { core: query.get('core') ?? '', endings: query.getAll('ending') }
+      const answer = options.chunkMatches ? options.chunkMatches(asked) : []
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     if (url.includes('/similar-entities?')) {
@@ -5663,7 +5672,7 @@ describe('page view', () => {
       expect(cog()).toHaveAttribute('aria-expanded', 'false')
     })
 
-    it('has "Find missing hyphens" and "Find OCR rubbish in the edition" in the correction view', async () => {
+    it('has the tools of the correction view', async () => {
       await open()
 
       await userEvent.click(cog())
@@ -5671,6 +5680,7 @@ describe('page view', () => {
       expect(cog()).toHaveAttribute('aria-expanded', 'true')
       expect(names()).toEqual([
         'Find missing hyphens',
+        'Apply spelling rule to the edition',
         'Find OCR rubbish in the edition',
       ])
     })
@@ -7123,6 +7133,375 @@ describe('the same named entity in all its forms', () => {
 
   it('is closed when the user goes back to the editions', async () => {
     await openReview()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})
+
+describe('accepting spellings by their chunk', () => {
+  const TEXT = 'Ala ma Konwencya i Policya.'
+  const place = (page: number, start: number, before: string, after: string) => ({
+    page_number: page,
+    start,
+    end: start + 9,
+    before,
+    after,
+  })
+  const FOUND: SpellingGroup[] = [
+    {
+      text: 'Konwencya',
+      count: 7,
+      occurrences: [place(1, 7, 'ma', 'i'), place(3, 0, '', ',')],
+    },
+    { text: 'Policya', count: 1, occurrences: [place(2, 4, 'w', 'tu')] },
+  ]
+  const review = () => screen.queryByRole('dialog', { name: 'Accept spellings of the edition' })
+  const core = () => screen.getByRole('textbox', { name: 'Core of the chunk' })
+  const ending = (n: number) => screen.getByRole('textbox', { name: `Ending ${n}` })
+  const plus = () => screen.getByRole('button', { name: 'Add another ending' })
+  const find = () => within(review()!).getByRole('button', { name: 'Find' })
+  const acceptAll = () => screen.getByRole('button', { name: /^Accept all/ })
+  const include = (text: string) =>
+    screen.getByRole('checkbox', { name: `Include ${text} in Accept all` })
+  const acceptOne = (text: string) =>
+    screen.getByRole('button', { name: `Accept ${text} as a legal spelling` })
+  const chunkCalls = () => calls.filter((c) => c.url.includes('/spelling-chunk-matches?'))
+  const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      chunkMatches: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Apply spelling rule to the edition' }),
+    )
+  }
+  async function openFound(extra: Options = {}) {
+    await open(extra)
+    await userEvent.type(core(), 'cy')
+    await userEvent.type(ending(1), 'a')
+    await userEvent.click(find())
+    await screen.findByText(/spellings?, \d+ places?/)
+  }
+
+  describe('the tool', () => {
+    it('is in the cog wheel of the correction view', async () => {
+      await open()
+
+      expect(review()).toBeInTheDocument()
+    })
+
+    it('is not in the structure view', async () => {
+      await openPage()
+      await screen.findByRole('img')
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(
+        screen.queryByRole('button', { name: 'Apply spelling rule to the edition' }),
+      ).toBeNull()
+    })
+
+    it('asks nothing of the backend until Find is pressed', async () => {
+      await open()
+
+      expect(chunkCalls()).toHaveLength(0)
+      expect(find()).toBeDisabled()
+    })
+  })
+
+  describe('the chunk', () => {
+    it('has a box for its core and a box for an ending below it', async () => {
+      await open()
+
+      expect(core()).toBeInTheDocument()
+      expect(ending(1)).toBeInTheDocument()
+      expect(core().compareDocumentPosition(ending(1))).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      )
+    })
+
+    it('has a plus sign that adds a box for another ending', async () => {
+      await open()
+      expect(screen.queryByRole('textbox', { name: 'Ending 2' })).toBeNull()
+
+      await userEvent.click(plus())
+      await userEvent.click(plus())
+
+      expect(ending(2)).toBeInTheDocument()
+      expect(ending(3)).toBeInTheDocument()
+    })
+
+    it('can drop an ending that was added', async () => {
+      await open()
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove ending 2' }))
+
+      expect(screen.queryByRole('textbox', { name: 'Ending 2' })).toBeNull()
+    })
+
+    it('has no way to remove the first ending, and no more than ten', async () => {
+      await open()
+      expect(screen.queryByRole('button', { name: 'Remove ending 1' })).toBeNull()
+
+      for (let n = 0; n < 9; n++) await userEvent.click(plus())
+
+      expect(plus()).toBeDisabled()
+    })
+
+    it('shows what is looked for', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+      await userEvent.click(plus())
+      await userEvent.type(ending(3), 'ami')
+
+      expect(screen.getByText('cya, cyi, cyami')).toBeInTheDocument()
+    })
+
+    it('is sent as the core and an ending parameter for each ending', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+      await userEvent.click(plus())
+      await userEvent.type(ending(3), 'ami')
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+      const query = new URLSearchParams(chunkCalls()[0].url.split('?')[1])
+      expect(query.get('core')).toBe('cy')
+      expect(query.getAll('ending')).toEqual(['a', 'i', 'ami'])
+      expect(chunkCalls()[0].url).toContain(`/editions/${UUID}/spelling-chunk-matches?`)
+    })
+
+    it('leaves out an ending that was left empty', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+      expect(new URLSearchParams(chunkCalls()[0].url.split('?')[1]).getAll('ending')).toEqual(['a'])
+    })
+
+    it('is the core alone when no ending is given', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+      expect(new URLSearchParams(chunkCalls()[0].url.split('?')[1]).getAll('ending')).toEqual([''])
+    })
+
+    it('can be changed and sent again', async () => {
+      await openFound()
+
+      await userEvent.type(ending(1), 'x')
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(2))
+    })
+
+    it('shows the reason when the backend cannot look for it', async () => {
+      await open({ chunkMatches: () => new Error('"c1" is not made of letters') })
+      await userEvent.type(core(), 'c1')
+
+      await userEvent.click(find())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('is not made of letters')
+    })
+  })
+
+  describe('the box', () => {
+    it('does not show a replacement or a correction, only the word', async () => {
+      await openFound()
+
+      expect(review()!.textContent).not.toContain('→')
+      expect(within(review()!).queryByText('Konwencja')).toBeNull()
+      expect(review()!.querySelectorAll('.suggestion, .misspelling')).toHaveLength(0)
+    })
+
+    it('lists each word once, with how many times it is in the edition', async () => {
+      await openFound()
+
+      const items = within(review()!).getAllByRole('listitem')
+      expect(items[0].textContent).toContain('Konwencya')
+      expect(items[0].textContent).toContain('×7')
+      expect(screen.getByText('2 spellings, 8 places in the edition')).toBeInTheDocument()
+    })
+
+    it('shows its places in their context: the token before, the word, the token after', async () => {
+      await openFound()
+
+      const first = within(review()!).getAllByRole('listitem')[1]
+      expect(first.querySelector('mark')!.textContent).toBe('Konwencya')
+      expect(first.textContent).toContain('ma')
+      expect(first.textContent).toContain('(page 1)')
+    })
+
+    it('says how many more places there are than are shown', async () => {
+      await openFound()
+
+      expect(screen.getByText('and 5 more')).toBeInTheDocument()
+    })
+
+    it('includes all of them by default', async () => {
+      await openFound()
+
+      expect(include('Konwencya')).toBeChecked()
+      expect(include('Policya')).toBeChecked()
+      expect(acceptAll()).toHaveTextContent('Accept all (2)')
+    })
+
+    it('has Include all and Include none', async () => {
+      await openFound()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(acceptAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(acceptAll()).toHaveTextContent('Accept all (2)')
+    })
+
+    it('says so when there is none', async () => {
+      await open({ chunkMatches: () => [] })
+      await userEvent.type(core(), 'cy')
+      await userEvent.click(find())
+
+      expect(await screen.findByText('No flagged word of the edition has this chunk.')).toBeInTheDocument()
+    })
+
+    it('closes with Close and with Escape', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Apply spelling rule to the edition' }),
+      )
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+
+    it('accepts nothing until the user accepts', async () => {
+      await openFound()
+
+      expect(legalCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('accepting one spelling', () => {
+    it('makes that word a legal spelling, and nothing else', async () => {
+      await openFound()
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(legalCalls()[0].method).toBe('POST')
+      expect(legalCalls()[0].url).toBe(`/editions/${UUID}/legal-spellings`)
+      expect(legalCalls()[0].body).toEqual({ spelling: 'Konwencya' })
+      expect(await screen.findByText('✓ Accepted')).toBeInTheDocument()
+      expect(correctionCalls()).toHaveLength(0)
+    })
+
+    it('does not change the text of the page', async () => {
+      await openFound()
+
+      await userEvent.click(acceptOne('Konwencya'))
+      await screen.findByText('✓ Accepted')
+
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('checks the page on the screen again, with the new legal spelling', async () => {
+      await openFound({ spell: (text) => wordsOf(text, ['Konwencya', 'Policya']) })
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('.misspelled')).toHaveLength(2),
+      )
+      const before = calls.filter((c) => c.url === '/spellcheck').length
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      await waitFor(() =>
+        expect(calls.filter((c) => c.url === '/spellcheck')).toHaveLength(before + 1),
+      )
+      await waitFor(() =>
+        expect(
+          Array.from(pageText().querySelectorAll('.misspelled')).map((e) => e.textContent),
+        ).toEqual(['Policya']),
+      )
+    })
+
+    it('shows the reason when the backend refuses, and the word can be tried again', async () => {
+      await openFound({ legal: () => new Error('Edition not found') })
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      expect(await screen.findByText('Edition not found')).toBeInTheDocument()
+      expect(acceptOne('Konwencya')).toBeEnabled()
+    })
+  })
+
+  describe('accept all', () => {
+    it('accepts the words that are in, one request each, in order', async () => {
+      await openFound()
+
+      await userEvent.click(acceptAll())
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(2))
+      expect(legalCalls().map((c) => (c.body as { spelling: string }).spelling)).toEqual([
+        'Konwencya',
+        'Policya',
+      ])
+      expect(await screen.findAllByText('✓ Accepted')).toHaveLength(2)
+      expect(acceptAll()).toBeDisabled()
+      expect(correctionCalls()).toHaveLength(0)
+    })
+
+    it('leaves out a word that was taken out', async () => {
+      await openFound()
+      await userEvent.click(include('Policya'))
+
+      await userEvent.click(acceptAll())
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect((legalCalls()[0].body as { spelling: string }).spelling).toBe('Konwencya')
+    })
+
+    it('goes on after a word that was refused, and says which', async () => {
+      await openFound({
+        legal: (body) => (body.spelling === 'Konwencya' ? new Error('No') : undefined),
+      })
+
+      await userEvent.click(acceptAll())
+
+      expect(await screen.findByText('No')).toBeInTheDocument()
+      await waitFor(() => expect(legalCalls()).toHaveLength(2))
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+      expect(screen.getAllByText('✓ Accepted')).toHaveLength(1)
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
     await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
