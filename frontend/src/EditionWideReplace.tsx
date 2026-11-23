@@ -4,6 +4,7 @@ import {
   type PageTokenOccurrences,
   type TokenOccurrence,
 } from './api'
+import { Loading } from './Loading'
 
 /** One place of the token, and what became of it. */
 interface Row {
@@ -251,7 +252,7 @@ export function TokenReplaceReview({ editionId, onApprove, onClose }: Props) {
             </button>
           </form>
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the token in the edition …</p>
+            <Loading>Looking for the token in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {found && rows.length === 0 && (

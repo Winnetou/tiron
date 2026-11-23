@@ -935,9 +935,15 @@ describe('named entity recognition', () => {
 
     expect(nerButton()).toBeDisabled()
     expect(nerButton()).toHaveAttribute('aria-busy', 'true')
+    // the skull is shown in the button while the model runs
+    expect(nerButton().querySelector('img')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif',
+    )
     finish([entity('Jan Kowalski', 0)])
     await waitFor(() => expect(marks()).toEqual(['Jan Kowalski']))
     expect(nerButton()).toBeEnabled()
+    expect(nerButton().querySelector('img')).toBeNull() // the icon is back
   })
 
   it('shows the backend error and keeps the text as it was', async () => {
@@ -6154,6 +6160,20 @@ describe('page view', () => {
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+})
+
+describe('the main page while the editions come', () => {
+  it('shows the large skull loop and a text', async () => {
+    window.history.pushState({}, '', '/')
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {}))) // the list never comes
+    render(<App />)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading the editions')
+    expect(document.querySelector('img.page-loading-image')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif',
+    )
   })
 })
 

@@ -4,6 +4,7 @@ import {
   type PageMatches,
   type TokenMatch,
 } from './api'
+import { Loading } from './Loading'
 
 /** A correction that the user made, which may be applied to the whole edition. */
 export interface EditionCorrection {
@@ -274,7 +275,7 @@ export function SimilarMisspellings({
         </header>
         <div className="review-body">
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the same mistake in the edition …</p>
+            <Loading>Looking for the same mistake in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && rows.length === 0 && (

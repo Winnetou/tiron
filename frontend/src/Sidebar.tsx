@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { SKULL_LOOP } from './Loading'
 
 interface Tool {
   label: string
@@ -187,7 +188,18 @@ export default function Sidebar({
             aria-busy={isNer && recognizing ? true : undefined}
             aria-pressed={active}
           >
-            {icon}
+            {isNer && recognizing ? (
+              // the model is running: the skull, only to look at (aria-busy says it)
+              <img
+                src={SKULL_LOOP}
+                alt=""
+                width={22}
+                height={24}
+                className="sidebar-busy-image"
+              />
+            ) : (
+              icon
+            )}
           </button>
         )
       })}

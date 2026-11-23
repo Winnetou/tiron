@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getSpellingChunkMatches, type SpellingGroup } from './api'
 import { ENDING_SETS, type EndingSet } from './nounEndings'
+import { Loading } from './Loading'
 
 /** One flagged spelling, and what became of it. */
 interface Row {
@@ -320,7 +321,7 @@ export function SpellingChunkReview({ editionId, onAccept, onClose }: Props) {
             </button>
           </form>
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the words in the edition …</p>
+            <Loading>Looking for the words in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {loaded.kind === 'done' && rows.length === 0 && (

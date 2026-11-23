@@ -5,6 +5,7 @@ import {
   type EntityMatch,
   type SimilarEntities,
 } from './api'
+import { Loading } from './Loading'
 
 /** A named entity that was confirmed on the page: the example to look for. */
 export interface EntityExample {
@@ -248,7 +249,7 @@ export function SimilarEntitiesReview({
             </p>
           )}
           {loaded.kind === 'loading' && (
-            <p role="status">Looking for the forms of the name in the edition …</p>
+            <Loading>Looking for the forms of the name in the edition …</Loading>
           )}
           {loaded.kind === 'error' && <p role="alert">{loaded.message}</p>}
           {found && (
