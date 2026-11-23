@@ -1007,7 +1007,7 @@ class TestSpellcheck:
                 {"text": "jey", "start": 7, "end": 10, "correct": False},
             ]
         }
-        check.assert_called_once_with("Ala ma jey", ())  # no edition: no legal ones
+        check.assert_called_once_with("Ala ma jey", (), [])  # no edition: no legal ones
 
     def test_no_words_is_an_empty_list(self, check):
         check.return_value = []
@@ -2475,6 +2475,31 @@ class TestMarkPageSection:
         assert response.status_code == 422
         db.update_page.assert_not_called()
 
+    def test_a_quotation_in_another_language(self, stored):
+        response = self.post(stored, self.body("cle przekazał", "quote", lang="la"))
+
+        assert response.status_code == 200
+        assert (
+            '<quote xml:lang="la">cle przekazał</quote>'
+            in stored["page"].xml_content_corrected
+        )
+        assert tei_xml_to_text(stored["page"].xml_content_corrected) == self.TEXT
+
+    @pytest.mark.parametrize(
+        "extra", [{}, {"lang": ""}, {"lang": "pl"}, {"lang": "xx"}]
+    )
+    def test_a_quote_needs_one_of_the_languages(self, stored, extra):
+        response = self.post(stored, self.body("cle przekazał", "quote", **extra))
+
+        assert response.status_code == 422
+        db.update_page.assert_not_called()
+
+    def test_a_language_for_something_that_is_not_a_quote_is_refused(self, stored):
+        response = self.post(stored, self.body("84 KATEDRA", "header", lang="la"))
+
+        assert response.status_code == 422
+        db.update_page.assert_not_called()
+
     def test_a_group_of_notes(self, stored):
         self.post(stored, self.body("I. Alfa", "note", n="1"))
         self.post(stored, self.body("II. Beta", "note", n="2"))
@@ -2681,6 +2706,45 @@ class TestTeiEntities:
         client.post("/tei/entities", json={"xml": str(text_to_tei_xml("Ala"))})
 
         update.assert_not_called()
+
+
+class TestSpellcheckOfQuotations:
+    def foreign_xml(self):
+        xml = str(text_to_tei_xml("ala mens sana ma"))
+        return xml.replace("mens sana", '<quote xml:lang="la">mens sana</quote>')
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w in {"ala", "ma"}})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    def wrong(self, response):
+        return [w["text"] for w in response.json()["words"] if not w["correct"]]
+
+    def test_the_words_of_a_quotation_in_another_language_are_not_flagged(self):
+        response = client.post(
+            "/spellcheck", json={"text": "ala mens sana ma", "xml": self.foreign_xml()}
+        )
+
+        assert response.status_code == 200
+        assert self.wrong(response) == []
+
+    def test_without_the_xml_they_are_flagged(self):
+        response = client.post("/spellcheck", json={"text": "ala mens sana ma"})
+
+        assert self.wrong(response) == ["mens", "sana"]
+
+    def test_text_that_is_not_the_text_of_the_xml_is_422(self):
+        response = client.post(
+            "/spellcheck", json={"text": "ala ma", "xml": self.foreign_xml()}
+        )
+
+        assert response.status_code == 422
+
+    def test_xml_that_is_not_tei_is_422(self):
+        response = client.post("/spellcheck", json={"text": "ala", "xml": "<a/>"})
+
+        assert response.status_code == 422
 
 
 class TestTeiSections:

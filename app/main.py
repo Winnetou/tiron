@@ -35,6 +35,7 @@ from app.text_tools.tei_xml import (
     CannotTag,
     InvalidTei,
     TextChanged,
+    foreign_language_ranges,
     insert_text_at,
     join_lines_at,
     join_text_range,
@@ -272,6 +273,11 @@ def mark_page_section(
     - `toc`: `<div type="toc">` around whole paragraphs
     - `note`: `<note>` around the text, like an entity; with the optional `n`
       (e.g. `"n": "1"`, only for a note) it is `<note n="1">`
+    - `quote`: `<quote xml:lang="la">` around the text, a quotation in another
+      language; the body must also have `lang`, the code of the language: one of
+      `ru`, `en`, `de`, `es`, `fr`, `it`, `la` (`lang` is only for a quote). The
+      text in it is not Polish, so the spell check leaves it alone (see
+      `POST /spellcheck`)
     - `note_group`: `<noteGrp>` around notes that are already marked and next to
       each other, and nothing else: TEI lets a `<noteGrp>` hold only notes, so
       anything else in the selection is a 422
@@ -307,6 +313,7 @@ def mark_page_section(
             mark.section,
             mark.text,
             mark.n,
+            mark.lang,
         )
     except TextChanged as exc:
         logger.warning(
@@ -437,13 +444,32 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
     "JEY" (a sentence can start with it); a legal "Jey" does not make "jey"
     correct. An edition that is not stored just has none.
 
+    The body may also have the `xml`, the TEI XML that `text` is the text of (what
+    `POST /tei/text` gave for it): the words in a quotation in another language
+    (`<quote xml:lang="la">`, see `POST .../sections`) are then not checked, and are
+    reported as correct, as the dictionary is a Polish one. If `text` is not the
+    text of the `xml` the response is 422.
+
     The dictionary is loaded when the backend starts (see `lifespan`). If it is
     not available the response is 503. The text may have up to 100,000
     characters, otherwise the response is 422. Nothing is stored.
     """
     try:
         legal = db.get_legal_spellings(request.edition_id) if request.edition_id else ()
-        return SpellcheckResult(words=check_words(request.text, legal))
+        ignore: list[tuple[int, int]] = []
+        if request.xml is not None:
+            try:
+                if tei_xml_to_text(request.xml) != request.text:
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        "The text is not the text of the XML",
+                    )
+                ignore = foreign_language_ranges(request.xml)
+            except InvalidTei as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)
+                ) from exc
+        return SpellcheckResult(words=check_words(request.text, legal, ignore))
     except SpellcheckUnavailable as exc:
         logger.error(
             "Spellcheck requested, but the dictionary is not available: %s", exc

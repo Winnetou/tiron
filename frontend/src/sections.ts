@@ -6,6 +6,7 @@ export type SectionKind =
   | 'toc'
   | 'note_group'
   | 'note'
+  | 'quote'
 
 export interface SectionOption {
   kind: SectionKind
@@ -27,6 +28,22 @@ export const SECTIONS: SectionOption[] = [
   { kind: 'toc', label: 'Table of contents' },
   { kind: 'note_group', label: 'Note group' },
   { kind: 'note', label: 'Note' },
+  { kind: 'quote', label: 'Quote in another language' },
+]
+
+/**
+ * The languages that a quotation can be in, by the code that goes into
+ * `xml:lang`: the most used European ones, and Latin. The backend has the same
+ * list and refuses any other.
+ */
+export const LANGUAGES: { code: string; label: string }[] = [
+  { code: 'la', label: 'Latin' },
+  { code: 'de', label: 'German' },
+  { code: 'fr', label: 'French' },
+  { code: 'en', label: 'English' },
+  { code: 'it', label: 'Italian' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'ru', label: 'Russian' },
 ]
 
 export const sectionLabel = (kind: SectionKind): string =>

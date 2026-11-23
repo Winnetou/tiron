@@ -30,3 +30,5 @@ into_db:
 	
 into_shell:
 	docker exec -it tiron-backend-1  /bin/bash
+restart:
+	docker compose restart backend

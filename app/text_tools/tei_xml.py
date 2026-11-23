@@ -9,7 +9,7 @@ import delb
 from delb import TagNode, tag
 from delb.nodes import TextNode
 
-from app.view_models import EntityLabel, SectionKind
+from app.view_models import LANGUAGES, EntityLabel, SectionKind
 
 TEI_NAMESPACE = "http://www.tei-c.org/ns/1.0"
 
@@ -234,6 +234,8 @@ def _is_section(node: TagNode) -> bool:
     name = node.local_name
     if name == "div":
         return _attributes(node).get("type") == "toc"
+    if name == "quote":
+        return _LANG in _attributes(node)  # a quotation in another language
     return name in {"fw", "noteGrp", "note"}
 
 
@@ -294,7 +296,7 @@ def tei_xml_sections(xml: str) -> list[dict[str, Any]]:
             "end": end,
             "open": f"<{node.local_name}"
             + "".join(
-                f" {name}={quoteattr(value)}"
+                f" {_written(name)}={quoteattr(value)}"
                 for name, value in _attributes(node).items()
             )
             + ">",
@@ -416,9 +418,25 @@ def _serialise(root: TagNode, original: str) -> str:
     return str(root)
 
 
+_XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace"
+_LANG = f"{{{_XML_NAMESPACE}}}lang"
+
+
 def _attributes(node: TagNode) -> dict[str, str]:
-    """The attributes of an element, by name."""
-    return {key[1]: str(attribute.value) for key, attribute in node.attributes.items()}
+    """The attributes of an element, by name; an attribute of the XML namespace
+    (xml:lang) by its name in Clark notation, `{namespace}lang`."""
+    return {
+        (f"{{{key[0]}}}{key[1]}" if key[0] == _XML_NAMESPACE else key[1]): str(
+            attribute.value
+        )
+        for key, attribute in node.attributes.items()
+    }
+
+
+def _written(name: str) -> str:
+    """The name of an attribute as it is written in the XML (`xml:lang`)."""
+    prefix = f"{{{_XML_NAMESPACE}}}"
+    return "xml:" + name[len(prefix) :] if name.startswith(prefix) else name
 
 
 def _locate(
@@ -1143,7 +1161,24 @@ SECTIONS: dict[str, tuple[str, dict[str, str]]] = {
     "toc": ("div", {"type": "toc"}),
     "note_group": ("noteGrp", {}),
     "note": ("note", {}),
+    # a quotation in another language: the language is given with it (`lang`)
+    "quote": ("quote", {}),
 }
+
+
+def foreign_language_ranges(xml: str) -> list[tuple[int, int]]:
+    """The stretches of the text (as tei_xml_to_text gives it) that are quotations
+    in another language than Polish, `<quote xml:lang="la">`: `start` and `end`,
+    in code points, in the order of the document (outer ones first).
+
+    Raises InvalidTei if the XML is not a TEI document (see _parse_tei)."""
+
+    def foreign(node: TagNode) -> bool:
+        lang = _attributes(node).get(_LANG) if node.local_name == "quote" else None
+        return lang is not None and lang.lower().split("-")[0] != "pl"
+
+    _, found = _marked_elements(_text_element(_parse_tei(xml)), foreign)
+    return [(start, end) for _, start, end in found]
 
 
 def _blocks_around(node: TextNode, text_element: TagNode) -> TagNode | None:
@@ -1429,7 +1464,13 @@ def _wrap_notes(xml: str, start: int, end: int, text: str) -> str:
 
 
 def mark_section(
-    xml: str, start: int, end: int, section: str, text: str, n: str | None = None
+    xml: str,
+    start: int,
+    end: int,
+    section: str,
+    text: str,
+    n: str | None = None,
+    lang: str | None = None,
 ) -> str:
     """Mark the characters `start` to `end` of the text of a TEI document as a
     section of the page, and return the changed XML.
@@ -1439,7 +1480,10 @@ def mark_section(
     <fw type="pageNum"> around the text, `toc` (the table of contents) becomes
     <div type="toc">, a `note` becomes <note> (with `n="..."` if `n` is given,
     the number of the note), and a `note_group` becomes <noteGrp> around notes
-    that are already marked (TEI lets it hold nothing else). `start` and `end`
+    that are already marked (TEI lets it hold nothing else), and a `quote` becomes
+    <quote xml:lang="..."> around the text, a quotation in another language (the
+    code of the language, one of LANGUAGES, is `lang`, and is needed for a quote
+    and only for it). `start` and `end`
     are character offsets into what tei_xml_to_text returns for the same XML,
     and `text` is what is expected there; if it is not, the text has changed
     since the offsets were taken.
@@ -1468,6 +1512,14 @@ def mark_section(
         if section != "note":
             raise CannotTag("Only a note has a number")
         attributes = {**attributes, "n": n}
+    if section == "quote":
+        if lang not in LANGUAGES:
+            raise CannotTag(
+                "A quote needs the language it is in, one of: " + ", ".join(LANGUAGES)
+            )
+        attributes = {_LANG: lang}
+    elif lang is not None:
+        raise CannotTag("Only a quote has a language")
     if name == "div":
         return _wrap_blocks(xml, start, end, text, name, attributes)
     if name == "noteGrp":

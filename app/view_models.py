@@ -126,8 +126,22 @@ EntityLabel = Literal[
 ]
 
 
+# The languages that a quotation can be in, by their codes (xml:lang): the most
+# used European ones, and Latin.
+LANGUAGES: dict[str, str] = {
+    "ru": "Russian",
+    "en": "English",
+    "de": "German",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "la": "Latin",
+}
+
 # The sections of a page that can be marked, as the API calls them.
-SectionKind = Literal["header", "footer", "page_number", "toc", "note_group", "note"]
+SectionKind = Literal[
+    "header", "footer", "page_number", "toc", "note_group", "note", "quote"
+]
 
 
 class EntityTag(BaseModel):
@@ -153,6 +167,9 @@ class SpellcheckRequest(BaseModel):
     text: str = Field(max_length=100_000)
     # The edition the text is from: its legal spellings count as correct.
     edition_id: UUID | None = None
+    # The TEI XML that `text` is the text of: what is in a quotation in another
+    # language (<quote xml:lang="la">) is not checked, as it is not Polish.
+    xml: str | None = Field(default=None, max_length=1_000_000)
 
 
 class Word(BaseModel):
@@ -342,9 +359,17 @@ class SectionMark(BaseModel):
     section: SectionKind
     # The number of a note (<note n="1">); only for a `note`, and optional.
     n: str | None = Field(default=None, max_length=20)
+    # The language of a quotation (<quote xml:lang="la">): its code; only for a
+    # `quote`, and needed for it.
+    lang: str | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def check_range(self) -> SectionMark:
+        if self.section == "quote":
+            if self.lang not in LANGUAGES:
+                raise ValueError("a quote needs lang, one of: " + ", ".join(LANGUAGES))
+        elif self.lang is not None:
+            raise ValueError("lang is only for a quote")
         if self.end <= self.start:
             raise ValueError("end must be greater than start")
         if self.n is not None:

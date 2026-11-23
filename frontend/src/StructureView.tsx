@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { teiSections, type SectionSpan } from './api'
 import { selectionInText } from './selection'
-import { SECTIONS, type SectionKind, type TextSelection } from './sections'
+import {
+  LANGUAGES,
+  SECTIONS,
+  type SectionKind,
+  type TextSelection,
+} from './sections'
 
 /** How the backend writes the page number that is marked in the XML. */
 const PAGE_NUMBER_OPEN = '<fw type="pageNum">'
@@ -76,7 +81,12 @@ interface Props {
   /** True while a request is running: nothing can be confirmed meanwhile. */
   busy: boolean
   /** The user chose a section for the selected text and confirmed. */
-  onMark: (selection: TextSelection, section: SectionKind, n?: string) => void
+  onMark: (
+    selection: TextSelection,
+    section: SectionKind,
+    n?: string,
+    lang?: string,
+  ) => void
   /**
    * Told whether a page number is marked on the page (`<fw type="pageNum">`), as
    * the sections are known: only then can it be the example for the other pages
@@ -130,12 +140,15 @@ export default function StructureView({
   const [choice, setChoice] = useState<SectionKind | ''>('')
   // The number of a note (<note n="1">), which is optional.
   const [number, setNumber] = useState('')
+  // The language of a quotation (<quote xml:lang="la">), needed for a quote.
+  const [language, setLanguage] = useState('')
   const active = pending && pending.forText === text ? pending : null
 
   function clear() {
     setPending(null)
     setChoice('')
     setNumber('')
+    setLanguage('')
   }
 
   // Escape closes the dialog wherever the keyboard focus is.
@@ -146,6 +159,7 @@ export default function StructureView({
         setPending(null)
         setChoice('')
         setNumber('')
+        setLanguage('')
         window.getSelection()?.removeAllRanges()
       }
     }
@@ -177,11 +191,18 @@ export default function StructureView({
     })
     setChoice('')
     setNumber('')
+    setLanguage('')
   }
 
   function confirm() {
     if (!active || choice === '') return
-    onMark(active.selection, choice, choice === 'note' ? number.trim() : undefined)
+    if (choice === 'quote' && language === '') return
+    onMark(
+      active.selection,
+      choice,
+      choice === 'note' ? number.trim() : undefined,
+      choice === 'quote' ? language : undefined,
+    )
     clear()
     window.getSelection()?.removeAllRanges()
   }
@@ -234,10 +255,25 @@ export default function StructureView({
               }}
             />
           )}
+          {choice === 'quote' && (
+            <select
+              aria-label="Language"
+              className="structure-language"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+            >
+              <option value="">Choose a language…</option>
+              {LANGUAGES.map(({ code, label }) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             onClick={confirm}
-            disabled={choice === '' || busy}
+            disabled={choice === '' || (choice === 'quote' && language === '') || busy}
           >
             Confirm
           </button>

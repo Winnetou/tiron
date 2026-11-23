@@ -37,6 +37,27 @@ def words(text):
     return [(w.text, w.correct) for w in check_words(text)]
 
 
+class TestIgnoredStretches:
+    def test_words_in_an_ignored_stretch_are_correct(self, fake):
+        text = "ala mens sana ma"
+
+        result = [(w.text, w.correct) for w in check_words(text, (), [(4, 13)])]
+
+        assert result == [("ala", True), ("mens", True), ("sana", True), ("ma", True)]
+
+    def test_words_outside_it_are_judged_as_always(self, fake):
+        result = [
+            (w.text, w.correct) for w in check_words("ala mens sana", (), [(4, 8)])
+        ]
+
+        assert result == [("ala", True), ("mens", True), ("sana", False)]
+
+    def test_a_word_that_is_only_partly_in_it_is_judged(self, fake):
+        result = [(w.text, w.correct) for w in check_words("ala mens", (), [(4, 6)])]
+
+        assert result == [("ala", True), ("mens", False)]
+
+
 class TestWords:
     def test_every_word_with_offsets_and_a_verdict(self, fake):
         assert check_words("Ala ma kotta") == [

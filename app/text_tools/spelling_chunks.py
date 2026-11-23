@@ -75,17 +75,21 @@ class ChunkMatch:
 
 
 def find_chunk_matches(
-    text: str, substrings: Collection[str], legal: Collection[str] = ()
+    text: str,
+    substrings: Collection[str],
+    legal: Collection[str] = (),
+    ignore: Collection[tuple[int, int]] = (),
 ) -> list[ChunkMatch]:
     """The words of `text` that have one of `substrings` in them and that the spell
     check flags (see `check_words`: a word split over two lines is judged as one
     word, and the spellings that are legal in the edition count as correct), in
-    order.
+    order. The words in the stretches `ignore` (quotations in another language) are
+    not checked, so they are not found.
 
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """
     wanted = [substring.lower() for substring in substrings if substring]
-    words = check_words(text, legal)
+    words = check_words(text, legal, ignore)
     tokens = tokenize(text)  # (the same tokens, in the same order, as the words)
     found = []
     for index, word in enumerate(words):

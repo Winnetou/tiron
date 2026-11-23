@@ -127,6 +127,7 @@ interface Props {
     selection: TextSelection,
     section: SectionKind,
     n?: string,
+    lang?: string,
   ) => void
   /** What was done last, to tell the user (not an error). */
   notice: string | null
