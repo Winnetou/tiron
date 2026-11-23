@@ -305,9 +305,10 @@ export default function PageViewer({
   return (
     <div className="viewer">
       <section className="viewer-half" ref={scanHalf} onScroll={followScan}>
-        <div className="zoom-controls">
+        <div className="zoom-controls review-styled">
           <button
             type="button"
+            className="review-round-button"
             aria-label="Zoom out"
             onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - ZOOM_STEP))}
             disabled={zoom <= MIN_ZOOM}
@@ -317,6 +318,7 @@ export default function PageViewer({
           <span aria-live="polite">{zoom}%</span>
           <button
             type="button"
+            className="review-round-button"
             aria-label="Zoom in"
             onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + ZOOM_STEP))}
             disabled={zoom >= MAX_ZOOM}

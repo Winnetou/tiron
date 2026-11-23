@@ -227,7 +227,7 @@ export default function StructureView({
         <div
           role="dialog"
           aria-label="Mark the selected text"
-          className={`structure-popup ${'bottom' in active.placement ? 'above' : 'below'}`}
+          className={`structure-popup review-styled ${'bottom' in active.placement ? 'above' : 'below'}`}
           style={{ left: active.left, ...active.placement }}
         >
           <select

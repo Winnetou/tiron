@@ -591,6 +591,15 @@ describe('the main page', () => {
     expect(links()[1]).toHaveAttribute('href', `/editions/${editionIds(1)[1]}/pages/0`)
   })
 
+  it('has Previous and Next with the look of the tools', async () => {
+    openMainPage()
+    await screen.findByRole('navigation', { name: 'Editions' })
+
+    expect(screen.getByRole('button', { name: 'Next' }).parentElement).toHaveClass(
+      'review-styled',
+    )
+  })
+
   it('moves between the pages of the list', async () => {
     openMainPage()
     await screen.findByRole('navigation', { name: 'Editions' })
@@ -1052,6 +1061,7 @@ describe('confirming or rejecting an entity', () => {
       ).toEqual([...ALL, 'Not NER'])
       expect(box.getByRole('button', { name: 'Confirm' })).toBeEnabled()
       expect(dialog()).toHaveAccessibleName('Named entity: Paryżu')
+      expect(dialog()).toHaveClass('review-styled') // the look of the other boxes
     })
 
     it('has the label that was recognized selected, and nothing else', async () => {
@@ -1906,6 +1916,7 @@ describe('structure view', () => {
         'Quote in another language',
       ])
       expect(confirmButton()).toBeInTheDocument()
+      expect(dialog()).toHaveClass('review-styled') // the look of the other boxes
     })
 
     it('nothing is chosen at first, so Confirm cannot be pressed', async () => {
@@ -3763,6 +3774,7 @@ describe('an entity the recognition missed', () => {
     select('Paryżu')
 
     expect(dialog()).toBeInTheDocument()
+    expect(dialog()).toHaveClass('review-styled') // the look of the other boxes
   })
 
   it('has a dropdown of the labels, without "Not NER", and a disabled Confirm', async () => {
@@ -4605,6 +4617,15 @@ describe('a page without text', () => {
     expect(addButton()).toBeDisabled()
     expect(screen.getByText(/This page has no text/)).toBeInTheDocument()
     expect(screen.queryByText(/Double-click a place/)).toBeNull()
+  })
+
+  it('the field and the button have the look of the tools', async () => {
+    await open()
+
+    expect(addButton().closest('form')).toHaveClass('review-styled')
+    expect(
+      screen.getByRole('textbox', { name: 'Text to add to the empty page' }),
+    ).toHaveClass('styled-input')
   })
 
   it('sends the text as a token at position 0, and shows it as the first line', async () => {
@@ -6029,6 +6050,15 @@ describe('page view', () => {
     // only the cog wheel is below them
     expect(group.nextElementSibling).toBe(sidebar.lastElementChild)
     expect(sidebar.lastElementChild).toHaveClass('sidebar-tools')
+  })
+
+  it('the zoom buttons are round and have the look of the tools', async () => {
+    await openPage()
+
+    const zoomIn = await screen.findByRole('button', { name: 'Zoom in' })
+
+    expect(zoomIn).toHaveClass('review-round-button')
+    expect(zoomIn.closest('.zoom-controls')).toHaveClass('review-styled')
   })
 
   it('zooms the scan in and out within limits', async () => {

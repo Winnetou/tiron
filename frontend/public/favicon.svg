@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#ffe36e" stroke="#e0a800" stroke-width="4"/>
+  <!-- a lowercase "t": the stem, the crossbar and the foot -->
+  <path d="M27 14v12h-8v7h8v10c0 6 3 9 9 9 2 0 4-.3 6-1v-7c-1 .3-2 .4-3 .4-2 0-3-1-3-3V33h6v-7h-6V14z" fill="#1a1a1a"/>
+</svg>

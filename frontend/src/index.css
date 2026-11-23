@@ -14,11 +14,34 @@ main.main-page {
   display: block;
   padding: 1rem;
   box-sizing: border-box;
+  /* A detail of Albrecht Dürer's woodcut "The Four Horsemen" (1498), in the public
+     domain, over the whole page and under a veil of the colour of the paper, so that
+     it is a background and the list is read over it. */
+  background:
+    linear-gradient(rgba(246, 239, 223, 0.8), rgba(246, 239, 223, 0.8)),
+    url('/durer-four-horsemen-detail.jpg') center / cover no-repeat fixed #f6efdf;
 }
 
+/* The list is on a sheet of its own, so that it can be read over the picture. */
 .editions {
   max-width: 30rem;
   margin: 0 auto;
+  padding: 0.5rem 1.5rem 1rem;
+  background: rgba(255, 252, 244, 0.88);
+  border-radius: 1rem;
+}
+
+/* Where the picture is from. */
+.art-credit {
+  position: fixed;
+  right: 0.75rem;
+  bottom: 0.5rem;
+  margin: 0;
+  max-width: 22rem;
+  font-size: 0.7rem;
+  text-align: right;
+  color: #5a5040;
+  text-shadow: 0 0 4px #f6efdf;
 }
 
 .editions ul {
@@ -137,12 +160,14 @@ button {
   padding: 0.25rem 0.5rem;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid #ccc;
-  border-radius: 0.25rem;
+  border-radius: 999px;
 }
 
+/* the round buttons, as in the boxes of the tools (review-styled), a bit larger */
 .zoom-controls button {
-  min-width: 2rem;
-  padding: 0.25rem 0.5rem;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.2rem;
 }
 
 
@@ -412,7 +437,7 @@ button {
   padding: 0.5rem 0.75rem;
   background: #fff;
   border: 1px solid #999;
-  border-radius: 0.25rem;
+  border-radius: 0.9rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   color: #222;
   font-family: system-ui, sans-serif;
@@ -432,13 +457,47 @@ button {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.15rem 0;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
   cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+
+.entity-dialog label:hover,
+.entity-dialog label:focus-within {
+  border-color: #e0a800;
+  background: #fff8d6;
+}
+
+.entity-dialog input[type='radio'] {
+  accent-color: #e0a800;
+  cursor: pointer;
+}
+
+.entity-dialog input[type='radio']:focus-visible {
+  outline: 2px solid #e0a800;
+  outline-offset: 2px;
 }
 
 .entity-dialog button {
   width: 100%;
   margin-top: 0.4rem;
+}
+
+/* the popups' controls are a bit smaller than the ones of the big boxes */
+.structure-popup select,
+.entity-dialog select {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.9rem;
+}
+
+.structure-popup button,
+.entity-dialog button {
+  padding: 0.3rem 1rem;
+  font-size: 0.9rem;
 }
 
 /* Words: any word can be clicked to correct it; the misspelled ones are red. */
@@ -520,6 +579,36 @@ button {
   margin: 0;
 }
 
+/* A box to write in, as in the tools: round, the text grey inside it, and a
+   yellowish frame while it is written in. */
+.styled-input {
+  box-sizing: border-box;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid #b8b8b8;
+  border-radius: 999px;
+  background: #fff;
+  color: #1a1a1a;
+  font: inherit;
+  outline: none;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+.styled-input::placeholder {
+  color: #8c8c8c;
+}
+
+.styled-input:disabled {
+  background: #f1f1f1;
+  cursor: not-allowed;
+}
+
+.styled-input:focus {
+  border-color: #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
+}
+
 .legal-button,
 .join-button {
   padding: 0.1rem 0.45rem;
@@ -573,16 +662,13 @@ button {
   padding: 0.5rem 0.6rem;
   background: #fff;
   border: 1px solid #999;
-  border-radius: 0.25rem;
+  border-radius: 0.9rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   font-family: system-ui, sans-serif;
   font-size: 0.9rem;
 }
 
-.structure-popup select {
-  font: inherit;
-  padding: 0.15rem;
-}
+/* (the dropdowns and Confirm take the look of the tools' boxes: see review-styled) */
 
 /* The language of a quote goes on a row of its own, below the section, so that
    the popup does not grow beyond the box and Confirm stays in sight. */
