@@ -333,9 +333,9 @@ def mark_page_section(
       (e.g. `"n": "1"`, only for a note) it is `<note n="1">`
     - `quote`: `<quote xml:lang="la">` around the text, a quotation in another
       language; the body must also have `lang`, the code of the language: one of
-      `ru`, `en`, `de`, `es`, `fr`, `it`, `la` (`lang` is only for a quote). The
-      text in it is not Polish, so the spell check leaves it alone (see
-      `POST /spellcheck`)
+      `ru`, `en`, `de`, `es`, `fr`, `it`, `la`, `grc` (Ancient Greek) (`lang`
+      is only for a quote). The text in it is not Polish, so the spell check leaves it
+      alone (see `POST /spellcheck`)
     - `note_group`: `<noteGrp>` around notes that are already marked and next to
       each other, and nothing else: TEI lets a `<noteGrp>` hold only notes, so
       anything else in the selection is a 422

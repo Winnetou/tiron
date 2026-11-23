@@ -167,7 +167,7 @@ EntityLabel = Literal[
 
 
 # The languages that a quotation can be in, by their codes (xml:lang): the most
-# used European ones, and Latin.
+# used European ones, Latin and Ancient Greek (`grc`; `el` is the modern one).
 LANGUAGES: dict[str, str] = {
     "ru": "Russian",
     "en": "English",
@@ -176,6 +176,7 @@ LANGUAGES: dict[str, str] = {
     "fr": "French",
     "it": "Italian",
     "la": "Latin",
+    "grc": "Ancient Greek",
 }
 
 # The sections of a page that can be marked, as the API calls them.

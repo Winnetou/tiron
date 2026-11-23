@@ -697,7 +697,7 @@ if it is not what is at those offsets the page has changed, and the answer is
   page does not change.
 - **`quote` goes around the text itself**, like the `<fw>` elements, and needs the
   body's `lang`, the code of the language it is in: `ru`, `en`, `de`, `es`, `fr`, `it`
-  or `la` (Latin), which becomes `xml:lang` (`{"…": "…", "section": "quote", "lang":
+  `la` (Latin) or `grc` (Ancient Greek), which becomes `xml:lang` (`{"…": "…", "section": "quote", "lang":
   "la"}`). A quote without `lang`, or with another one, is a 422, and so is a `lang`
   on any other section. The frontend offers the languages in a dropdown. **What is
   in such a quotation is not Polish, so the Polish spell check leaves it alone**: its
