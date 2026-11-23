@@ -357,7 +357,13 @@ export default function PageViewer({
           >
             <div className="scan-loading-place">
               <div className="scan-loading-box">
-                <span className="spinner" aria-hidden="true" />
+                <img
+                  src="/skull-crossbones-loop.gif"
+                  alt=""
+                  width={44}
+                  height={48}
+                  className="scan-loading-image"
+                />
                 Loading the scan …
               </div>
             </div>

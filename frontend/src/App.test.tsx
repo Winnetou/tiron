@@ -4154,6 +4154,10 @@ describe('the scan', () => {
 
     expect(spinner()).toBeInTheDocument()
     expect(spinner()).toHaveTextContent('Loading the scan')
+    expect(spinner()!.querySelector('img')).toHaveAttribute(
+      'src',
+      '/skull-crossbones-loop.gif', // the small skull is the indicator
+    )
 
     fireEvent.load(scan())
 
