@@ -25,6 +25,7 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import EditionMetadataPanel from './EditionMetadataPanel'
 import {
   SimilarEntitiesReview,
   type EntityExample,
@@ -167,6 +168,10 @@ export default function App() {
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
   // The edition whose flagged spellings the user wants to accept by their substring.
   const [acceptingChunk, setAcceptingChunk] = useState<{ editionId: string } | null>(
+    null,
+  )
+  // The edition whose metadata (author, title, place, year) the user is editing.
+  const [editingMetadata, setEditingMetadata] = useState<{ editionId: string } | null>(
     null,
   )
   // The edition in which the user wants to replace a token, wherever it is.
@@ -619,6 +624,7 @@ export default function App() {
           onPrevious={() => goToPage(page.edition_id, page.number - 1)}
           onNext={() => goToPage(page.edition_id, page.number + 1)}
           onBackToEditions={backToEditions}
+          onEditMetadata={() => setEditingMetadata({ editionId: page.edition_id })}
           entities={withMarked(
             recognized?.text === text ? recognized.entities : null,
             markedHere,
@@ -690,6 +696,12 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {editingMetadata && (
+          <EditionMetadataPanel
+            editionId={editingMetadata.editionId}
+            onClose={() => setEditingMetadata(null)}
           />
         )}
         {replacingToken && (

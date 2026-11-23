@@ -21,6 +21,18 @@ class Edition(BaseModel):
     page_count: int | None = Field(default=None, ge=1)
 
 
+class EditionMetadata(BaseModel):
+    """What is known of an edition and its book: the `author` and `title` (of its
+    work), and the `place` and `year` of the edition. Each is None if it is not
+    known (the metadata fetched from Polona is not always complete)."""
+
+    id: UUID
+    author: str | None = None
+    title: str | None = None
+    place: str | None = None
+    year: int | None = Field(default=None, ge=1500, le=2030)
+
+
 class Page(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     edition_id: UUID

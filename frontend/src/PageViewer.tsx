@@ -52,6 +52,26 @@ function HomeIcon() {
   )
 }
 
+/** The icon of the button that edits the metadata of the edition: a pencil. */
+function EditIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 20l1-5L16.5 3.5a2.1 2.1 0 0 1 3 3L8 18z" />
+      <path d="M14 6l4 4" />
+    </svg>
+  )
+}
+
 const MIN_ZOOM = 100 // percent of the half's width
 const MAX_ZOOM = 500
 const ZOOM_STEP = 50
@@ -74,6 +94,8 @@ interface Props {
   onNext: () => void
   /** The user wants the editions (the main page) back. */
   onBackToEditions: () => void
+  /** Open the panel where the metadata of the edition is edited. */
+  onEditMetadata: () => void
   /** The named entities found in `text`; null if not recognized yet. */
   entities: Entity[] | null
   recognizing: boolean
@@ -154,6 +176,7 @@ export default function PageViewer({
   onPrevious,
   onNext,
   onBackToEditions,
+  onEditMetadata,
   entities,
   recognizing,
   onRecognizeEntities,
@@ -372,6 +395,15 @@ export default function PageViewer({
               onClick={onBackToEditions}
             >
               <HomeIcon />
+            </button>
+            <button
+              type="button"
+              className="page-nav-button edit"
+              aria-label="Edit the metadata of the edition"
+              data-tooltip="Edit the metadata of the edition"
+              onClick={onEditMetadata}
+            >
+              <EditIcon />
             </button>
             <button
               type="button"

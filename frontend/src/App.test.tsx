@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   EditionItem,
+  EditionMetadata,
   MissingHyphen,
   Page,
   PageMatches,
@@ -110,6 +111,10 @@ interface Options {
   page?: (number: number) => Partial<Page> | Error
   /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
   tei?: (xml: string) => { text: string } | Error
+  /** Answer of GET /editions/{id}/metadata; defaults to a book that is known. */
+  metadata?: EditionMetadata | Error
+  /** Answer of PATCH /editions/{id}/metadata; defaults to the fields changed. */
+  patchMetadata?: (fields: Partial<EditionMetadata>) => EditionMetadata | Error
   /** Answer of GET /editions?page=N; defaults to 250 editions. */
   editions?: (page: number) => { items: EditionItem[]; pages: number } | Error
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
@@ -224,6 +229,23 @@ function fakeBackend(options: Options = {}) {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, url, body })
+    if (url.endsWith('/metadata')) {
+      const stored: EditionMetadata =
+        options.metadata instanceof Error
+          ? METADATA
+          : (options.metadata ?? METADATA)
+      if (method === 'GET') {
+        return options.metadata instanceof Error
+          ? failure(404, options.metadata)
+          : reply(true, 200, stored)
+      }
+      const answer = options.patchMetadata
+        ? options.patchMetadata(body)
+        : { ...stored, ...body }
+      return answer instanceof Error
+        ? failure(422, answer)
+        : reply(true, 200, answer)
+    }
     if (url.startsWith('/editions?page=')) {
       const page = Number(url.split('=')[1])
       const answer = options.editions
@@ -479,6 +501,15 @@ function fakeBackend(options: Options = {}) {
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+/** The metadata that the fake backend has of the edition. */
+const METADATA: EditionMetadata = {
+  id: UUID,
+  author: 'Prus, Bolesław (1847-1912)',
+  title: 'Lalka',
+  place: null,
+  year: 1890,
 }
 
 /** The ids of the editions on a page of the list: 100 on a page, the first is UUID. */
@@ -8456,5 +8487,118 @@ describe('replacing a token in the edition', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
 
     expect(review()).toBeNull()
+  })
+})
+
+describe('editing the metadata of the edition', () => {
+  const editButton = () =>
+    screen.getByRole('button', { name: 'Edit the metadata of the edition' })
+  const panel = () => screen.queryByRole('dialog', { name: 'Edition metadata' })
+  const field = (name: string) => screen.getByRole('textbox', { name })
+  const saveButton = () => screen.getByRole('button', { name: 'Save' })
+  const metadataCalls = () => calls.filter((c) => c.url.endsWith('/metadata'))
+
+  async function open(extra: Options = {}) {
+    await openPage(extra)
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    await userEvent.click(editButton())
+    await screen.findByRole('dialog', { name: 'Edition metadata' })
+  }
+
+  it('has a button with an icon, next to the one that goes back to the editions', async () => {
+    await openPage()
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+
+    const edit = editButton()
+
+    expect(edit.querySelector('svg')).not.toBeNull()
+    expect(edit).toHaveAttribute('data-tooltip', 'Edit the metadata of the edition')
+    expect(edit.previousElementSibling).toBe(
+      screen.getByRole('button', { name: 'Back to the editions' }),
+    )
+  })
+
+  it('opens a panel that shows the metadata fetched from the backend', async () => {
+    await open()
+
+    expect(calledUrls()).toContain(`GET /editions/${UUID}/metadata`)
+    await waitFor(() => expect(field('Author')).toHaveValue('Prus, Bolesław (1847-1912)'))
+    expect(field('Title')).toHaveValue('Lalka')
+    expect(field('Place')).toHaveValue('') // not known
+    expect(field('Year')).toHaveValue('1890')
+    expect(panel()).toHaveClass('review-styled') // the look of the other boxes
+  })
+
+  it('Save waits for a change', async () => {
+    await open()
+    await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
+    expect(saveButton()).toBeDisabled()
+
+    await userEvent.type(field('Place'), 'Warszawa')
+
+    expect(saveButton()).toBeEnabled()
+  })
+
+  it('saves the four fields with PATCH, an empty one as null, and says so', async () => {
+    await open()
+    await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
+
+    await userEvent.type(field('Place'), ' Warszawa ')
+    await userEvent.clear(field('Title'))
+    await userEvent.click(saveButton())
+
+    expect(await screen.findByText('✓ Saved')).toBeInTheDocument()
+    const patch = metadataCalls().find((c) => c.method === 'PATCH')!
+    expect(patch.url).toBe(`/editions/${UUID}/metadata`)
+    expect(patch.body).toEqual({
+      author: 'Prus, Bolesław (1847-1912)',
+      title: null,
+      place: 'Warszawa',
+      year: 1890,
+    })
+    expect(field('Place')).toHaveValue('Warszawa')
+    expect(saveButton()).toBeDisabled() // nothing changed since
+  })
+
+  it('does not send a year that is not a number', async () => {
+    await open()
+    await waitFor(() => expect(field('Year')).toHaveValue('1890'))
+
+    await userEvent.clear(field('Year'))
+    await userEvent.type(field('Year'), 'abc')
+
+    expect(screen.getByText('The year is a number, like 1890.')).toBeInTheDocument()
+    expect(saveButton()).toBeDisabled()
+  })
+
+  it('shows the reason when the backend refuses', async () => {
+    await open({ patchMetadata: () => new Error('Input should be less than or equal to 2030') })
+    await waitFor(() => expect(field('Year')).toHaveValue('1890'))
+
+    await userEvent.clear(field('Year'))
+    await userEvent.type(field('Year'), '2099')
+    await userEvent.click(saveButton())
+
+    expect(await screen.findByText(/less than or equal to 2030/)).toBeInTheDocument()
+    expect(screen.queryByText('✓ Saved')).toBeNull()
+  })
+
+  it('shows why the metadata cannot be had', async () => {
+    await open({ metadata: new Error('Edition not found') })
+
+    expect(await screen.findByText('Edition not found')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+  })
+
+  it('closes with Close and with Escape', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(panel()).toBeNull()
+
+    await userEvent.click(editButton())
+    await screen.findByRole('dialog', { name: 'Edition metadata' })
+    await userEvent.keyboard('{Escape}')
+
+    expect(panel()).toBeNull()
   })
 })

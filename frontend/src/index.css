@@ -31,6 +31,32 @@ main.main-page {
   border-radius: 1rem;
 }
 
+/* The panel of the metadata of an edition: a small box, not a big one. */
+.metadata-box {
+  width: min(32rem, 92vw);
+  height: auto;
+  max-height: 88vh;
+}
+
+.metadata-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.metadata-field .styled-input {
+  font-size: 1rem;
+}
+
+.metadata-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
 /* Where the picture is from. */
 .art-credit {
   position: fixed;
@@ -219,6 +245,7 @@ button {
 /* kept inside the half: the first ones start at the left edge, the next one
    ends at its right edge */
 .page-nav-button.home::after,
+.page-nav-button.edit::after,
 .page-nav-button.previous::after {
   left: 0;
 }

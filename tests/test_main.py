@@ -12,7 +12,7 @@ import app.page_provider as page_provider
 import app.text_tools.ner as ner
 import app.text_tools.spelling as spelling
 from app.main import app, db
-from app.persistence.ontology import Edition, LegalSpelling, Page
+from app.persistence.ontology import Edition, EditionMetadata, LegalSpelling, Page
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import NerModelUnavailable
 from app.text_tools.spelling import SpellcheckUnavailable
@@ -102,6 +102,90 @@ def test_get_page_polona_errors(polona, error, expected_status):
 )
 def test_get_page_invalid_args(path):
     assert client.get(path).status_code == 422
+
+
+class TestEditionMetadata:
+    META = EditionMetadata(
+        id=uuid4(), author="Prus, Bolesław", title="Lalka", place="Warszawa", year=1890
+    )
+
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or self.META.id}/metadata"
+
+    def test_get_gives_the_metadata(self, monkeypatch):
+        monkeypatch.setattr(
+            db, "get_edition_metadata", mock.Mock(return_value=self.META)
+        )
+
+        response = client.get(self.url())
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "id": str(self.META.id),
+            "author": "Prus, Bolesław",
+            "title": "Lalka",
+            "place": "Warszawa",
+            "year": 1890,
+        }
+
+    def test_get_an_edition_that_is_not_stored(self, monkeypatch, polona):
+        monkeypatch.setattr(db, "get_edition_metadata", mock.Mock(return_value=None))
+
+        response = client.get(self.url())
+
+        assert response.status_code == 404
+        polona.assert_not_called()
+
+    def test_patch_changes_what_is_given_and_answers_with_the_metadata(
+        self, monkeypatch
+    ):
+        update = mock.Mock(return_value=self.META)
+        monkeypatch.setattr(db, "update_edition_metadata", update)
+
+        response = client.patch(
+            self.url(), json={"author": "  Prus,   Bolesław ", "year": 1890}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == "Lalka"
+        update.assert_called_once_with(
+            self.META.id, {"author": "Prus, Bolesław", "year": 1890}
+        )
+
+    def test_null_and_blank_clear_a_field(self, monkeypatch):
+        update = mock.Mock(return_value=self.META)
+        monkeypatch.setattr(db, "update_edition_metadata", update)
+
+        client.patch(self.url(), json={"title": "   ", "place": None})
+
+        update.assert_called_once_with(self.META.id, {"title": None, "place": None})
+
+    def test_an_edition_that_is_not_stored(self, monkeypatch):
+        monkeypatch.setattr(db, "update_edition_metadata", mock.Mock(return_value=None))
+
+        assert client.patch(self.url(), json={"year": 1890}).status_code == 404
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"year": 1400},
+            {"year": 2031},
+            {"year": "abc"},
+            {"id": str(uuid4())},
+            {"work_id": str(uuid4())},
+            {"author": "x" * 301},
+        ],
+    )
+    def test_a_body_that_is_not_valid_is_422(self, monkeypatch, body):
+        update = mock.Mock(return_value=self.META)
+        monkeypatch.setattr(db, "update_edition_metadata", update)
+
+        assert client.patch(self.url(), json=body).status_code == 422
+        update.assert_not_called()
+
+    def test_not_a_uuid(self):
+        assert client.get("/editions/not-a-uuid/metadata").status_code == 422
 
 
 class TestListEditions:

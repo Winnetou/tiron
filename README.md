@@ -109,6 +109,42 @@ title is not known). An edition whose book is not known at all, neither author n
 title, is linked by its id. (This is done by the frontend, in
 `editionLabel.ts`; the endpoint gives the author and title as they are stored.)
 
+### Editing the metadata of an edition
+
+The metadata that is fetched from Polona is not always complete, so it can be
+edited. `GET /editions/{edition_id}/metadata` gives it:
+
+```json
+{"id": "<uuid>", "author": "Prus, Bolesław (1847-1912)", "title": "Lalka",
+ "place": null, "year": 1890}
+```
+
+`null` is what is not known. `PATCH /editions/{edition_id}/metadata` changes it; the
+body has some of `author`, `title` (of the book), `place` and `year` (of the
+edition), and the response is the metadata as it is now, like `GET`:
+
+```json
+{"author": "Prus, Bolesław (1847-1912)", "year": 1890}
+```
+
+- **What is not in the body is left as it is**; a field that is `null`, or only white
+  space, is cleared. The text is trimmed and white space in it becomes one space.
+  The author is written the way the catalogue writes it, "Last name, First names
+  (years)", which is what the main page shortens to "Prus B.".
+- **Checks**: `year` is a whole number from 1500 to 2030; `author` and `place` have at
+  most 300 characters, `title` 1000. Any other field (`id`, `work_id`, ...) and an empty
+  body are a 422, and nothing is changed. 404 if the edition is not stored. Polona is
+  not called.
+- **The author and title belong to the book (`works`), which other editions may
+  share**, so the book is not changed under them: the edition is moved to the book that
+  has the new author and title (the one that is stored already, if there is one: a book
+  is one per author and title, whatever the case), or to a new one. A book that no
+  edition has any more is deleted. `place` and `year` are columns of the edition.
+- **In the frontend**, the page has a pencil button at the top, next to the one that
+  goes back to the editions. It opens a panel with the four fields, filled in, and a
+  Save button (disabled until something changes). The year must be a number; if the
+  backend refuses, its reason is shown. Escape or Close closes the panel.
+
 ### Requesting a page
 
 `GET /editions/{edition_id}/pages/{number}`

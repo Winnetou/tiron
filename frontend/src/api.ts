@@ -703,3 +703,32 @@ export function markSection(
     }),
   })
 }
+
+/** What is known of an edition and its book (EditionMetadata); null is not known. */
+export interface EditionMetadata {
+  id: string
+  author: string | null
+  title: string | null
+  place: string | null
+  year: number | null
+}
+
+/** Calls GET /editions/{editionId}/metadata. */
+export function getEditionMetadata(editionId: string): Promise<EditionMetadata> {
+  return request<EditionMetadata>(`/editions/${editionId}/metadata`)
+}
+
+/**
+ * Calls PATCH /editions/{editionId}/metadata: the backend changes the fields that
+ * are given (null clears one) and answers with the metadata as it is now.
+ */
+export function updateEditionMetadata(
+  editionId: string,
+  fields: Partial<Omit<EditionMetadata, 'id'>>,
+): Promise<EditionMetadata> {
+  return request<EditionMetadata>(`/editions/${editionId}/metadata`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  })
+}

@@ -24,6 +24,7 @@ from psycopg.rows import dict_row
 from app.persistence.ontology import (
     Correction,
     Edition,
+    EditionMetadata,
     EntityForm,
     EntityMatch,
     LegalSpelling,
@@ -232,6 +233,76 @@ class Database:
         )
         row = self.conn.execute(query, (value, edition_id)).fetchone()
         return Edition.model_validate(row) if row else None
+
+    def get_edition_metadata(self, edition_id: UUID) -> EditionMetadata | None:
+        """The author and title of the edition's work, and its place and year; None
+        if there is no such edition."""
+        row = self.conn.execute(
+            "SELECT e.id, w.author, w.title, e.place, e.year FROM editions e"
+            " JOIN works w ON w.id = e.work_id WHERE e.id = %s",
+            (edition_id,),
+        ).fetchone()
+        return EditionMetadata.model_validate(row) if row else None
+
+    def update_edition_metadata(
+        self, edition_id: UUID, changes: dict[str, str | int | None]
+    ) -> EditionMetadata | None:
+        """Change the metadata of an edition: `changes` has some of `author`,
+        `title`, `place` and `year` with their new values (None clears one); the
+        others are left as they are. Returns the metadata as it is now, or None if
+        there is no such edition.
+
+        `place` and `year` are of the edition. `author` and `title` are of its work,
+        which other editions may share, so the work is not changed: the edition is
+        moved to the work that has the new author and title (the one that is stored
+        already, if there is one: a work is one per author and title, case does not
+        matter), and a work that no edition has any more is deleted.
+        """
+        unknown = set(changes) - {"author", "title", "place", "year"}
+        if unknown:
+            raise ValueError(f"Cannot change {', '.join(sorted(unknown))}")
+        with self.conn.transaction():
+            row = self.conn.execute(
+                "SELECT e.work_id, w.author, w.title FROM editions e"
+                " JOIN works w ON w.id = e.work_id WHERE e.id = %s FOR UPDATE OF e",
+                (edition_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            old_work = row["work_id"]
+            author = changes.get("author", row["author"])
+            title = changes.get("title", row["title"])
+            if (author, title) != (row["author"], row["title"]):
+                found = None
+                if author is not None and title is not None:
+                    found = self.conn.execute(
+                        "SELECT id FROM works"
+                        " WHERE lower(author) = lower(%s) AND lower(title) = lower(%s)",
+                        (author, title),
+                    ).fetchone()
+                if found is not None:
+                    work_id = found["id"]
+                else:
+                    work_id = self.create_work(Work(author=author, title=title)).id
+                self.conn.execute(
+                    "UPDATE editions SET work_id = %s WHERE id = %s",
+                    (work_id, edition_id),
+                )
+                if work_id != old_work:
+                    self.conn.execute(
+                        "DELETE FROM works WHERE id = %s AND NOT EXISTS"
+                        " (SELECT 1 FROM editions WHERE work_id = %s)",
+                        (old_work, old_work),
+                    )
+            for column in ("place", "year"):
+                if column in changes:
+                    self.conn.execute(
+                        sql.SQL("UPDATE editions SET {} = %s WHERE id = %s").format(
+                            sql.Identifier(column)
+                        ),
+                        (changes[column], edition_id),
+                    )
+        return self.get_edition_metadata(edition_id)
 
     # Pages
 
