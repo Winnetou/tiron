@@ -58,7 +58,7 @@ export default function EditionList() {
           </li>
         ))}
       </ul>
-      <div className="editions-pages">
+      <div className="editions-pages review-styled">
         <button type="button" disabled={number <= 1} onClick={() => show(number - 1)}>
           Previous
         </button>
@@ -73,6 +73,10 @@ export default function EditionList() {
           Next
         </button>
       </div>
+      <p className="art-credit">
+        Albrecht Dürer, <em>The Four Horsemen</em>, 1498, woodcut (detail). National Gallery
+        of Art, Washington. CC0.
+      </p>
     </nav>
   )
 }

@@ -124,7 +124,11 @@ function EntityMark({
         <div
           role="dialog"
           aria-label={`Named entity: ${entity.text}`}
-          className={above ? 'entity-dialog above' : 'entity-dialog'}
+          className={
+            above
+              ? 'entity-dialog review-styled above'
+              : 'entity-dialog review-styled'
+          }
         >
           {[...labelOptions(entity), NOT_NER].map((option) => (
             <label key={option}>
@@ -717,7 +721,7 @@ export default function PageText({
     <div className="structure-wrap" ref={wrap}>
       {emptyPage && onAddToken ? (
         <form
-          className="empty-page"
+          className="empty-page review-styled"
           onSubmit={(event) => {
             event.preventDefault()
             if (!busy) addFirstText()
@@ -728,6 +732,7 @@ export default function PageText({
           </p>
           <input
             aria-label="Text to add to the empty page"
+            className="styled-input"
             placeholder="Text"
             size={30}
             maxLength={200}
@@ -752,11 +757,12 @@ export default function PageText({
         <div
           role="dialog"
           aria-label="Add a text token"
-          className={`structure-popup ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
+          className={`structure-popup review-styled ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
           style={{ left: addingAt.left, ...addingAt.placement }}
         >
           <input
             aria-label="Text to add"
+            className="styled-input"
             placeholder="Text"
             size={20}
             maxLength={200}
@@ -781,7 +787,7 @@ export default function PageText({
         <div
           role="dialog"
           aria-label="Mark the selected text as a named entity"
-          className={`structure-popup ${'bottom' in active.placement ? 'above' : 'below'}`}
+          className={`structure-popup review-styled ${'bottom' in active.placement ? 'above' : 'below'}`}
           style={{ left: active.left, ...active.placement }}
         >
           <select
