@@ -2958,3 +2958,201 @@ class TestSimilarEntities:
         assert {"SimilarEntities", "EntityMatch", "EntityForm"} <= schema["components"][
             "schemas"
         ].keys()
+
+
+class TestSpellingChunkMatches:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/spelling-chunk-matches"
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        known = {"ala", "ma", "kota", "konwencja"}
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w.lower() in known})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        rows = [
+            {"number": 0, "xml_content_corrected": str(text_to_tei_xml("Ala ma kota"))},
+            {
+                "number": 3,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("Ala ma Konwencya i Policya, Konwencya.")
+                ),
+            },
+            {"number": 4, "xml_content_corrected": None},
+            {
+                "number": 5,
+                "xml_content_corrected": str(text_to_tei_xml("Znów Konwencya tu.")),
+            },
+            {"number": 6, "xml_content_corrected": "<not tei/>"},
+        ]
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = (
+                [{"spelling": "Policya"}] if "legal_spellings" in query else rows
+            )
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
+        return edition_id
+
+    def pages(self, monkeypatch, rows, legal=()):
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = (
+                [{"spelling": spelling} for spelling in legal]
+                if "legal_spellings" in query
+                else rows
+            )
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
+
+    def get(self, edition_id, core="cy", endings=("a", "i")):
+        return client.get(
+            self.url(edition_id), params={"core": core, "ending": list(endings)}
+        )
+
+    def test_lists_each_flagged_word_once_with_its_places(self, stored):
+        response = self.get(stored)
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "text": "Konwencya",
+                "count": 3,
+                "occurrences": [
+                    {
+                        "page_number": 3,
+                        "start": 7,
+                        "end": 16,
+                        "before": "ma",
+                        "after": "i",
+                    },
+                    {
+                        "page_number": 3,
+                        "start": 28,
+                        "end": 37,
+                        "before": ",",
+                        "after": ".",
+                    },
+                    {
+                        "page_number": 5,
+                        "start": 5,
+                        "end": 14,
+                        "before": "Znów",
+                        "after": "tu",
+                    },
+                ],
+            }
+        ]
+
+    def test_a_legal_spelling_of_the_edition_is_not_listed(self, stored):
+        words = [g["text"] for g in self.get(stored).json()]
+
+        assert "Policya" not in words
+
+    def test_a_word_is_found_by_any_of_the_endings(self, stored):
+        words = {g["text"] for g in self.get(stored, endings=("i",)).json()}
+
+        assert words == set()  # "Konwencya" has "cya", not "cyi"
+
+    def test_offsets_are_those_of_the_text(self, stored):
+        text = "Ala ma Konwencya i Policya, Konwencya."
+
+        for place in self.get(stored).json()[0]["occurrences"][:2]:
+            assert text[place["start"] : place["end"]] == "Konwencya"
+
+    def test_only_a_few_places_are_given_but_all_are_counted(self, stored, monkeypatch):
+        rows = [
+            {
+                "number": n,
+                "xml_content_corrected": str(text_to_tei_xml("Konwencya Konwencya")),
+            }
+            for n in range(4)
+        ]
+        self.pages(monkeypatch, rows)
+
+        (group,) = self.get(stored).json()
+
+        assert group["count"] == 8
+        assert len(group["occurrences"]) == 5
+
+    def test_the_words_that_are_most_often_in_the_edition_come_first(
+        self, stored, monkeypatch
+    ):
+        rows = [
+            {
+                "number": 0,
+                "xml_content_corrected": str(
+                    text_to_tei_xml("Policya Konwencya Konwencya")
+                ),
+            }
+        ]
+        self.pages(monkeypatch, rows)
+
+        words = [g["text"] for g in self.get(stored).json()]
+
+        assert words == ["Konwencya", "Policya"]
+
+    def test_an_empty_ending_is_the_core_alone(self, stored):
+        words = {g["text"] for g in self.get(stored, endings=("",)).json()}
+
+        assert words == {"Konwencya"}
+
+    def test_edition_not_stored_is_404(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = client.get(self.url(), params={"core": "cy", "ending": ["a"]})
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"core": "cy"},
+            {"core": "", "ending": ["a"]},
+            {"core": "  ", "ending": ["a"]},
+            {"core": "c y", "ending": ["a"]},
+            {"core": "cy", "ending": ["1"]},
+            {
+                "core": "cy",
+                "ending": [a + b for a in "ab" for b in "abcdefghijklmnopqrstuvwxyz"][
+                    :41
+                ],
+            },
+            {"ending": ["a"]},
+        ],
+    )
+    def test_a_request_that_is_not_acceptable_is_422(self, stored, params):
+        assert client.get(self.url(stored), params=params).status_code == 422
+
+    def test_the_reason_is_given(self, stored):
+        response = client.get(self.url(stored), params={"core": "cy"})
+
+        assert "at least one ending" in response.json()["detail"]
+
+    def test_dictionary_unavailable_is_503(self, stored, monkeypatch):
+        def unavailable():
+            raise SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        assert self.get(stored).status_code == 503
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "get" in schema["paths"]["/editions/{edition_id}/spelling-chunk-matches"]
+        assert {"SpellingGroup", "SpellingOccurrence"} <= schema["components"][
+            "schemas"
+        ].keys()

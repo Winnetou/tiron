@@ -13,6 +13,7 @@ import type {
   PageMatches,
   PageRubbish,
   SectionSpan,
+  SpellingGroup,
   SimilarEntities,
   SimilarPageNumbers,
 } from './api'
@@ -130,6 +131,8 @@ interface Options {
   ) => Partial<Page> | Error
   /** Answer of GET .../similar-page-numbers for a page; defaults to a refusal. */
   similarNumbers?: (page: number) => SimilarPageNumbers | Error
+  /** Answer of GET .../spelling-chunk-matches; defaults to none. */
+  chunkMatches?: (query: { core: string; endings: string[] }) => SpellingGroup[] | Error
   /** Answer of GET .../similar-entities; defaults to no form and no place. */
   similarEntities?: (query: { text: string; label: string }) => SimilarEntities | Error
   /** Answer of GET .../rubbish-lines; defaults to none. */
@@ -284,6 +287,12 @@ function fakeBackend(options: Options = {}) {
       const answer = options.similarNumbers
         ? options.similarNumbers(Number(numbering[1]))
         : new Error('No page number is marked on this page')
+      return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.includes('/spelling-chunk-matches?')) {
+      const query = new URLSearchParams(url.split('?')[1])
+      const asked = { core: query.get('core') ?? '', endings: query.getAll('ending') }
+      const answer = options.chunkMatches ? options.chunkMatches(asked) : []
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
     }
     if (url.includes('/similar-entities?')) {
@@ -5663,7 +5672,7 @@ describe('page view', () => {
       expect(cog()).toHaveAttribute('aria-expanded', 'false')
     })
 
-    it('has "Find missing hyphens" and "Find OCR rubbish in the edition" in the correction view', async () => {
+    it('has the tools of the correction view', async () => {
       await open()
 
       await userEvent.click(cog())
@@ -5671,6 +5680,7 @@ describe('page view', () => {
       expect(cog()).toHaveAttribute('aria-expanded', 'true')
       expect(names()).toEqual([
         'Find missing hyphens',
+        'Apply spelling rule to the edition',
         'Find OCR rubbish in the edition',
       ])
     })
@@ -7123,6 +7133,728 @@ describe('the same named entity in all its forms', () => {
 
   it('is closed when the user goes back to the editions', async () => {
     await openReview()
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+
+    expect(review()).toBeNull()
+  })
+})
+
+describe('accepting spellings by their substring', () => {
+  const TEXT = 'Ala ma Konwencya i Policya.'
+  const place = (page: number, start: number, before: string, after: string) => ({
+    page_number: page,
+    start,
+    end: start + 9,
+    before,
+    after,
+  })
+  const FOUND: SpellingGroup[] = [
+    {
+      text: 'Konwencya',
+      count: 7,
+      occurrences: [place(1, 7, 'ma', 'i'), place(3, 0, '', ',')],
+    },
+    { text: 'Policya', count: 1, occurrences: [place(2, 4, 'w', 'tu')] },
+  ]
+  const review = () => screen.queryByRole('dialog', { name: 'Accept spellings of the edition' })
+  const core = () => screen.getByRole('textbox', { name: 'Core of the substring' })
+  const ending = (n: number) => screen.getByRole('textbox', { name: `Ending ${n}` })
+  const plus = () => screen.getByRole('button', { name: 'Add another ending' })
+  const find = () => within(review()!).getByRole('button', { name: 'Find' })
+  const acceptAll = () => screen.getByRole('button', { name: /^Accept all/ })
+  const include = (text: string) =>
+    screen.getByRole('checkbox', { name: `Include ${text} in Accept all` })
+  const acceptOne = (text: string) =>
+    screen.getByRole('button', { name: `Accept ${text} as a legal spelling` })
+  const chunkCalls = () => calls.filter((c) => c.url.includes('/spelling-chunk-matches?'))
+  const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+  const correctionCalls = () => calls.filter((c) => c.url.endsWith('/corrections'))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      chunkMatches: () => FOUND,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Apply spelling rule to the edition' }),
+    )
+  }
+  async function openFound(extra: Options = {}) {
+    await open(extra)
+    await userEvent.type(core(), 'cy')
+    await userEvent.type(ending(1), 'a')
+    await userEvent.click(find())
+    await screen.findByText(/spellings?, \d+ places?/)
+  }
+
+  describe('the tool', () => {
+    it('is in the cog wheel of the correction view', async () => {
+      await open()
+
+      expect(review()).toBeInTheDocument()
+    })
+
+    it('is not in the structure view', async () => {
+      await openPage()
+      await screen.findByRole('img')
+      await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+      expect(
+        screen.queryByRole('button', { name: 'Apply spelling rule to the edition' }),
+      ).toBeNull()
+    })
+
+    it('asks nothing of the backend until Find is pressed', async () => {
+      await open()
+
+      expect(chunkCalls()).toHaveLength(0)
+      expect(find()).toBeDisabled()
+    })
+  })
+
+  describe('the substring', () => {
+    it('has a box for its core and a box for an ending below it', async () => {
+      await open()
+
+      expect(core()).toBeInTheDocument()
+      expect(ending(1)).toBeInTheDocument()
+      expect(core().compareDocumentPosition(ending(1))).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      )
+    })
+
+    it('has a plus sign that adds a box for another ending', async () => {
+      await open()
+      expect(screen.queryByRole('textbox', { name: 'Ending 2' })).toBeNull()
+
+      await userEvent.click(plus())
+      await userEvent.click(plus())
+
+      expect(ending(2)).toBeInTheDocument()
+      expect(ending(3)).toBeInTheDocument()
+    })
+
+    it('has small round buttons for adding and removing an ending', async () => {
+      await open()
+      await userEvent.click(plus())
+
+      expect(plus()).toHaveClass('review-round-button')
+      expect(screen.getByRole('button', { name: 'Remove ending 2' })).toHaveClass(
+        'review-round-button',
+      )
+    })
+
+    it('has the label inside each box, as its grey placeholder', async () => {
+      await open()
+      await userEvent.click(plus())
+      await userEvent.click(plus())
+      await userEvent.click(plus())
+
+      expect(core()).toHaveAttribute('placeholder', 'Core of the substring, e.g. cy')
+      expect(ending(1)).toHaveAttribute('placeholder', 'Ending of the substring, e.g. a')
+      expect(ending(2)).toHaveAttribute('placeholder', 'Ending 2, e.g. i')
+      expect(ending(3)).toHaveAttribute('placeholder', 'Ending 3, e.g. ami')
+      expect(ending(4)).toHaveAttribute('placeholder', 'Ending 4')
+      // no label above a box: the box has the text
+      expect(review()!.querySelectorAll('.review-chunk label')).toHaveLength(0)
+    })
+
+    it('has a Find button that is styled apart, and a Close button of the box', async () => {
+      await open()
+
+      expect(find()).toHaveClass('review-find')
+      expect(review()).toHaveClass('review-box-substring')
+    })
+
+    it('gives Find and Close the same yellowish effect on hover, in the stylesheet', async () => {
+      const css = Array.from(document.querySelectorAll('style'))
+        .map((style) => style.textContent)
+        .join('')
+      // (the styles of the page are in the document: jsdom has no hover)
+      expect(css).toContain('.review-find:hover')
+      expect(css).toContain('.review-box-substring .review-header button:hover')
+      expect(css).toMatch(/\.review-find:hover[\s\S]*?#e0a800/)
+    })
+
+    it('says "substring", not "chunk", in the boxes and the tooltip', async () => {
+      await open()
+
+      expect(core()).toHaveAccessibleName('Core of the substring')
+      expect(screen.getByPlaceholderText(/^Ending of the substring/)).toBeInTheDocument()
+      expect(review()!.textContent?.toLowerCase()).not.toContain('chunk')
+    })
+
+    it('has the ending boxes inactive until the core is written', async () => {
+      await open()
+      await userEvent.click(plus())
+
+      expect(ending(1)).toBeDisabled()
+      expect(ending(2)).toBeDisabled()
+      expect(ending(1)).toHaveAttribute('title', 'Write the core of the substring first')
+
+      await userEvent.type(core(), 'cy')
+
+      expect(ending(1)).toBeEnabled()
+      expect(ending(2)).toBeEnabled()
+      expect(ending(1)).not.toHaveAttribute('title')
+    })
+
+    it('has them inactive again when the core is cleared, and keeps what was typed', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+
+      await userEvent.clear(core())
+
+      expect(ending(1)).toBeDisabled()
+      expect(ending(1)).toHaveValue('a')
+      expect(find()).toBeDisabled()
+    })
+
+    it('counts a core of spaces as empty', async () => {
+      await open()
+
+      await userEvent.type(core(), '   ')
+
+      expect(ending(1)).toBeDisabled()
+    })
+
+    it('can drop an ending that was added', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove ending 2' }))
+
+      expect(screen.queryByRole('textbox', { name: 'Ending 2' })).toBeNull()
+    })
+
+    it('has no way to remove the first ending, and no more than ten', async () => {
+      await open()
+      expect(screen.queryByRole('button', { name: 'Remove ending 1' })).toBeNull()
+
+      for (let n = 0; n < 9; n++) await userEvent.click(plus())
+
+      expect(plus()).toBeDisabled()
+    })
+
+    it('shows what is looked for', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+      await userEvent.click(plus())
+      await userEvent.type(ending(3), 'ami')
+
+      expect(screen.getByText('cya, cyi, cyami')).toBeInTheDocument()
+    })
+
+    it('is sent as the core and an ending parameter for each ending', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+      await userEvent.click(plus())
+      await userEvent.type(ending(3), 'ami')
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+      const query = new URLSearchParams(chunkCalls()[0].url.split('?')[1])
+      expect(query.get('core')).toBe('cy')
+      expect(query.getAll('ending')).toEqual(['a', 'i', 'ami'])
+      expect(chunkCalls()[0].url).toContain(`/editions/${UUID}/spelling-chunk-matches?`)
+    })
+
+    it('leaves out an ending that was left empty', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(plus())
+
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+      expect(new URLSearchParams(chunkCalls()[0].url.split('?')[1]).getAll('ending')).toEqual(['a'])
+    })
+
+    describe('the sets of noun endings', () => {
+      const setButton = (name: string) => screen.getByRole('button', { name })
+      const pills = () =>
+        within(screen.getByRole('list', { name: 'Endings of the chosen set' }))
+          .queryAllByRole('listitem')
+          .map((li) => li.querySelector('span')?.textContent)
+      const FEMININE = ['a', 'y', 'i', 'ie', 'e', 'ę', 'ą', 'o', 'om', 'ami', 'ach']
+      const endingsSent = () =>
+        new URLSearchParams(chunkCalls()[0].url.split('?')[1]).getAll('ending')
+
+      it('are four buttons, below the core', async () => {
+        await open()
+
+        const group = screen.getByRole('group', { name: 'Noun endings' })
+        expect(
+          within(group)
+            .getAllByRole('button')
+            .map((b) => b.textContent),
+        ).toEqual(['Masculine', 'Feminine', 'Neuter', 'Adjectival'])
+        expect(core().compareDocumentPosition(group)).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        )
+      })
+
+      it('are inactive until the core is written', async () => {
+        await open()
+
+        expect(setButton('Feminine')).toBeDisabled()
+        expect(setButton('Feminine')).toHaveAttribute(
+          'title',
+          'Write the core of the substring first',
+        )
+
+        await userEvent.type(core(), 'cy')
+
+        expect(setButton('Feminine')).toBeEnabled()
+        expect(setButton('Feminine').getAttribute('title')).toContain('feminine nouns')
+      })
+
+      it('put the endings of the set in a frozen field of pills', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+
+        await userEvent.click(setButton('Feminine'))
+
+        expect(pills()).toEqual(FEMININE)
+        expect(setButton('Feminine')).toHaveAttribute('aria-pressed', 'true')
+        // frozen: no box to write in is among them
+        expect(
+          screen.getByRole('list', { name: 'Endings of the chosen set' }).querySelector('input'),
+        ).toBeNull()
+      })
+
+      it('show no pills until a set is chosen', async () => {
+        await open()
+
+        expect(screen.queryByRole('list', { name: 'Endings of the chosen set' })).toBeNull()
+      })
+
+      it('have each of the four sets', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+
+        await userEvent.click(setButton('Masculine'))
+        expect(pills()).toHaveLength(15)
+        await userEvent.click(setButton('Neuter'))
+        expect(pills()).toHaveLength(15)
+        expect(pills()).toContain('um')
+        await userEvent.click(setButton('Adjectival'))
+        expect(pills()).toEqual(['i', 'iego', 'iemu', 'im', 'ich', 'imi', 'a', 'iej', 'ą'])
+      })
+
+      it('are chosen one at a time: another set takes the place of the first', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        await userEvent.click(setButton('Masculine'))
+
+        expect(setButton('Feminine')).toHaveAttribute('aria-pressed', 'false')
+        expect(setButton('Masculine')).toHaveAttribute('aria-pressed', 'true')
+        expect(pills()).not.toContain('ę')
+        expect(pills()).toContain('owi')
+      })
+
+      it('are taken away by pressing the same one again', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        await userEvent.click(setButton('Feminine'))
+
+        expect(setButton('Feminine')).toHaveAttribute('aria-pressed', 'false')
+        expect(screen.queryByRole('list', { name: 'Endings of the chosen set' })).toBeNull()
+        expect(find()).toBeDisabled()
+      })
+
+      it('have pills that can be removed', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        await userEvent.click(screen.getByRole('button', { name: 'Remove the ending ę of the set' }))
+        await userEvent.click(screen.getByRole('button', { name: 'Remove the ending ami of the set' }))
+
+        expect(pills()).toEqual(['a', 'y', 'i', 'ie', 'e', 'ą', 'o', 'om', 'ach'])
+      })
+
+      it('have the removed pills back when the set is chosen again', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+        await userEvent.click(screen.getByRole('button', { name: 'Remove the ending ę of the set' }))
+
+        await userEvent.click(setButton('Masculine'))
+        await userEvent.click(setButton('Feminine'))
+
+        expect(pills()).toEqual(FEMININE)
+      })
+
+      it('say so when all the pills are removed, and Find is inactive', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Adjectival'))
+        for (const ending of ['i', 'iego', 'iemu', 'im', 'ich', 'imi', 'a', 'iej', 'ą']) {
+          await userEvent.click(
+            screen.getByRole('button', { name: `Remove the ending ${ending} of the set` }),
+          )
+        }
+
+        expect(screen.getByText('No ending of the set is left.')).toBeInTheDocument()
+        expect(find()).toBeDisabled()
+      })
+
+      it('make Find active without any ending box', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        expect(find()).toBeDisabled()
+
+        await userEvent.click(setButton('Feminine'))
+
+        expect(find()).toBeEnabled()
+      })
+
+      it('are sent as the endings, with the core', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        await userEvent.click(find())
+
+        await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+        expect(new URLSearchParams(chunkCalls()[0].url.split('?')[1]).get('core')).toBe('cy')
+        expect(endingsSent()).toEqual(FEMININE)
+      })
+
+      it('are sent without the pills that were removed', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+        await userEvent.click(screen.getByRole('button', { name: 'Remove the ending o of the set' }))
+
+        await userEvent.click(find())
+
+        await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+        expect(endingsSent()).not.toContain('o')
+        expect(endingsSent()).toHaveLength(10)
+      })
+
+      it('are searched together with the boxes, each ending once', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+        await userEvent.type(ending(1), 'ia')
+        await userEvent.click(plus())
+        await userEvent.type(ending(2), 'a')
+
+        await userEvent.click(find())
+
+        await waitFor(() => expect(chunkCalls()).toHaveLength(1))
+        expect(endingsSent()).toEqual([...FEMININE, 'ia'])
+      })
+
+      it('name only the first substrings in the line that says what is looked for', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        expect(
+          screen.getByText('cya, cyy, cyi, cyie, cye, cyę', { selector: 'strong' }),
+        ).toBeInTheDocument()
+        expect(review()!.textContent).toContain('and 5 more')
+      })
+
+      it('do not cut a line that names few substrings', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.type(ending(1), 'a')
+
+        expect(review()!.textContent).not.toContain('more')
+      })
+
+      it('keep the pills when the core is cleared, and the buttons are inactive', async () => {
+        await open()
+        await userEvent.type(core(), 'cy')
+        await userEvent.click(setButton('Feminine'))
+
+        await userEvent.clear(core())
+
+        expect(pills()).toEqual(FEMININE)
+        expect(setButton('Masculine')).toBeDisabled()
+        expect(find()).toBeDisabled()
+      })
+    })
+
+    it('has a Find button that is inactive by default', async () => {
+      await open()
+
+      expect(find()).toBeDisabled()
+      expect(find()).toHaveAttribute(
+        'title',
+        'Write the core of the substring and at least one ending first',
+      )
+    })
+
+    it('has Find inactive with a core and no ending, or an ending and no core', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      expect(find()).toBeDisabled()
+
+      await userEvent.type(ending(1), '   ')
+      expect(find()).toBeDisabled()
+
+      await userEvent.clear(core())
+      await userEvent.type(core(), 'cy')
+      await userEvent.clear(ending(1))
+      expect(find()).toBeDisabled()
+    })
+
+    it('has Find active when the core is written and one ending is given', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+
+      expect(find()).toBeEnabled()
+      expect(find()).not.toHaveAttribute('title')
+    })
+
+    it('has Find active with an ending in a later box only', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.click(plus())
+      await userEvent.type(ending(2), 'i')
+
+      expect(find()).toBeEnabled()
+    })
+
+    it('has Find inactive again when the core is cleared', async () => {
+      await open()
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+
+      await userEvent.clear(core())
+
+      expect(find()).toBeDisabled()
+    })
+
+    it('does not look for the core alone: Enter in the core does nothing', async () => {
+      await open()
+
+      await userEvent.type(core(), 'cy{Enter}')
+
+      expect(chunkCalls()).toHaveLength(0)
+    })
+
+    it('can be changed and sent again', async () => {
+      await openFound()
+
+      await userEvent.type(ending(1), 'x')
+      await userEvent.click(find())
+
+      await waitFor(() => expect(chunkCalls()).toHaveLength(2))
+    })
+
+    it('shows the reason when the backend cannot look for it', async () => {
+      await open({ chunkMatches: () => new Error('"c1" is not made of letters') })
+      await userEvent.type(core(), 'c1')
+      await userEvent.type(ending(1), 'a')
+
+      await userEvent.click(find())
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('is not made of letters')
+    })
+  })
+
+  describe('the box', () => {
+    it('does not show a replacement or a correction, only the word', async () => {
+      await openFound()
+
+      expect(review()!.textContent).not.toContain('→')
+      expect(within(review()!).queryByText('Konwencja')).toBeNull()
+      expect(review()!.querySelectorAll('.suggestion, .misspelling')).toHaveLength(0)
+    })
+
+    it('lists each word once, with how many times it is in the edition', async () => {
+      await openFound()
+
+      const items = within(review()!).getAllByRole('listitem')
+      expect(items[0].textContent).toContain('Konwencya')
+      expect(items[0].textContent).toContain('×7')
+      expect(screen.getByText('2 spellings, 8 places in the edition')).toBeInTheDocument()
+    })
+
+    it('shows its places in their context: the token before, the word, the token after', async () => {
+      await openFound()
+
+      const first = within(review()!).getAllByRole('listitem')[1]
+      expect(first.querySelector('mark')!.textContent).toBe('Konwencya')
+      expect(first.textContent).toContain('ma')
+      expect(first.textContent).toContain('(page 1)')
+    })
+
+    it('says how many more places there are than are shown', async () => {
+      await openFound()
+
+      expect(screen.getByText('and 5 more')).toBeInTheDocument()
+    })
+
+    it('includes all of them by default', async () => {
+      await openFound()
+
+      expect(include('Konwencya')).toBeChecked()
+      expect(include('Policya')).toBeChecked()
+      expect(acceptAll()).toHaveTextContent('Accept all (2)')
+    })
+
+    it('has Include all and Include none', async () => {
+      await openFound()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+      expect(acceptAll()).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+      expect(acceptAll()).toHaveTextContent('Accept all (2)')
+    })
+
+    it('says so when there is none', async () => {
+      await open({ chunkMatches: () => [] })
+      await userEvent.type(core(), 'cy')
+      await userEvent.type(ending(1), 'a')
+      await userEvent.click(find())
+
+      expect(await screen.findByText('No flagged word of the edition has this substring.')).toBeInTheDocument()
+    })
+
+    it('closes with Close and with Escape', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+      expect(review()).toBeNull()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Apply spelling rule to the edition' }),
+      )
+      await userEvent.keyboard('{Escape}')
+      expect(review()).toBeNull()
+    })
+
+    it('accepts nothing until the user accepts', async () => {
+      await openFound()
+
+      expect(legalCalls()).toHaveLength(0)
+    })
+  })
+
+  describe('accepting one spelling', () => {
+    it('makes that word a legal spelling, and nothing else', async () => {
+      await openFound()
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect(legalCalls()[0].method).toBe('POST')
+      expect(legalCalls()[0].url).toBe(`/editions/${UUID}/legal-spellings`)
+      expect(legalCalls()[0].body).toEqual({ spelling: 'Konwencya' })
+      expect(await screen.findByText('✓ Accepted')).toBeInTheDocument()
+      expect(correctionCalls()).toHaveLength(0)
+    })
+
+    it('does not change the text of the page', async () => {
+      await openFound()
+
+      await userEvent.click(acceptOne('Konwencya'))
+      await screen.findByText('✓ Accepted')
+
+      expect(pageText().textContent).toBe(TEXT)
+    })
+
+    it('checks the page on the screen again, with the new legal spelling', async () => {
+      await openFound({ spell: (text) => wordsOf(text, ['Konwencya', 'Policya']) })
+      await waitFor(() =>
+        expect(pageText().querySelectorAll('.misspelled')).toHaveLength(2),
+      )
+      const before = calls.filter((c) => c.url === '/spellcheck').length
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      await waitFor(() =>
+        expect(calls.filter((c) => c.url === '/spellcheck')).toHaveLength(before + 1),
+      )
+      await waitFor(() =>
+        expect(
+          Array.from(pageText().querySelectorAll('.misspelled')).map((e) => e.textContent),
+        ).toEqual(['Policya']),
+      )
+    })
+
+    it('shows the reason when the backend refuses, and the word can be tried again', async () => {
+      await openFound({ legal: () => new Error('Edition not found') })
+
+      await userEvent.click(acceptOne('Konwencya'))
+
+      expect(await screen.findByText('Edition not found')).toBeInTheDocument()
+      expect(acceptOne('Konwencya')).toBeEnabled()
+    })
+  })
+
+  describe('accept all', () => {
+    it('accepts the words that are in, one request each, in order', async () => {
+      await openFound()
+
+      await userEvent.click(acceptAll())
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(2))
+      expect(legalCalls().map((c) => (c.body as { spelling: string }).spelling)).toEqual([
+        'Konwencya',
+        'Policya',
+      ])
+      expect(await screen.findAllByText('✓ Accepted')).toHaveLength(2)
+      expect(acceptAll()).toBeDisabled()
+      expect(correctionCalls()).toHaveLength(0)
+    })
+
+    it('leaves out a word that was taken out', async () => {
+      await openFound()
+      await userEvent.click(include('Policya'))
+
+      await userEvent.click(acceptAll())
+
+      await waitFor(() => expect(legalCalls()).toHaveLength(1))
+      expect((legalCalls()[0].body as { spelling: string }).spelling).toBe('Konwencya')
+    })
+
+    it('goes on after a word that was refused, and says which', async () => {
+      await openFound({
+        legal: (body) => (body.spelling === 'Konwencya' ? new Error('No') : undefined),
+      })
+
+      await userEvent.click(acceptAll())
+
+      expect(await screen.findByText('No')).toBeInTheDocument()
+      await waitFor(() => expect(legalCalls()).toHaveLength(2))
+      expect(screen.getByText(/1 failed/)).toBeInTheDocument()
+      expect(screen.getAllByText('✓ Accepted')).toHaveLength(1)
+    })
+  })
+
+  it('is closed when the user goes back to the editions', async () => {
+    await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
     await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))

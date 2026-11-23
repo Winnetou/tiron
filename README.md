@@ -724,6 +724,43 @@ spelling. 404 if the page is not stored, 409 if the text at an offset is not
 The search is `Database.get_missing_hyphens`, on `app/text_tools/hyphens.py`;
 saving is `Database.apply_corrections`, the `apply_correction` for several.
 
+### Accepting the spellings that have a substring in common
+
+Old print has spellings that repeat: `Konwencya` and `tendencyę` have a `y` where we
+write `j`. The dictionary is a modern one and flags them, and making each a legal
+spelling by hand (the "legal spelling" button of a word, see "Legal spellings") is no
+work for a human. We call them "legal", not "correct", and **nothing is corrected or
+replaced** here: the words are only accepted, as they are. A person gives the substring that
+the words have in common, and the backend finds the flagged words that have it.
+
+`GET /editions/{edition_id}/spelling-chunk-matches?core=cy&ending=a&ending=i&ending=ami`
+changes nothing.
+
+- **The substring** is a `core` (`cy`) and an `ending` for each ending (`a`, `i`, `ami`). What
+  is looked for is the core with each ending: `cya`, `cyi` and `cyami`, **anywhere in the
+  word** (`Konwencya`, and also `tendencyalny`), whatever the case of the letters. An empty
+  ending is the core alone. There are at most forty endings, and the core and each ending are
+  at most 30 letters (a hyphen or an apostrophe inside is fine); spaces around them do not
+  count.
+- **What is listed**: the words that the spell check flags, as `POST /spellcheck` judges
+  them: a word split over two lines is judged as one word, and the legal spellings of the
+  edition count as correct, so a word that is accepted already is not listed. Signs are not
+  words. A word is listed with the case it has (`Konwencya` and `konwencya` are two).
+- **The response**: a list with an item for each word, the ones that are in the edition
+  most often first: `{"text": "Konwencya", "count": 7, "occurrences": [{"page_number": 8,
+  "start": 383, "end": 392, "before": "w", "after": "z"}]}`. `occurrences` are the first
+  places of the word (at most five, in the order of the pages); `count` is how many there
+  are in all. `start` and `end` are offsets in the text of the page (as `POST /tei/text`
+  gives it), so `text[start:end]` is the word. `before` and `after` are the token before and
+  after it (a sign counts): the 3-gram that shows it in its context.
+- **Accepting** is the request that the "legal spelling" button sends: `POST
+  /editions/{id}/legal-spellings` with `{"spelling": "Konwencya"}`. It is of the word,
+  wherever it is, so one request is for all its places.
+- 404 if the edition is not stored, 422 if the core is empty, there is no ending or more
+  than ten, or a part is too long or is not letters (with the reason), 503 if the
+  dictionary is not available. The substring is in `app/text_tools/spelling_chunks.py`, the
+  search is `Database.get_chunk_matches`.
+
 ### The same named entity in all its forms
 
 A Polish name is not always in the nominative. A surname that a person confirmed as
@@ -1069,6 +1106,45 @@ the middle of a word cuts it in two, and either part edits the whole word. A
 correction changes the text, so the entities recognized in the old text are not
 shown for the new one; click the NER button again.
 
+**Accepting the spellings that have a substring in common.** The **Apply spelling rule to the
+edition** tool of the correction view (in the cog wheel of the sidebar) opens a big box over
+the page, which accepts spellings as legal without changing the text (see "Accepting the
+spellings that have a substring in common"). It has a box for the **core of the substring** (`cy`)
+and, below it, a box for an **ending** (`a`); the ending boxes are inactive (greyed, with a tooltip) until the core is written; the boxes are big and rounded, their label is inside
+them in grey (a placeholder), and a box has a yellowish frame while it is written in; a **+** sign adds a box for another ending (`i`,
+`ami`; up to ten), and **×** drops one that was added. So that the predictable endings of a
+Polish noun need not be typed each time, four buttons below the core (**Masculine**,
+**Feminine**, **Neuter**, **Adjectival**; inactive until the core is written) put the endings
+of every case, singular and plural, into a **frozen field of pills**. One set is chosen at a
+time (another takes its place, the same again takes it away) and a pill can be removed with
+its **×**, but not edited. They are kept in the frontend (`frontend/src/nounEndings.ts`), as
+they are written after the stem, with the declension classes of a gender put together, so a
+set has some endings that a noun does not use, and without the zero ending (the core alone is in
+every word that has the core). Masculine: `a u owi em iem e ie y i owie ów om ami mi ach`.
+Feminine: `a y i ie e ę ą o om ami ach`. Neuter: `o e ę um a u em iem ie i y ów om ami ach`.
+Adjectival (adjectives and the surnames in `-ski`, `-cki`, `-dzki`): `i iego iemu im ich imi a iej ą`.
+The pills and the boxes are searched together, each ending once, and Find is active when there is
+one ending from either (up to forty are sent). The line that says what is looked for names the
+first six substrings and "and N more". A line says what is looked for ("Looking
+for words that have cya, cyi, cyami in them"); a box left empty is left out. **Find** (a big, round button in the middle) is inactive until the core is written and at least
+one ending is given, and, like **Close** (also round), it gets the same yellowish frame as a box that is written in when the pointer is over it; it asks `GET .../spelling-chunk-matches`; if the
+backend cannot look for the substring, its reason is shown. The substring can be changed and sent again.
+
+- Each flagged word is listed **once**, with how many times it is in the edition (`×7`) and
+  its first places, each **in its context**: the token before it, the word (marked in yellow)
+  and the token after it, with its page; "and 5 more" says how many places are not shown. No
+  correction or replacement is shown, as none is made.
+- Each has an **Accept** button, which makes the word a legal spelling of the edition (`POST
+  .../legal-spellings`, the request of the word's own "legal spelling" button), and a box to
+  take it out of **Accept all (N)**, which accepts the words that are in, one request at a
+  time, with "Accepting x of y …". All are in by default. **Include all** and **Include none**
+  set the boxes. A word that the backend refuses is marked with the reason and the others go
+  on.
+- Accepting does not change any text. The page on the screen is checked again, so the word is
+  not red there any more.
+- The box says "No flagged word of the edition has this substring" when there is none, and is
+  closed with **Close** or Escape.
+
 **The same named entity in all its forms.** The **Find this NER on other pages** tool of
 the NER view (in the cog wheel of the sidebar) is enabled when an entity is confirmed on
 the page (marked in the XML: confirmed here, or by a person earlier); until then its
@@ -1128,6 +1204,7 @@ the cog wheel disabled.
 | View | Tool | |
 |---|---|---|
 | Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
+| Correction | **Apply spelling rule to the edition** | accepts, as legal spellings, the flagged words of the whole edition that have a substring in common, such as `cy` with the endings `a`, `i`, `ami` (above) |
 | Correction | **Find OCR rubbish in the edition** | finds the lines of the whole edition that are not text, to remove them (above) |
 | Structure | **Find this on other pages** | looks for the page number marked on this page on the other pages; disabled until a page number is marked (its tooltip says "Mark the page number on this page first") |
 | Named entity recognition | **Find this NER on other pages** | finds a confirmed entity, in all its forms in the cases, in the whole edition; disabled until an entity is confirmed on the page (above) |

@@ -29,6 +29,7 @@ import {
   SimilarEntitiesReview,
   type EntityExample,
 } from './EditionWideEntities'
+import { SpellingChunkReview } from './EditionWideChunk'
 import { RubbishReview, type RubbishEdition } from './EditionWideRubbish'
 import { MissingHyphensReview, type HyphenPage } from './MissingHyphens'
 import {
@@ -163,6 +164,10 @@ export default function App() {
     useState<PageNumberExample | null>(null)
   // The page whose line ends are looked at for the hyphens that the OCR dropped.
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
+  // The edition whose flagged spellings the user wants to accept by their substring.
+  const [acceptingChunk, setAcceptingChunk] = useState<{ editionId: string } | null>(
+    null,
+  )
   // The named entities confirmed on the page, one of which the user wants to find
   // on the other pages of the edition (in all its forms in the cases).
   const [findingEntities, setFindingEntities] = useState<{
@@ -234,7 +239,33 @@ export default function App() {
     setFindingHyphens(null)
     setFindingRubbish(null)
     setFindingEntities(null)
+    setAcceptingChunk(null)
     setStatus({ kind: 'idle' })
+  }
+
+  /**
+   * Accept a spelling as legal in an edition (the request of the "legal spelling"
+   * button). The page on the screen is checked again, so that the spelling is not
+   * flagged there any more. A refusal rejects, with its reason, for the list.
+   */
+  async function acceptSpelling(editionId: string, spelling: string) {
+    await addLegalSpelling(editionId, spelling)
+    if (status.kind !== 'done' || status.page.edition_id !== editionId) return
+    const { text } = status
+    try {
+      const words = await spellcheck(text, editionId)
+      setStatus((previous) =>
+        previous.kind === 'done' && previous.text === text
+          ? { ...previous, words, spellError: null }
+          : previous,
+      )
+    } catch (error) {
+      setStatus((previous) =>
+        previous.kind === 'done' && previous.text === text
+          ? { ...previous, words: null, spellError: errorMessage(error) }
+          : previous,
+      )
+    }
   }
 
   /**
@@ -616,6 +647,7 @@ export default function App() {
               page: page.number,
             })
           }
+          onApplyRule={() => setAcceptingChunk({ editionId: page.edition_id })}
           onFindEntities={(examples) =>
             setFindingEntities({ editionId: page.edition_id, examples })
           }
@@ -648,6 +680,15 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {acceptingChunk && (
+          <SpellingChunkReview
+            editionId={acceptingChunk.editionId}
+            onAccept={(spelling) =>
+              acceptSpelling(acceptingChunk.editionId, spelling)
+            }
+            onClose={() => setAcceptingChunk(null)}
           />
         )}
         {findingEntities && (
