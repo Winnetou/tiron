@@ -56,6 +56,35 @@ class PageView(BaseModel):
         )
 
 
+class EditionMetadataUpdate(BaseModel):
+    """The metadata of an edition that can be edited: `author` and `title` (of its
+    work), and `place` and `year` of the edition. A field that is not in the request
+    is left as it is; one that is `null` or only white space is cleared. Any other
+    field is rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    author: str | None = Field(default=None, max_length=300)
+    title: str | None = Field(default=None, max_length=1000)
+    place: str | None = Field(default=None, max_length=300)
+    year: int | None = Field(default=None, ge=1500, le=2030)
+
+    @model_validator(mode="after")
+    def check_fields(self) -> EditionMetadataUpdate:
+        if not self.model_fields_set:
+            raise ValueError("Give at least one of author, title, place and year")
+        for name in ("author", "title", "place"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                # the same text, trimmed, with each run of white space as one space
+                setattr(self, name, " ".join(value.split()) or None)
+        return self
+
+    def changes(self) -> dict[str, str | int | None]:
+        """The fields that were given, with their new values (None clears one)."""
+        return {name: getattr(self, name) for name in self.model_fields_set}
+
+
 class PageUpdate(BaseModel):
     """The only things of a page that can be edited. Any other field in the
     request is rejected, so nothing else can be changed through the API."""

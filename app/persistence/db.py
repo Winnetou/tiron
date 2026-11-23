@@ -24,6 +24,7 @@ from psycopg.rows import dict_row
 from app.persistence.ontology import (
     Correction,
     Edition,
+    EditionMetadata,
     EntityForm,
     EntityMatch,
     LegalSpelling,
@@ -138,6 +139,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
 """
 
 
+class WorkExists(ValueError):
+    """Another work has the author and title that were asked for."""
+
+
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 
@@ -232,6 +237,64 @@ class Database:
         )
         row = self.conn.execute(query, (value, edition_id)).fetchone()
         return Edition.model_validate(row) if row else None
+
+    def get_edition_metadata(self, edition_id: UUID) -> EditionMetadata | None:
+        """What is known of an edition: the `author` and `title` of its work (and
+        the work's id, and how many editions the work has), and the `place` and `year`
+        of the edition itself. None if there is no such edition."""
+        row = self.conn.execute(
+            "SELECT e.id, e.work_id, w.author, w.title, e.place, e.year,"
+            " (SELECT count(*) FROM editions o WHERE o.work_id = e.work_id)"
+            " AS work_editions"
+            " FROM editions e JOIN works w ON w.id = e.work_id WHERE e.id = %s",
+            (edition_id,),
+        ).fetchone()
+        return EditionMetadata.model_validate(row) if row else None
+
+    def update_edition_metadata(
+        self, edition_id: UUID, changes: dict[str, str | int | None]
+    ) -> EditionMetadata | None:
+        """Change what is known of an edition: `changes` has some of `author`,
+        `title`, `place` and `year` with their new values (None clears one); the
+        others are left as they are. Returns the metadata as it is now, or None if
+        there is no such edition.
+
+        `place` and `year` are changed in the edition. `author` and `title` are
+        changed in its work, in place: the other editions of the work have the
+        change too. A work is one per author and title (case does not matter), so
+        if another work has the new author and title already nothing is changed
+        and WorkExists is raised.
+        """
+        unknown = set(changes) - {"author", "title", "place", "year"}
+        if unknown:
+            raise ValueError(f"Cannot change {', '.join(sorted(unknown))}")
+        try:
+            with self.conn.transaction():
+                row = self.conn.execute(
+                    "SELECT e.work_id FROM editions e WHERE e.id = %s FOR UPDATE",
+                    (edition_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                for column in ("author", "title"):
+                    if column in changes:
+                        self.conn.execute(
+                            sql.SQL("UPDATE works SET {} = %s WHERE id = %s").format(
+                                sql.Identifier(column)
+                            ),
+                            (changes[column], row["work_id"]),
+                        )
+                for column in ("place", "year"):
+                    if column in changes:
+                        self.conn.execute(
+                            sql.SQL("UPDATE editions SET {} = %s WHERE id = %s").format(
+                                sql.Identifier(column)
+                            ),
+                            (changes[column], edition_id),
+                        )
+        except psycopg.errors.UniqueViolation as exc:
+            raise WorkExists("Another work has this author and title already") from exc
+        return self.get_edition_metadata(edition_id)
 
     # Pages
 

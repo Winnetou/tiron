@@ -109,6 +109,48 @@ title is not known). An edition whose book is not known at all, neither author n
 title, is linked by its id. (This is done by the frontend, in
 `editionLabel.ts`; the endpoint gives the author and title as they are stored.)
 
+### Editing the metadata of an edition
+
+The metadata that is fetched from Polona is not always complete, so it can be
+edited. It is of two kinds: the **work** (the book) has an `author` and a `title`,
+and the **edition** has a `place` and a `year`. `GET /editions/{edition_id}/metadata`
+gives both:
+
+```json
+{"id": "<uuid>", "work_id": "<uuid>", "work_editions": 2,
+ "author": "Prus, Bolesław (1847-1912)", "title": "Lalka",
+ "place": null, "year": 1890}
+```
+
+`null` is what is not known; `work_editions` is how many editions the work has, this
+one included. `PATCH /editions/{edition_id}/metadata` changes it; the body has some of
+`author`, `title`, `place` and `year`, and the response is what is known now, like
+`GET`:
+
+```json
+{"author": "Prus, Bolesław (1847-1912)", "year": 1890}
+```
+
+- **`author` and `title` are changed in the work itself**, in place, so the other
+  editions of the work have the change too (`work_editions` says how many there are).
+  **`place` and `year` are changed in the edition** alone.
+- **What is not in the body is left as it is**; a field that is `null`, or only white
+  space, is cleared. The text is trimmed and white space in it becomes one space.
+  The author is written the way the catalogue writes it, "Last name, First names
+  (years)", which is what the main page shortens to "Prus B.".
+- **Checks**: `year` is a whole number from 1500 to 2030; `author` and `place` have at
+  most 300 characters, `title` 1000. Any other field (`id`, `work_id`, ...) and an empty
+  body are a 422, and nothing is changed. 404 if the edition is not stored. A work is
+  one per author and title (case does not matter): if another work has the new author
+  and title already, the answer is 409 and nothing is changed (the place and year
+  too). Polona is not called.
+- **In the frontend**, the page has a pencil button at the top, next to the one that
+  goes back to the editions. It opens a panel with two parts, "Work" (author and
+  title, with a note of how many other editions are changed too) and "This edition"
+  (place and year), filled in, and a Save button (disabled until something changes).
+  Save sends only what was changed. The year must be a number; if the backend refuses,
+  its reason is shown. Escape or Close closes the panel.
+
 ### Requesting a page
 
 `GET /editions/{edition_id}/pages/{number}`

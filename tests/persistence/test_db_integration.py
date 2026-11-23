@@ -12,8 +12,15 @@ import pytest
 from fastapi_pagination import Page as PaginatedPage
 from fastapi_pagination import Params, set_page, set_params
 
-from app.persistence.db import Database, get_conninfo
-from app.persistence.ontology import Correction, Edition, LegalSpelling, Page, Work
+from app.persistence.db import Database, WorkExists, get_conninfo
+from app.persistence.ontology import (
+    Correction,
+    Edition,
+    EditionMetadata,
+    LegalSpelling,
+    Page,
+    Work,
+)
 from app.text_tools.tei_xml import mark_section, text_to_tei_xml
 from app.view_models import CollectionEdition
 from tests.conftest import real_connect
@@ -656,6 +663,101 @@ class TestLegalSpellingsThroughTheEndpoint:
 
         assert response.status_code == 422
         assert self.stored(db) == []
+
+
+class TestEditionMetadata:
+    def edition_of(self, db, author, title, place="Kraków", year=1880):
+        work = db.create_work(Work(author=author, title=title))
+        return db.create_edition(Edition(work_id=work.id, place=place, year=year))
+
+    def test_reads_the_edition_and_its_work(self, db):
+        edition = self.edition_of(db, "Prus", "Lalka")
+
+        found = db.get_edition_metadata(edition.id)
+
+        assert found == EditionMetadata(
+            id=edition.id,
+            work_id=edition.work_id,
+            work_editions=1,
+            author="Prus",
+            title="Lalka",
+            place="Kraków",
+            year=1880,
+        )
+
+    def test_says_how_many_editions_the_work_has(self, db):
+        first = self.edition_of(db, "Prus", "Lalka")
+        db.create_edition(Edition(work_id=first.work_id, year=1900))
+
+        assert db.get_edition_metadata(first.id).work_editions == 2
+
+    def test_no_such_edition(self, db):
+        assert db.get_edition_metadata(uuid4()) is None
+        assert db.update_edition_metadata(uuid4(), {"year": 1890}) is None
+
+    def test_changes_place_and_year_of_the_edition_alone(self, db):
+        first = self.edition_of(db, "Prus", "Lalka")
+        second = db.create_edition(
+            Edition(work_id=first.work_id, place="Wilno", year=1900)
+        )
+
+        found = db.update_edition_metadata(first.id, {"place": "Lwów", "year": 1890})
+
+        assert (found.place, found.year, found.author, found.title) == (
+            "Lwów",
+            1890,
+            "Prus",
+            "Lalka",
+        )
+        other = db.get_edition_metadata(second.id)  # another edition: not changed
+        assert (other.place, other.year) == ("Wilno", 1900)
+
+    def test_author_and_title_are_changed_in_the_work_itself(self, db):
+        first = self.edition_of(db, "Prus", "Lalka")
+        second = db.create_edition(Edition(work_id=first.work_id, year=1900))
+
+        found = db.update_edition_metadata(
+            first.id, {"author": "Prus, Bolesław", "title": "Lalka (powieść)"}
+        )
+
+        assert found.work_id == first.work_id  # the same work, changed in place
+        assert (found.author, found.title) == ("Prus, Bolesław", "Lalka (powieść)")
+        # the other edition of the work has the change too
+        other = db.get_edition_metadata(second.id)
+        assert (other.author, other.title) == ("Prus, Bolesław", "Lalka (powieść)")
+        assert db.get_work(first.work_id).author == "Prus, Bolesław"
+        assert len(db.conn.execute("SELECT id FROM works").fetchall()) == 1
+
+    def test_a_field_that_is_not_given_is_left_alone_and_none_clears(self, db):
+        edition = self.edition_of(db, "Prus", "Lalka")
+
+        found = db.update_edition_metadata(edition.id, {"place": None})
+
+        assert (found.place, found.year, found.title) == (None, 1880, "Lalka")
+
+    def test_an_author_can_be_cleared_and_the_title_stays(self, db):
+        edition = self.edition_of(db, "Prus", "Lalka")
+
+        found = db.update_edition_metadata(edition.id, {"author": None})
+
+        assert (found.author, found.title) == (None, "Lalka")
+
+    def test_another_work_with_the_same_author_and_title_is_refused(self, db):
+        self.edition_of(db, "Prus", "Lalka")
+        other = self.edition_of(db, "Prus", "Faraon")
+
+        with pytest.raises(WorkExists):
+            db.update_edition_metadata(other.id, {"title": "LALKA", "place": "Lwów"})
+
+        # nothing is changed, the place too
+        found = db.get_edition_metadata(other.id)
+        assert (found.title, found.place) == ("Faraon", "Kraków")
+
+    def test_unknown_fields_are_refused(self, db):
+        edition = self.edition_of(db, "Prus", "Lalka")
+
+        with pytest.raises(ValueError):
+            db.update_edition_metadata(edition.id, {"work_id": str(uuid4())})
 
 
 def test_list_collection_pages_the_ids_in_order(db):

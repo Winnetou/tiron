@@ -10,8 +10,9 @@ from fastapi import FastAPI, HTTPException, Path, Query, Response, status
 from fastapi_pagination import add_pagination
 
 from app import page_provider
-from app.persistence.db import Database
+from app.persistence.db import Database, WorkExists
 from app.persistence.ontology import (
+    EditionMetadata,
     LegalSpelling,
     MissingHyphen,
     PageMatches,
@@ -51,6 +52,7 @@ from app.text_tools.tei_xml import (
 from app.text_tools.token_occurrences import InvalidToken
 from app.view_models import (
     CollectionPage,
+    EditionMetadataUpdate,
     EntityLabel,
     EntityTag,
     HyphenFixes,
@@ -133,6 +135,59 @@ def list_editions() -> CollectionPage:
     pages are at `GET /editions/{id}/pages/{number}`.
     """
     return db.list_collection()
+
+
+@app.get("/editions/{edition_id}/metadata", response_model=EditionMetadata)
+def get_edition_metadata(edition_id: UUID) -> EditionMetadata:
+    """What is known of a stored edition: `{"id": ..., "work_id": ..., "work_editions":
+    2, "author": ..., "title": ..., "place": ..., "year": ...}`. The `author` and
+    `title` are those of the edition's work (`work_id`; `work_editions` is how many
+    editions the work has), the `place` and `year` those of the edition. `null` is
+    what is not known (the metadata that is fetched from Polona is not always
+    complete). It is shown in the panel where it is edited (`PATCH` of the same
+    address).
+
+    404 if the edition is not stored. Polona is not called.
+    """
+    metadata = db.get_edition_metadata(edition_id)
+    if metadata is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    return metadata
+
+
+@app.patch("/editions/{edition_id}/metadata", response_model=EditionMetadata)
+def update_edition_metadata(
+    edition_id: UUID, update: EditionMetadataUpdate
+) -> EditionMetadata:
+    """Edit what is known of a stored edition, for when what was fetched from Polona
+    is not complete.
+
+    The body has some of `author`, `title` (of the work), `place` and `year` (of the
+    edition), e.g. `{"author": "Prus, Bolesław", "year": 1890}`. A field that is not
+    in the body is left as it is; one that is `null` or only white space clears it.
+    The text is trimmed, and white space in it becomes one space; `year` is a
+    number from 1500 to 2030. Any other field is rejected, and so is a body without
+    any of the four.
+
+    `place` and `year` are changed in the edition. `author` and `title` are changed
+    in the edition's work itself, so the other editions of the work have the change
+    too (`work_editions` in the response says how many there are). The response is
+    what is known now, the same as `GET`.
+
+    404 if the edition is not stored, 409 if another work has the new author and title
+    already (a work is one per author and title, case does not matter; nothing is
+    changed), 422 if the body is not valid. Polona is not called.
+    """
+    try:
+        metadata = db.update_edition_metadata(edition_id, update.changes())
+    except WorkExists as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if metadata is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    logger.info(
+        "Metadata of edition %s edited: %s", edition_id, sorted(update.model_fields_set)
+    )
+    return metadata
 
 
 @app.get("/editions/{edition_id}/pages/{number}", response_model=PageView)
