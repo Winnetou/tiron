@@ -12,10 +12,21 @@ from app.persistence.ontology import Page, Spelling
 
 COLLECTION_PAGE_SIZE = 100
 
-# A page of the collection: the ids of its editions, 100 on a page (the
-# default, and the most that can be asked for with `size`).
+
+class CollectionEdition(BaseModel):
+    """An edition of the collection, as the main page lists it: its `id` and, if
+    the metadata of the book is known, its `author` and `title` (null if they are
+    not)."""
+
+    id: UUID
+    author: str | None = None
+    title: str | None = None
+
+
+# A page of the collection: its editions, 100 on a page (the default, and the
+# most that can be asked for with `size`).
 CollectionPage = CustomizedPage[
-    PaginatedPage[UUID],
+    PaginatedPage[CollectionEdition],
     UseParamsFields(
         size=Query(COLLECTION_PAGE_SIZE, ge=1, le=COLLECTION_PAGE_SIZE),
     ),

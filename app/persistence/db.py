@@ -827,10 +827,12 @@ class Database:
     # Collection
 
     def list_collection(self) -> Any:
-        """A page of the ids of the editions in the collection, in the order of
-        the ids (so the pages do not change between requests). Which page, and
-        how long, is up to the request that is being served: fastapi-pagination
-        reads it from there.
+        """A page of the editions in the collection, in the order of their ids (so
+        the pages do not change between requests): each is its id and the author
+        and title of its work, or None for those that are not known (the edition
+        is not stored yet, or its work has no author or no title). Which page,
+        and how long, is up to the request that is being served:
+        fastapi-pagination reads it from there.
 
         The two queries are run here, not by fastapi-pagination's psycopg
         helper: that one switches the row factory of the connection while it
@@ -839,8 +841,18 @@ class Database:
         params = resolve_params()
         raw = params.to_raw_params().as_limit_offset()
         rows = self.conn.execute(
-            "SELECT id FROM collection ORDER BY id LIMIT %s OFFSET %s",
+            "SELECT c.id, w.author, w.title FROM collection c"
+            " LEFT JOIN editions e ON e.id = c.id"
+            " LEFT JOIN works w ON w.id = e.work_id"
+            " ORDER BY c.id LIMIT %s OFFSET %s",
             (raw.limit, raw.offset),
         ).fetchall()
         total = self.conn.execute("SELECT count(*) AS n FROM collection").fetchone()
-        return create_page([row["id"] for row in rows], total=total["n"], params=params)
+        return create_page(
+            [
+                {"id": row["id"], "author": row["author"], "title": row["title"]}
+                for row in rows
+            ],
+            total=total["n"],
+            params=params,
+        )

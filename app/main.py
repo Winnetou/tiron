@@ -120,14 +120,17 @@ app = FastAPI(title="tiron", lifespan=lifespan)
 
 @app.get("/editions", response_model=CollectionPage)
 def list_editions() -> CollectionPage:
-    """The main page: the ids of the editions in the collection, 100 on a page.
+    """The main page: the editions in the collection, 100 on a page.
 
     Paginated with fastapi-pagination: `?page=1` (the first, the default) and
     `?size=` (at most 100, which is also the default). The response is
-    `{"items": [uuid, ...], "total": ..., "page": ..., "size": ..., "pages": ...}`.
-    The ids come in the order of the ids, so a page is the same every time.
-    A page past the last one has no items. Each id is an edition whose pages are
-    at `GET /editions/{id}/pages/{number}`.
+    `{"items": [{"id": uuid, "author": ..., "title": ...}, ...], "total": ...,
+    "page": ..., "size": ..., "pages": ...}`. The `author` and `title` are those of
+    the edition's work (the `collection` table is joined with `editions` and `works`
+    on the edition id); each is null if it is not known, as for an edition that is
+    not stored yet. The editions come in the order of the ids, so a page is the same
+    every time. A page past the last one has no items. Each is an edition whose
+    pages are at `GET /editions/{id}/pages/{number}`.
     """
     return db.list_collection()
 

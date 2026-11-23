@@ -8,6 +8,7 @@ import {
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
+  EditionItem,
   MissingHyphen,
   Page,
   PageMatches,
@@ -110,7 +111,7 @@ interface Options {
   /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
   tei?: (xml: string) => { text: string } | Error
   /** Answer of GET /editions?page=N; defaults to 250 editions. */
-  editions?: (page: number) => { items: string[]; pages: number } | Error
+  editions?: (page: number) => { items: EditionItem[]; pages: number } | Error
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
   marked?: (xml: string) => Entity[] | Error
   /** Answer of POST .../tokens; defaults to putting the token in the text. */
@@ -227,7 +228,10 @@ function fakeBackend(options: Options = {}) {
       const page = Number(url.split('=')[1])
       const answer = options.editions
         ? options.editions(page)
-        : { items: editionIds(page), pages: 3 }
+        : {
+            items: editionIds(page).map((id) => ({ id, author: null, title: null })),
+            pages: 3,
+          }
       return answer instanceof Error
         ? failure(500, answer)
         : reply(true, 200, { total: 250, page, size: 100, ...answer })
@@ -581,6 +585,31 @@ describe('the main page', () => {
     expect(calledUrls()).toEqual(['GET /editions?page=1'])
     expect(links()).toHaveLength(100)
     expect(links().map((a) => a.textContent)).toEqual(editionIds(1))
+  })
+
+  it('shows "Last name F.; title" for an edition with metadata, and the id for one without', async () => {
+    const [first, second, third, fourth] = editionIds(1)
+    openMainPage({
+      editions: () => ({
+        items: [
+          { id: first, author: 'Kraszewski, Józef Ignacy (1812-1887)', title: 'Stara baśń' },
+          { id: second, author: null, title: null },
+          { id: third, author: null, title: 'Kraków i jego okolice w dawnych czasach' },
+          { id: fourth, author: 'Prus, Bolesław (1847-1912)', title: null },
+        ],
+        pages: 1,
+      }),
+    })
+
+    await screen.findByRole('navigation', { name: 'Editions' })
+
+    expect(links().map((a) => a.textContent)).toEqual([
+      'Kraszewski J.; Stara baśń',
+      second, // nothing is known of the book
+      'NN; Kraków i jego okolice w...', // the author is not known; the title is cut
+      'Prus B.; Bez tytułu',
+    ])
+    expect(links()[0]).toHaveAttribute('href', `/editions/${first}/pages/0`)
   })
 
   it('links each edition to its first page', async () => {
