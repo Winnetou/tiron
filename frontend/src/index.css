@@ -567,6 +567,8 @@ button {
   z-index: 10;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 350px;
   gap: 0.4rem;
   padding: 0.5rem 0.6rem;
   background: #fff;
@@ -580,6 +582,12 @@ button {
 .structure-popup select {
   font: inherit;
   padding: 0.15rem;
+}
+
+/* The language of a quote goes on a row of its own, below the section, so that
+   the popup does not grow beyond the box and Confirm stays in sight. */
+.structure-popup .structure-language {
+  flex: 1 1 100%;
 }
 
 .notice {

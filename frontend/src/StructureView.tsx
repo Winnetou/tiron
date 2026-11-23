@@ -258,6 +258,7 @@ export default function StructureView({
           {choice === 'quote' && (
             <select
               aria-label="Language"
+              className="structure-language"
               value={language}
               onChange={(event) => setLanguage(event.target.value)}
             >
