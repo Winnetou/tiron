@@ -1549,6 +1549,31 @@ class TestSimilarMisspellings:
         return f"/editions/{edition_id or uuid4()}/similar-misspellings"
 
     PARAMS = {"incorrect_spelling": "jćj", "corrected_spelling": "jéj"}
+    # what the dictionary knows: the corrected forms, not the misreadings
+    KNOWN = {"to", "i", "tu", "ala", "ma", "kota", "jéj", "saméj", "bardziéj"}
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w.lower() in self.KNOWN})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    def pages(self, monkeypatch, texts, legal=()):
+        """The pages that the database holds, as texts, and the legal spellings."""
+        rows = [
+            {"number": n, "xml_content_corrected": str(text_to_tei_xml(text))}
+            for n, text in enumerate(texts)
+        ]
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = (
+                [{"spelling": spelling} for spelling in legal]
+                if "legal_spellings" in query
+                else rows
+            )
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
 
     @pytest.fixture
     def stored(self, monkeypatch):
@@ -1569,13 +1594,13 @@ class TestSimilarMisspellings:
             },
             {"number": 4, "xml_content_corrected": None},
         ]
-        monkeypatch.setattr(
-            db,
-            "conn",
-            mock.Mock(
-                **{"execute.return_value.fetchall.return_value": rows},
-            ),
-        )
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = [] if "legal_spellings" in query else rows
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
         return edition_id
 
     def get(self, edition_id, **params):
@@ -1589,13 +1614,26 @@ class TestSimilarMisspellings:
             {
                 "page_number": 3,
                 "tokens": [
-                    {"text": "jćj", "start": 3, "end": 6, "suggestion": "jéj"},
-                    {"text": "samćj", "start": 9, "end": 14, "suggestion": "saméj"},
+                    {
+                        "text": "jćj",
+                        "start": 3,
+                        "end": 6,
+                        "suggestion": "jéj",
+                        "sure": True,
+                    },
+                    {
+                        "text": "samćj",
+                        "start": 9,
+                        "end": 14,
+                        "suggestion": "saméj",
+                        "sure": True,
+                    },
                     {
                         "text": "bardzićj",
                         "start": 16,
                         "end": 24,
                         "suggestion": "bardziéj",
+                        "sure": True,
                     },
                 ],
             }
@@ -1609,6 +1647,79 @@ class TestSimilarMisspellings:
         assert [text[t["start"] : t["end"]] for t in page["tokens"]] == [
             t["text"] for t in page["tokens"]
         ]
+
+    def test_never_suggests_a_correction_from_a_correct_word(self, stored, monkeypatch):
+        # "zasiedliśmy" is a word: it is not a misreading, whatever it looks like
+        self.KNOWN = self.KNOWN | {"mićj", "zasiedliśmy"}
+        self.pages(monkeypatch, ["To mićj jćj tu.", "mićj"])
+
+        (page,) = self.get(stored).json()
+
+        assert [t["text"] for t in page["tokens"]] == ["jćj"]
+
+    def test_a_suggestion_that_is_not_a_correct_word_is_doubtful_not_sure(
+        self, stored, monkeypatch
+    ):
+        # the dictionary does not know "zzéj": offered, but not sure
+        self.pages(monkeypatch, ["To zzćj jćj tu."])
+
+        (page,) = self.get(stored).json()
+
+        assert [(t["text"], t["suggestion"], t["sure"]) for t in page["tokens"]] == [
+            ("zzćj", "zzéj", False),
+            ("jćj", "jéj", True),
+        ]
+
+    def test_a_page_with_only_doubtful_places_is_kept(self, stored, monkeypatch):
+        self.pages(monkeypatch, ["To zzćj tu.", "To jćj tu."])
+
+        pages = self.get(stored).json()
+
+        assert [p["page_number"] for p in pages] == [0, 1]
+
+    def test_the_zasiedlilismy_case_from_a_correct_word_to_a_wrong_one(
+        self, stored, monkeypatch
+    ):
+        # "zasiedliśmy" is correct and "zasiedliémy" is not: never offered
+        self.KNOWN = self.KNOWN | {"zasiedliśmy"}
+        self.pages(monkeypatch, ["Zasiedliśmy tu."])
+
+        assert (
+            self.get(
+                stored, incorrect_spelling="samśmy", corrected_spelling="samémy"
+            ).json()
+            == []
+        )
+
+    def test_a_legal_spelling_of_the_edition_counts_as_correct_for_the_suggestion(
+        self, stored, monkeypatch
+    ):
+        self.pages(monkeypatch, ["To zzćj jćj tu."], legal={"zzéj"})
+
+        (page,) = self.get(stored).json()
+
+        assert [(t["text"], t["sure"]) for t in page["tokens"]] == [
+            ("zzćj", True),
+            ("jćj", True),
+        ]
+
+    def test_a_legal_spelling_of_the_edition_is_not_a_misspelling(
+        self, stored, monkeypatch
+    ):
+        # "zzćj" is accepted in this edition: it is not flagged, so it is left alone
+        self.pages(monkeypatch, ["To zzćj jćj tu."], legal={"zzćj", "zzéj"})
+
+        (page,) = self.get(stored).json()
+
+        assert [t["text"] for t in page["tokens"]] == ["jćj"]
+
+    def test_the_dictionary_not_available_is_503(self, stored, monkeypatch):
+        def unavailable():
+            raise SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        assert self.get(stored).status_code == 503
 
     def test_asks_the_database_for_the_edition_and_the_two_spellings(
         self, stored, monkeypatch

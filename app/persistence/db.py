@@ -54,6 +54,7 @@ from app.text_tools.page_numbers import (
     pattern_of,
 )
 from app.text_tools.rubbish import find_rubbish_lines
+from app.text_tools.spelling import check_words, word_verdict
 from app.text_tools.spelling_chunks import find_chunk_matches
 from app.text_tools.tei_xml import (
     InvalidTei,
@@ -366,8 +367,15 @@ class Database:
         page without matches is left out, and so is one whose XML cannot be read.
         The pages are in the order of their numbers.
 
+        A correction is only suggested for a word that the spell check flags: a token
+        that is spelled correctly (or is a legal spelling of the edition) is left
+        alone, however much it looks like the mistake. If the suggestion is a correct
+        word (or a legal spelling) the match is `sure`; if not, it is kept but is
+        not `sure` (doubtful). "Flagged" is as `POST /spellcheck` says it, in the text
+        of the page (a word split over two lines is judged as one word).
+
         Raises ValueError if the two spellings are the same, or the incorrect one
-        is empty.
+        is empty, and SpellcheckUnavailable if the dictionary cannot be loaded.
         """
         fix = cluster_fix(incorrect_spelling, corrected_spelling)
         rows = self.conn.execute(
@@ -375,6 +383,8 @@ class Database:
             " WHERE edition_id = %s ORDER BY number",
             (edition_id,),
         ).fetchall()
+        legal = self.get_legal_spellings(edition_id)
+        correct_suggestion = word_verdict(legal)
         found = []
         for row in rows:
             if not row["xml_content_corrected"]:
@@ -383,9 +393,21 @@ class Database:
                 text = tei_xml_to_text(row["xml_content_corrected"])
             except InvalidTei:
                 continue
+            candidates = tokens_with_cluster(text, fix)
+            if not candidates:
+                continue
+            correct_here = {w.start: w.correct for w in check_words(text, legal)}
             tokens = [
-                TokenMatch(text=token, start=start, end=end, suggestion=suggestion)
-                for token, start, end, suggestion in tokens_with_cluster(text, fix)
+                TokenMatch(
+                    text=token,
+                    start=start,
+                    end=end,
+                    suggestion=suggestion,
+                    sure=correct_suggestion(suggestion),
+                )
+                for token, start, end, suggestion in candidates
+                # only a wrong word is ever corrected, never a correct one
+                if not correct_here.get(start, True)
             ]
             if tokens:
                 found.append(PageMatches(page_number=row["number"], tokens=tokens))

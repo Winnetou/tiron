@@ -375,7 +375,7 @@ export default function App() {
   async function approveMisspelling(
     editionId: string,
     pageNumber: number,
-    token: TokenMatch,
+    token: Omit<TokenMatch, 'sure'>,
   ): Promise<string | undefined> {
     const updated = await correctWord(
       editionId,

@@ -188,7 +188,68 @@ export function SimilarMisspellings({
 
   const rows = loaded.kind === 'done' ? loaded.rows : []
   const working = rows.some((row) => row.state === 'working')
-  const pages = [...new Set(rows.map((row) => row.page))]
+  const sure = rows.filter((row) => row.token.sure)
+  const doubtful = rows.filter((row) => !row.token.sure)
+
+  const allPages = [...new Set(rows.map((row) => row.page))]
+
+  function group(title: string, note: string, group: Row[], label: string) {
+    const pages = [...new Set(group.map((row) => row.page))]
+    return (
+      <div className="review-group" role="group" aria-label={title}>
+        <h3>{title}</h3>
+        <p className="review-context">{note}</p>
+        {pages.map((page) => (
+          <section key={page} aria-label={`${label}${page}`}>
+            <h4>Page {page}</h4>
+            <ul className="review-list">
+              {group
+                .filter((row) => row.page === page)
+                .map((row) => (
+                  <li
+                    key={row.id}
+                    className={`review-row ${row.state}${row.token.sure ? '' : ' misfit'}`}
+                  >
+                    <span className="misspelling">{row.token.text}</span>
+                    <span aria-hidden="true"> → </span>
+                    <span className="suggestion">{row.token.suggestion}</span>
+                    <span className="review-place">
+                      {row.token.start}–{row.token.end}
+                    </span>
+                    {row.state === 'approved' ? (
+                      <span className="review-done">✓ Approved</span>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Approve ${row.token.text} → ${row.token.suggestion} on page ${page}`}
+                        data-edition-id={editionId}
+                        data-page={page}
+                        data-start={row.token.start}
+                        data-end={row.token.end}
+                        disabled={working}
+                        onClick={() => approve(row)}
+                      >
+                        Approve
+                      </button>
+                    )}
+                    {row.warning && (
+                      <span role="status" className="review-warning">
+                        {row.warning}
+                      </span>
+                    )}
+                    {row.state === 'failed' && (
+                      <span role="alert" className="review-error">
+                        {row.error}
+                      </span>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="review-backdrop">
@@ -218,54 +279,24 @@ export function SimilarMisspellings({
           {rows.length > 0 && (
             <p role="status">
               {rows.length} {rows.length === 1 ? 'place' : 'places'} on{' '}
-              {pages.length} {pages.length === 1 ? 'page' : 'pages'}
+              {allPages.length} {allPages.length === 1 ? 'page' : 'pages'}
+              {doubtful.length > 0 && `, ${doubtful.length} of them doubtful`}
             </p>
           )}
-          {pages.map((page) => (
-            <section key={page} aria-label={`Page ${page}`}>
-              <h3>Page {page}</h3>
-              <ul className="review-list">
-                {rows
-                  .filter((row) => row.page === page)
-                  .map((row) => (
-                    <li key={row.id} className={`review-row ${row.state}`}>
-                      <span className="misspelling">{row.token.text}</span>
-                      <span aria-hidden="true"> → </span>
-                      <span className="suggestion">{row.token.suggestion}</span>
-                      <span className="review-place">
-                        {row.token.start}–{row.token.end}
-                      </span>
-                      {row.state === 'approved' ? (
-                        <span className="review-done">✓ Approved</span>
-                      ) : (
-                        <button
-                          type="button"
-                          aria-label={`Approve ${row.token.text} → ${row.token.suggestion} on page ${page}`}
-                          data-edition-id={editionId}
-                          data-page={page}
-                          data-start={row.token.start}
-                          data-end={row.token.end}
-                          disabled={working}
-                          onClick={() => approve(row)}
-                        >
-                          Approve
-                        </button>
-                      )}
-                      {row.warning && (
-                        <span role="status" className="review-warning">
-                          {row.warning}
-                        </span>
-                      )}
-                      {row.state === 'failed' && (
-                        <span role="alert" className="review-error">
-                          {row.error}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-              </ul>
-            </section>
-          ))}
+          {sure.length > 0 &&
+            group(
+              'Sure',
+              'The correction is a correct word, or a spelling that is legal in the edition.',
+              sure,
+              'Page ',
+            )}
+          {doubtful.length > 0 &&
+            group(
+              'Doubtful',
+              'The correction is not a correct word either (the dictionary is a modern one). Look at each before you approve it; none is taken unless you click it.',
+              doubtful,
+              'Doubtful, page ',
+            )}
         </div>
       </div>
     </div>

@@ -34,12 +34,15 @@ class Page(BaseModel):
 class TokenMatch(BaseModel):
     """A token of a page's text: `start` to `end` are offsets in the text, counted
     in code points, so text[start:end] is `text`. `suggestion` is what the token
-    would be corrected to (the same mistake corrected in it)."""
+    would be corrected to (the same mistake corrected in it). `sure` is true if the
+    suggestion is a correct word (or a legal spelling of the edition); false if it
+    is not, so the suggestion is doubtful (a wrong word to another wrong word)."""
 
     text: str
     start: int = Field(ge=0)
     end: int = Field(ge=1)
     suggestion: str = Field(min_length=1)
+    sure: bool = True
 
 
 class TokenOccurrence(BaseModel):

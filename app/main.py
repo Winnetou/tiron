@@ -471,19 +471,28 @@ def get_similar_misspellings(
 
     The response is a list with an item for each page of the edition that has
     matches, in the order of the page numbers: `{"page_number": 8, "tokens":
-    [{"text": "jćj", "start": 383, "end": 386, "suggestion": "jéj"}, ...]}`.
+    [{"text": "jćj", "start": 383, "end": 386, "suggestion": "jéj", "sure": true},
+    ...]}`.
     `start` and `end` are offsets in the text of the page that `POST /tei/text`
     gives (counted in code points, like the offsets of a correction), so
     text[start:end] is the token. The `suggestion` is the token with the mistake
     corrected in it (`samćj` gives `saméj`), which is what a correction of it
     (`POST .../corrections`, with `before` the token and `after` the suggestion)
     would be.
+    A correction is only suggested for a word that is wrong: a token is listed only if
+    the spell check flags it (as `POST /spellcheck` does, in the text of its page, with
+    the legal spellings of the edition as correct). A token that is spelled correctly
+    is never offered, however much it looks like the mistake ("zasiedliśmy" is a word,
+    and is not "zasiedliémy"). `sure` is true if the `suggestion` is a correct word or
+    a legal spelling of the edition; if it is not (a wrong word to another wrong one,
+    as the dictionary is a modern one and does not know "saméj"), the match is
+    doubtful and `sure` is false.
     The pages are searched in their corrected content, as the user sees them, and
     a page without matches, or whose XML cannot be read, is left out. Nothing is
     changed, and Polona is not called.
 
     404 if the edition is not stored. 422 if a spelling is empty or longer than
-    100 characters, or the two are the same.
+    100 characters, or the two are the same. 503 if the dictionary is not available.
     """
     if db.get_edition(edition_id) is None:
         logger.warning("Edition %s is not stored", edition_id)
@@ -494,6 +503,8 @@ def get_similar_misspellings(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     logger.info(
         "%s pages of edition %s have misspellings like %r",
         len(found),

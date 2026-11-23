@@ -2616,11 +2616,11 @@ describe('applying a correction to the entire edition', () => {
     {
       page_number: 1,
       tokens: [
-        { text: 'samćj', start: 4, end: 9, suggestion: 'saméj' },
-        { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+        { text: 'samćj', start: 4, end: 9, suggestion: 'saméj', sure: true },
+        { text: 'tćj', start: 20, end: 23, suggestion: 'téj', sure: true },
       ],
     },
-    { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj' }] },
+    { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj', sure: true }] },
   ]
 
   async function open(extra: Options = {}) {
@@ -2880,6 +2880,23 @@ describe('applying a correction to the entire edition', () => {
       expect(third.getByText('bardziéj')).toBeInTheDocument()
     })
 
+    it('shows the places whose suggestion is not a correct word in a separate group', async () => {
+      await openReview({
+        similar: () => [
+          { page_number: 1, tokens: [{ text: 'samćj', start: 4, end: 9, suggestion: 'saméj', sure: true }] },
+          { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj', sure: false }] },
+        ],
+      })
+
+      expect(await screen.findByText('2 places on 2 pages, 1 of them doubtful')).toBeInTheDocument()
+      const sure = within(screen.getByRole('group', { name: 'Sure' }))
+      expect(sure.getByText('samćj')).toBeInTheDocument()
+      expect(sure.queryByText('bardzićj')).toBeNull()
+      const doubtful = within(screen.getByRole('group', { name: 'Doubtful' }))
+      expect(doubtful.getByText('bardzićj')).toBeInTheDocument()
+      expect(doubtful.getByRole('button', { name: /Approve bardzićj/ })).toBeEnabled()
+    })
+
     it('has an Approve button for each place, with its edition, page and offsets', async () => {
       await openReview()
 
@@ -2974,7 +2991,7 @@ describe('applying a correction to the entire edition', () => {
     it('a place on the page on the screen shows the page again with its new text', async () => {
       await openReview({
         similar: () => [
-          { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj' }] },
+          { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj', sure: true }] },
         ],
       })
       expect(pageText().textContent).toContain('tćj')
@@ -3023,8 +3040,8 @@ describe('applying a correction to the entire edition', () => {
             {
               page_number: 1,
               tokens: [
-                { text: 'tćj', start: 4, end: 7, suggestion: 'téj' },
-                { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+                { text: 'tćj', start: 4, end: 7, suggestion: 'téj', sure: true },
+                { text: 'tćj', start: 20, end: 23, suggestion: 'téj', sure: true },
               ],
             },
           ],
@@ -3043,7 +3060,7 @@ describe('applying a correction to the entire edition', () => {
       it('sends none for a suggestion of several words, which is not one spelling', async () => {
         await openReview({
           similar: () => [
-            { page_number: 1, tokens: [{ text: 'wcałćj', start: 4, end: 10, suggestion: 'w całéj' }] },
+            { page_number: 1, tokens: [{ text: 'wcałćj', start: 4, end: 10, suggestion: 'w całéj', sure: true }] },
           ],
         })
         const before = legalCalls().length
@@ -3085,7 +3102,7 @@ describe('applying a correction to the entire edition', () => {
         await openReview({
           spell: (text) => wordsOf(text, ['jćj', 'tćj', 'téj']), // the dictionary does not know it
           similar: () => [
-            { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj' }] },
+            { page_number: 0, tokens: [{ text: 'tćj', start: 16, end: 19, suggestion: 'téj', sure: true }] },
           ],
         })
 
@@ -3104,11 +3121,11 @@ describe('applying a correction to the entire edition', () => {
           {
             page_number: 1,
             tokens: [
-              { text: 'samćj', start: 4, end: 9, suggestion: 'samejej' }, // 2 longer
-              { text: 'tćj', start: 20, end: 23, suggestion: 'téj' },
+              { text: 'samćj', start: 4, end: 9, suggestion: 'samejej', sure: true }, // 2 longer
+              { text: 'tćj', start: 20, end: 23, suggestion: 'téj', sure: true },
             ],
           },
-          { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj' }] },
+          { page_number: 3, tokens: [{ text: 'bardzićj', start: 7, end: 15, suggestion: 'bardziéj', sure: true }] },
         ],
       })
 

@@ -104,12 +104,22 @@ def test_get_similar_misspellings_looks_at_the_text_of_each_page(monkeypatch):
     connect = mock.Mock()
     monkeypatch.setattr("app.persistence.db.psycopg.connect", connect)
     xml = lambda text: str(text_to_tei_xml(text))  # noqa: E731
-    connect.return_value.execute.return_value.fetchall.return_value = [
+    rows = [
         {"number": 0, "xml_content_corrected": xml("Ala ma kota")},
         {"number": 1, "xml_content_corrected": xml("To samćj i jćj tu.")},
         {"number": 2, "xml_content_corrected": None},
         {"number": 3, "xml_content_corrected": "<not tei/>"},
     ]
+
+    def execute(query, params=()):
+        result = mock.Mock()
+        result.fetchall.return_value = [] if "legal_spellings" in query else rows
+        return result
+
+    connect.return_value.execute = mock.Mock(side_effect=execute)
+    known = {"to", "i", "tu", "ala", "ma", "kota", "jéj", "saméj"}
+    checker = mock.Mock(**{"lookup.side_effect": lambda word: word.lower() in known})
+    monkeypatch.setattr("app.text_tools.spelling.get_checker", lambda: checker)
     edition_id = uuid4()
 
     found = Database().get_similar_misspellings(edition_id, "samćj", "saméj")
