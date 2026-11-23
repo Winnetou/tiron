@@ -158,7 +158,7 @@ export function SimilarPageNumbersReview({ example, onApprove, onClose }: Props)
         role="dialog"
         aria-modal="true"
         aria-label="The same page number on the other pages"
-        className="review-box"
+        className="review-box review-styled"
       >
         <header className="review-header">
           <h2>The same page number on the other pages</h2>

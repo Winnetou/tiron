@@ -195,7 +195,7 @@ export function MissingHyphensReview({
   return (
     <section
       aria-label="The missing hyphens on this page"
-      className={`review-dock${folded ? ' folded' : ''}`}
+      className={`review-dock review-styled${folded ? ' folded' : ''}`}
     >
       <header className="review-header">
         <h2>The missing hyphens on page {number}</h2>

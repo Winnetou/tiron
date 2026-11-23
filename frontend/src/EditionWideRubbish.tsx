@@ -177,7 +177,7 @@ export function RubbishReview({ edition, onApprove, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="The OCR rubbish in the edition"
-        className="review-box"
+        className="review-box review-styled"
       >
         <header className="review-header">
           <h2>The OCR rubbish in the edition</h2>

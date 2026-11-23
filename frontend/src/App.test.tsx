@@ -4663,6 +4663,12 @@ describe('the page number on the other pages', () => {
       expect(numberCalls()[0].url).toBe(`/editions/${UUID}/pages/0/similar-page-numbers`)
     })
 
+    it('has the look of the tools', async () => {
+      await openReview()
+
+      expect(review()).toHaveClass('review-styled')
+    })
+
     it('says what the example is, and how many pages it found', async () => {
       await openReview()
 
@@ -6244,6 +6250,13 @@ describe('the missing hyphens of a page', () => {
       expect(within(review()!).getAllByRole('listitem')).toHaveLength(3)
     })
 
+    it('has the look of the tools: round buttons, yellowish check boxes', async () => {
+      await openReview()
+
+      expect(review()).toHaveClass('review-styled')
+      expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+    })
+
     it('keeps what was included when it is folded and shown again', async () => {
       await openReview()
       await userEvent.click(include('do', 'mu'))
@@ -6606,6 +6619,12 @@ describe('the OCR rubbish of the edition', () => {
       expect(approveAll()).toHaveTextContent('Approve all (3)')
     })
 
+    it('has the look of the tools', async () => {
+      await openReview()
+
+      expect(review()).toHaveClass('review-styled')
+    })
+
     it('says that a line with a correct word may be text', async () => {
       await openReview()
 
@@ -6899,6 +6918,12 @@ describe('the same named entity in all its forms', () => {
   })
 
   describe('the box', () => {
+    it('has the look of the tools, with a rounded box to choose the entity', async () => {
+      await openReview()
+
+      expect(review()).toHaveClass('review-styled')
+    })
+
     it('shows each place in its context: the token before, the name marked, the token after', async () => {
       await openReview()
 
@@ -7269,7 +7294,7 @@ describe('accepting spellings by their substring', () => {
       await open()
 
       expect(find()).toHaveClass('review-find')
-      expect(review()).toHaveClass('review-box-substring')
+      expect(review()).toHaveClass('review-box-substring', 'review-styled')
     })
 
     it('gives Find and Close the same yellowish effect on hover, in the stylesheet', async () => {
@@ -7277,9 +7302,8 @@ describe('accepting spellings by their substring', () => {
         .map((style) => style.textContent)
         .join('')
       // (the styles of the page are in the document: jsdom has no hover)
-      expect(css).toContain('.review-find:hover')
-      expect(css).toContain('.review-box-substring .review-header button:hover')
-      expect(css).toMatch(/\.review-find:hover[\s\S]*?#e0a800/)
+      expect(css).toContain('.review-styled) button')
+      expect(css).toMatch(/\.review-styled\)[^{]*:hover[^{]*\{[^}]*#e0a800/)
     })
 
     it('says "substring", not "chunk", in the boxes and the tooltip', async () => {
