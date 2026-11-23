@@ -18,7 +18,8 @@ import re
 from collections.abc import Collection
 from dataclasses import dataclass
 
-from app.text_tools.spelling import _WORD, check_words
+from app.text_tools.spelling import _WORD, check_words, tokenize
+from app.text_tools.token_occurrences import context_after, context_before
 
 # The most endings of a substring, and the longest core or ending.
 MOST_ENDINGS = 40
@@ -61,8 +62,10 @@ def chunk_substrings(core: str, endings: Collection[str]) -> list[str]:
 @dataclass(frozen=True)
 class ChunkMatch:
     """A word that has one of the substrings in it and is flagged: the characters
-    `start` to `end` are `text`. `before` and `after` are the token before it and
-    the one after it (empty at the ends of the text), to see it in its context."""
+    `start` to `end` are `text`. `before` and `after` are its context: the nearest
+    word before it and the nearest word after it, with the signs between them and the
+    word ("dom." and ", kota"), so that a full stop or a comma next to it does not
+    leave nothing to read (empty at the ends of the text, where there is no word)."""
 
     start: int
     end: int
@@ -83,6 +86,7 @@ def find_chunk_matches(
     """
     wanted = [substring.lower() for substring in substrings if substring]
     words = check_words(text, legal)
+    tokens = tokenize(text)  # (the same tokens, in the same order, as the words)
     found = []
     for index, word in enumerate(words):
         if word.correct or not _WORD.fullmatch(word.text):
@@ -94,8 +98,8 @@ def find_chunk_matches(
                 start=word.start,
                 end=word.end,
                 text=word.text,
-                before=words[index - 1].text if index else "",
-                after=words[index + 1].text if index + 1 < len(words) else "",
+                before=context_before(text, tokens, index),
+                after=context_after(text, tokens, index),
             )
         )
     return found

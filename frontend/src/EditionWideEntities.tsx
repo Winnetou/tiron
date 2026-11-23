@@ -85,8 +85,8 @@ interface Props {
  * nominative, "Machnicki" is also "Machnickiego" and "Machnickiemu". The user
  * picks which of the confirmed entities to look for. The forms that were made are
  * listed, each with a box to drop it. Each place is shown in its context, the
- * token before it, the entity (marked) and the token after it, so that it can be
- * judged without the page. Each has an Approve button, which marks the entity at
+ * nearest word before it (with the signs between), the entity (marked) and the
+ * nearest word after it, so that it can be judged without the page. Each has an Approve button, which marks the entity at
  * that place alone (it carries the edition, the page and the offsets), and a box to
  * take it out of "Approve all". Those that the model does not also take for an
  * entity are out by default. Nothing is marked until the user approves; marking

@@ -33,12 +33,14 @@ from app.persistence.ontology import (
     PageMatches,
     PageNumberMatch,
     PageRubbish,
+    PageTokenOccurrences,
     RubbishLine,
     SimilarEntities,
     SimilarPageNumbers,
     SpellingGroup,
     SpellingOccurrence,
     TokenMatch,
+    TokenOccurrence,
     Work,
 )
 from app.text_tools.hyphens import find_missing_hyphens
@@ -59,6 +61,7 @@ from app.text_tools.tei_xml import (
     tei_xml_sections,
     tei_xml_to_text,
 )
+from app.text_tools.token_occurrences import check_token, find_token
 
 
 def get_conninfo() -> str:
@@ -414,6 +417,42 @@ class Database:
             MissingHyphen.model_validate(vars(found))
             for found in find_missing_hyphens(text, legal)
         ]
+
+    def get_token_occurrences(
+        self, edition_id: UUID, token: str
+    ) -> list[PageTokenOccurrences]:
+        """Every place of `token` in the pages of an edition, exactly (see
+        `app/text_tools/token_occurrences.py`), page by page in the order of the
+        pages, in the text of the corrected content as the user sees it, each with
+        the tokens around it. A page without a place, without XML, or with XML that
+        cannot be read is left out.
+
+        Raises InvalidToken if `token` is not a single token.
+        """
+        check_token(token)
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        found = []
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if not xml:
+                continue
+            try:
+                text = tei_xml_to_text(xml)
+            except InvalidTei:
+                continue
+            places = [
+                TokenOccurrence.model_validate(vars(place))
+                for place in find_token(text, token)
+            ]
+            if places:
+                found.append(
+                    PageTokenOccurrences(page_number=row["number"], occurrences=places)
+                )
+        return found
 
     def get_chunk_matches(
         self, edition_id: UUID, substrings: list[str]

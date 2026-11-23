@@ -30,6 +30,7 @@ import {
   type EntityExample,
 } from './EditionWideEntities'
 import { SpellingChunkReview } from './EditionWideChunk'
+import { TokenReplaceReview } from './EditionWideReplace'
 import { RubbishReview, type RubbishEdition } from './EditionWideRubbish'
 import { MissingHyphensReview, type HyphenPage } from './MissingHyphens'
 import {
@@ -168,6 +169,10 @@ export default function App() {
   const [acceptingChunk, setAcceptingChunk] = useState<{ editionId: string } | null>(
     null,
   )
+  // The edition in which the user wants to replace a token, wherever it is.
+  const [replacingToken, setReplacingToken] = useState<{ editionId: string } | null>(
+    null,
+  )
   // The named entities confirmed on the page, one of which the user wants to find
   // on the other pages of the edition (in all its forms in the cases).
   const [findingEntities, setFindingEntities] = useState<{
@@ -240,6 +245,7 @@ export default function App() {
     setFindingRubbish(null)
     setFindingEntities(null)
     setAcceptingChunk(null)
+    setReplacingToken(null)
     setStatus({ kind: 'idle' })
   }
 
@@ -647,6 +653,7 @@ export default function App() {
               page: page.number,
             })
           }
+          onReplaceToken={() => setReplacingToken({ editionId: page.edition_id })}
           onApplyRule={() => setAcceptingChunk({ editionId: page.edition_id })}
           onFindEntities={(examples) =>
             setFindingEntities({ editionId: page.edition_id, examples })
@@ -680,6 +687,15 @@ export default function App() {
               setOffer(null)
             }}
             onDismiss={() => setOffer(null)}
+          />
+        )}
+        {replacingToken && (
+          <TokenReplaceReview
+            editionId={replacingToken.editionId}
+            onApprove={(pageNumber, token) =>
+              approveMisspelling(replacingToken.editionId, pageNumber, token)
+            }
+            onClose={() => setReplacingToken(null)}
           />
         )}
         {acceptingChunk && (

@@ -119,10 +119,27 @@ class TestFindChunkMatches:
 
         assert text[match.start : match.end] == "Konwencya"
 
-    def test_the_context_is_the_token_before_and_after(self):
-        assert found("Ala, Konwencya.", ["cya"]) == [
-            ChunkMatch(start=5, end=14, text="Konwencya", before=",", after=".")
+    def test_the_context_is_the_nearest_word_before_and_after(self):
+        assert found("Ala ma Konwencya tu", ["cya"]) == [
+            ChunkMatch(start=7, end=16, text="Konwencya", before="ma", after="tu")
         ]
+
+    def test_a_sign_next_to_it_does_not_leave_the_context_without_a_word(self):
+        assert found("Ala, Konwencya.", ["cya"]) == [
+            ChunkMatch(start=5, end=14, text="Konwencya", before="Ala,", after=".")
+        ]
+        (match,) = found("Ala ma dom. Konwencya; kota", ["cya"])
+        assert (match.before, match.after) == ("dom.", "; kota")
+
+    def test_signs_on_both_sides_are_kept_as_they_are_written(self):
+        (match,) = found("Jak (Konwencya) ma — kota", ["cya"])
+
+        assert (match.before, match.after) == ("Jak (", ") ma")
+
+    def test_a_line_break_is_a_space_in_the_context(self):
+        (match,) = found("Ala ma.\nKonwencya\n\nkota", ["cya"])
+
+        assert (match.before, match.after) == ("ma.", "kota")
 
     def test_at_the_ends_of_the_text_there_is_no_context(self):
         (match,) = found("Konwencya", ["cya"])

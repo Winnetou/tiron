@@ -101,6 +101,8 @@ interface Props {
   highlight: { start: number; end: number } | null
   /** A panel that is docked under the text (the missing hyphens), if any. */
   dock: ReactNode
+  /** Replace a token, as it is wrong, with another, wherever it is in the edition. */
+  onReplaceToken: () => void
   /**
    * Accept, as legal spellings, the flagged words of the whole edition that have a
    * substring (a core and its endings) in common.
@@ -170,6 +172,7 @@ export default function PageViewer({
   onFindRubbish,
   onFindEntities,
   onApplyRule,
+  onReplaceToken,
   highlight,
   dock,
   notice,
@@ -257,6 +260,13 @@ export default function PageViewer({
             disabled: busy,
             title:
               'Give a substring of letters, such as cy with the endings a, i, ami, and accept the flagged words of the whole edition that have it as legal spellings',
+          },
+          {
+            label: 'Replace a token in the edition',
+            onSelect: onReplaceToken,
+            disabled: busy,
+            title:
+              'Give a token as it is wrong, such as tern, and the one to replace it with, such as tem, and replace it everywhere in the edition, place by place',
           },
           {
             label: 'Find OCR rubbish in the edition',
