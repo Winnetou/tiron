@@ -292,6 +292,11 @@ export interface TokenMatch {
   end: number
   /** The token with the mistake corrected: what a correction of it would be. */
   suggestion: string
+  /**
+   * False if the suggestion is not a correct word (or a legal spelling) either:
+   * a wrong word to another wrong one, so it is doubtful.
+   */
+  sure: boolean
 }
 
 /** The tokens of one page of the edition that have the mistake (PageMatches). */

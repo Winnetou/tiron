@@ -696,6 +696,15 @@ def test_update_edition_of_an_unknown_edition_is_none(db):
 
 
 class TestSimilarMisspellings:
+    def legal(self, db, edition, *spellings):
+        """The corrected spellings are legal in the edition: the dictionary is a
+        modern one and does not know "saméj"; only a correction to a correct (or a
+        legal) word is suggested."""
+        for spelling in spellings:
+            db.add_legal_spelling(
+                LegalSpelling(edition_id=edition.id, spelling=spelling)
+            )
+
     def pages(self, db, edition, texts):
         for number, text in texts.items():
             db.create_page(
@@ -717,6 +726,7 @@ class TestSimilarMisspellings:
                 2: "Nic tu nie ma\nale ćjx jest.",
             },
         )
+        self.legal(db, edition, "saméj", "jéj", "éjx")
 
         found = db.get_similar_misspellings(edition.id, "samćj", "saméj")
 
@@ -727,6 +737,7 @@ class TestSimilarMisspellings:
 
     def test_each_token_comes_with_the_corrected_one(self, db, edition):
         self.pages(db, edition, {1: "To samćj i jćj, bardzićj tu."})
+        self.legal(db, edition, "saméj", "jéj", "bardziéj")
 
         (match,) = db.get_similar_misspellings(edition.id, "jćj", "jéj")
 
@@ -739,10 +750,45 @@ class TestSimilarMisspellings:
     def test_the_offsets_are_those_of_the_text_of_the_page(self, db, edition):
         text = "To samćj i jćj tu."
         self.pages(db, edition, {1: text})
+        self.legal(db, edition, "saméj", "jéj")
 
         (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
 
         assert [text[t.start : t.end] for t in match.tokens] == ["samćj", "jćj"]
+
+    def test_a_suggestion_that_is_not_a_correct_word_is_doubtful(self, db, edition):
+        self.pages(db, edition, {1: "To samćj i jćj tu."})
+
+        # "saméj" and "jéj" are neither in the dictionary nor legal in the edition
+        (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [(t.text, t.sure) for t in match.tokens] == [
+            ("samćj", False),
+            ("jćj", False),
+        ]
+
+    def test_only_the_suggestions_that_are_correct_are_sure(self, db, edition):
+        self.pages(db, edition, {1: "To samćj i jćj tu."})
+        self.legal(db, edition, "jéj")
+
+        (match,) = db.get_similar_misspellings(edition.id, "samćj", "saméj")
+
+        assert [(t.text, t.suggestion, t.sure) for t in match.tokens] == [
+            ("samćj", "saméj", False),
+            ("jćj", "jéj", True),
+        ]
+
+    def test_a_word_that_is_correct_is_never_the_start_of_a_suggestion(
+        self, db, edition
+    ):
+        # "zasiedliśmy" is a word: even when "zasiedliémy" is legal in the edition,
+        # it is not a misreading of anything
+        self.pages(db, edition, {1: "Zasiedliśmy tu, a samśmy nie."})
+        self.legal(db, edition, "zasiedliémy", "samémy")
+
+        found = db.get_similar_misspellings(edition.id, "samśmy", "samémy")
+
+        assert [t.text for m in found for t in m.tokens] == ["samśmy"]
 
     def test_pages_of_other_editions_are_not_looked_at(self, db, edition):
         work = db.create_work(Work(author="Other"))
@@ -762,6 +808,7 @@ class TestSimilarMisspellings:
 
     def test_the_pages_are_in_the_order_of_their_numbers(self, db, edition):
         self.pages(db, edition, {5: "jćj", 2: "jćj", 9: "jćj"})
+        self.legal(db, edition, "jéj")
 
         found = db.get_similar_misspellings(edition.id, "jćj", "jéj")
 

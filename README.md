@@ -393,9 +393,17 @@ offered for the whole edition. It changes nothing.
   corrected content (`xml_content_corrected`, the text that the user sees, as
   `POST /tei/text` gives it). A page without corrected content, or whose XML cannot
   be read, is left out.
+- **Only wrong words, sure or doubtful**: a token is listed only if the spell check
+  flags it (as `POST /spellcheck` does, with the legal spellings of the edition counted as
+  correct, and a word split over two lines judged as one word). A token that is spelled
+  correctly is never offered, however much it looks like the mistake (`zasiedliśmy` is a
+  word, it is not `zasiedliémy`). `sure` says whether the `suggestion` is a correct word
+  or a legal spelling of the edition; if not (the dictionary is a modern one, so `saméj`
+  is not known until it is legal in the edition) the match is doubtful, `sure: false`.
+  The panel shows the doubtful ones in a separate group, below the sure ones.
 - **The response** is a list with an item for each page that has matches, in the
   order of the page numbers: `{"page_number": 8, "tokens": [{"text": "jćj", "start":
-  383, "end": 386, "suggestion": "jéj"}, ...]}`. `start` and `end` are offsets in
+  383, "end": 386, "suggestion": "jéj", "sure": true}, ...]}`. `start` and `end` are offsets in
   that text, counted in code points like the offsets of a correction, so
   `text[start:end]` is the token. The `suggestion` is the token with the mistake
   corrected in it, every occurrence of the cluster and with the capital letters kept
@@ -404,8 +412,8 @@ offered for the whole edition. It changes nothing.
   offsets. A page without matches is not in the list, and an edition without matches
   gets `[]`.
 - **404** if the edition is not stored, **422** if a spelling is empty or longer than
-  100 characters, if one is missing, or if the two are the same. Polona is not called.
-  The search is `Database.get_similar_misspellings`.
+  100 characters, if one is missing, or if the two are the same, **503** if the dictionary
+  is not available. Polona is not called. The search is `Database.get_similar_misspellings`.
 
 ### Adding a token that the OCR missed
 
