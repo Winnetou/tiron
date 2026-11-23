@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode, type UIEvent } from 'react'
-import type { Page } from './api'
+import { getSpellingSuggestions, type Page } from './api'
 import type { EntityExample } from './EditionWideEntities'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageText from './PageText'
@@ -459,6 +459,10 @@ export default function PageViewer({
             onReject={onRejectEntity}
             onCorrectWord={onCorrectWord}
             onLegalSpelling={onLegalSpelling}
+            // the closest replacements of a misspelled word, from the backend
+            onSuggestSpelling={(word) =>
+              getSpellingSuggestions(text, word, page.edition_id)
+            }
             // in the NER view a selection can be made an entity of its own
             onCreateEntity={view === 'ner' ? onCreateEntity : undefined}
             // in the correction view a double click adds a token the OCR missed

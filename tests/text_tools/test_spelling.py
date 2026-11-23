@@ -5,7 +5,13 @@ import phunspell
 import pytest
 
 from app.text_tools import spelling
-from app.text_tools.spelling import SpellcheckUnavailable, check_words, get_checker
+from app.text_tools.spelling import (
+    NotAWord,
+    SpellcheckUnavailable,
+    check_words,
+    get_checker,
+    suggest_spelling,
+)
 from app.view_models import Word
 
 
@@ -29,6 +35,42 @@ def fresh_dictionary(monkeypatch):
 @pytest.fixture
 def fake(monkeypatch):
     checker = FakeChecker("ala", "ma", "kota", "biało", "czerwony", "o", "wych")
+    monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+    return checker
+
+
+class Suggesting(FakeChecker):
+    """A checker that also suggests: `suggestions` by the word that is asked for."""
+
+    def __init__(self, suggestions, *known):
+        super().__init__(*known)
+        self.suggestions = suggestions
+
+    def suggest(self, word):
+        yield from self.suggestions.get(word, [])
+
+
+@pytest.fixture
+def suggesting(monkeypatch):
+    checker = Suggesting(
+        {
+            "kótka": ["kotka", "kotką", "krótka", "kitka"],
+            "tćm": ["tam", "tom", "tym", "tum"],
+            "zle": ["źle", "zle", "z le", "złe"],
+        },
+        "ala",
+        "ma",
+        "tu",
+        "kotka",
+        "kotką",
+        "krótka",
+        "kitka",
+        "tam",
+        "tom",
+        "tym",
+        "źle",
+        "złe",
+    )
     monkeypatch.setattr(spelling, "get_checker", lambda: checker)
     return checker
 
@@ -502,3 +544,83 @@ class TestWithTheRealDictionary:
 
         assert time.perf_counter() - start < 3
         assert len(result) == 40 * 8
+
+
+def suggest(text, word, occurrence=0, legal=()):
+    start = -1
+    for _ in range(occurrence + 1):
+        start = text.index(word, start + 1)
+    return suggest_spelling(text, start, start + len(word), legal)
+
+
+class TestSuggestSpelling:
+    def test_a_word_in_the_middle_of_its_line_gets_the_closest_replacements(
+        self, suggesting
+    ):
+        assert suggest("Ala ma kótka tu", "kótka") == ["kotka", "kotką", "krótka"]
+
+    def test_at_most_three(self, suggesting):
+        assert len(suggest("Ala ma kótka tu", "kótka")) == 3
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "kótka ma tu",  # the first word of the line
+            "Ala ma kótka",  # the last word of the line
+            "kótka",  # the only word of the line
+            "Ala ma tu\nkótka\nAla ma tu",  # alone on its line
+            "Ala ma kótka\nAla ma tu",  # at the end of the line
+            "Ala ma tu\nkótka ma tu",  # at the start of the line
+        ],
+    )
+    def test_the_first_and_the_last_word_of_a_line_get_none(self, suggesting, text):
+        assert suggest(text, "kótka") == []
+
+    def test_a_sign_after_the_last_word_does_not_make_it_mid_line(self, suggesting):
+        assert suggest("Ala ma kótka.", "kótka") == []
+        assert suggest("Ala ma kótka, tu", "kótka") == ["kotka", "kotką", "krótka"]
+
+    def test_a_word_split_over_two_lines_gets_none(self, suggesting):
+        # "kó-" / "tka": the parts are the end and the start of a line
+        text = "Ala ma kó-\ntka tu"
+        assert suggest(text, "kó") == []
+        assert suggest(text, "tka") == []
+
+    def test_each_line_is_judged_on_its_own(self, suggesting):
+        text = "Ala ma kótka tu\nAla kótka ma\nkótka ma tu"
+        assert suggest(text, "kótka", 0) != []
+        assert suggest(text, "kótka", 1) != []
+        assert suggest(text, "kótka", 2) == []  # the first word of the third line
+
+    def test_a_correct_word_gets_none(self, suggesting):
+        assert suggest("Ala ma kotka tu", "kotka") == []
+
+    def test_a_legal_spelling_of_the_edition_gets_none(self, suggesting):
+        assert suggest("Ala ma kótka tu", "kótka", legal={"kótka"}) == []
+
+    def test_only_single_words_that_differ_from_the_word(self, suggesting):
+        # the dictionary offers "zle" itself and "z le" (two words) for "zle"
+        assert suggest("Ala ma zle tu", "zle") == ["źle", "złe"]
+
+    def test_nothing_to_suggest(self, suggesting):
+        assert suggest("Ala ma xyzzy tu", "xyzzy") == []
+
+    def test_offsets_that_are_not_one_word(self, suggesting):
+        with pytest.raises(NotAWord):
+            suggest_spelling("Ala ma kótka tu", 0, 6)
+        with pytest.raises(NotAWord):
+            suggest_spelling("Ala ma kótka tu", 3, 4)  # the middle of a word
+        with pytest.raises(NotAWord):
+            suggest_spelling("Ala, ma kótka", 3, 4)  # a sign, not a word
+
+    def test_offsets_are_code_points(self, suggesting):
+        assert suggest("😀 Ala ma kótka tu", "kótka") == ["kotka", "kotką", "krótka"]
+
+    def test_no_dictionary(self, monkeypatch):
+        def unavailable():
+            raise SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        with pytest.raises(SpellcheckUnavailable):
+            suggest_spelling("Ala ma kótka tu", 7, 12)
