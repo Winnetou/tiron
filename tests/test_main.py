@@ -1620,6 +1620,8 @@ class TestSimilarMisspellings:
                         "end": 6,
                         "suggestion": "jéj",
                         "sure": True,
+                        "before": "To",
+                        "after": "i",
                     },
                     {
                         "text": "samćj",
@@ -1627,6 +1629,8 @@ class TestSimilarMisspellings:
                         "end": 14,
                         "suggestion": "saméj",
                         "sure": True,
+                        "before": "i",
+                        "after": ", bardzićj",
                     },
                     {
                         "text": "bardzićj",
@@ -1634,10 +1638,21 @@ class TestSimilarMisspellings:
                         "end": 24,
                         "suggestion": "bardziéj",
                         "sure": True,
+                        "before": "samćj,",
+                        "after": "tu",
                     },
                 ],
             }
         ]
+
+    def test_a_full_stop_in_the_context_is_kept_with_the_next_word(
+        self, stored, monkeypatch
+    ):
+        self.pages(monkeypatch, ["Raz. Jćj tu, a nie."])
+
+        (page,) = self.get(stored).json()
+
+        assert [(t["before"], t["after"]) for t in page["tokens"]] == [("Raz.", "tu")]
 
     def test_the_offsets_point_at_the_tokens_in_the_text_of_the_page(self, stored):
         text = "To jćj i samćj, bardzićj tu."

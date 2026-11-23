@@ -210,9 +210,13 @@ export function SimilarMisspellings({
                     key={row.id}
                     className={`review-row ${row.state}${row.token.sure ? '' : ' misfit'}`}
                   >
-                    <span className="misspelling">{row.token.text}</span>
-                    <span aria-hidden="true"> → </span>
-                    <span className="suggestion">{row.token.suggestion}</span>
+                    <span className="review-trigram">
+                      <span className="review-context">{row.token.before}</span>{' '}
+                      <span className="misspelling">{row.token.text}</span>
+                      <span aria-hidden="true"> → </span>
+                      <span className="suggestion">{row.token.suggestion}</span>{' '}
+                      <span className="review-context">{row.token.after}</span>
+                    </span>
                     <span className="review-place">
                       {row.token.start}–{row.token.end}
                     </span>

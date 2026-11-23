@@ -128,8 +128,22 @@ def test_get_similar_misspellings_looks_at_the_text_of_each_page(monkeypatch):
         PageMatches(
             page_number=1,
             tokens=[
-                TokenMatch(text="samćj", start=3, end=8, suggestion="saméj"),
-                TokenMatch(text="jćj", start=11, end=14, suggestion="jéj"),
+                TokenMatch(
+                    text="samćj",
+                    start=3,
+                    end=8,
+                    suggestion="saméj",
+                    before="To",
+                    after="i",
+                ),
+                TokenMatch(
+                    text="jćj",
+                    start=11,
+                    end=14,
+                    suggestion="jéj",
+                    before="i",
+                    after="tu",
+                ),
             ],
         )
     ]

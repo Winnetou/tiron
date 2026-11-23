@@ -297,6 +297,12 @@ export interface TokenMatch {
    * a wrong word to another wrong one, so it is doubtful.
    */
   sure: boolean
+  /**
+   * Its context: the nearest word before it and the nearest word after it, with
+   * the signs between them and the token, as they are written.
+   */
+  before: string
+  after: string
 }
 
 /** The tokens of one page of the edition that have the mistake (PageMatches). */
