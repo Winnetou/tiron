@@ -30,7 +30,7 @@
 	# request, so the backend may take a while to answer. The backend is looked up when
 	# a request comes, so Caddy starts while the backend is still loading its models
 	# (a few minutes); until then the API answers 502.
-	@backend path /editions /editions/* /tei /tei/* /ner /ner/* /spellcheck /spellcheck/* /health
+	@backend path /editions /editions/* /auth/* /tei /tei/* /ner /ner/* /spellcheck /spellcheck/* /health
 	handle @backend {
 		request_body {
 			max_size 5MB

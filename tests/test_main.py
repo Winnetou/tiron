@@ -11,6 +11,7 @@ from fastapi_pagination import paginate
 import app.page_provider as page_provider
 import app.text_tools.ner as ner
 import app.text_tools.spelling as spelling
+from app.auth import require_login
 from app.main import app, db
 from app.persistence.db import WorkExists
 from app.persistence.ontology import Edition, EditionMetadata, LegalSpelling, Page
@@ -34,6 +35,15 @@ META = {
     "place": "Warszawa",
     "year": 1890,
 }
+
+
+@pytest.fixture(autouse=True)
+def logged_in():
+    """The tests of the endpoints are of a user who is logged in (the login itself is
+    tested in tests/test_auth.py, without this)."""
+    app.dependency_overrides[require_login] = lambda: "tester"
+    yield
+    app.dependency_overrides.pop(require_login, None)
 
 
 @pytest.fixture(autouse=True)

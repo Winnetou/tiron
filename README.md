@@ -121,8 +121,8 @@ What differs from `docker-compose.yml`, which is for development:
   string is plain SQL), and give `tiron` `SELECT, INSERT, UPDATE, DELETE` on them.
 - **The frontend is built and served by Caddy** (`frontend/Dockerfile.prod`,
   `frontend/Caddyfile`), not by the Vite dev server. Caddy does what the dev server's
-  proxy does: it serves the files, and passes `/editions`, `/tei`, `/ner`,
-  `/spellcheck` and `/health` to the backend. Under `/editions`, a request that asks
+  proxy does: it serves the files, and passes `/editions`, `/auth`, `/tei`,
+  `/ner`, `/spellcheck` and `/health` to the backend. Under `/editions`, a request that asks
   for HTML (a browser opening the address of a page) gets the app, and any other gets
   the API. Any other address is the app, except a missing file under `/assets/`, which
   is a 404. The backend's own docs (`/openapi.json`) are not published. Caddy looks the
@@ -143,6 +143,10 @@ What differs from `docker-compose.yml`, which is for development:
   answers. Let's Encrypt itself cannot be tried without a real domain.
 - **Only Caddy is published**, on the ports 80 and 443: the backend, the broker and
   their ports are inside the compose network.
+- **`SESSION_SECRET` has no default** and the backend does not start without it: it
+  signs the login sessions (see "Login"). Make it with `openssl rand -hex 32`. The
+  `users` table is part of the schema that is created by hand in Cloud SQL, and the
+  users are added to it by hand (the script is in "Login").
 - **Passwords have no defaults** (`RABBITMQ_PASSWORD` too), `restart: always`, and
   the logs of each container are limited to 5 files of 10 MB, so that they do not
   fill the disk.
@@ -1553,6 +1557,83 @@ stub.
 
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.
+
+### Login
+
+Everything needs a login except the **main page** (the list of editions, `GET
+/editions`), `GET /health` and the login itself. It is for a handful of people: the
+users are put into the database by hand, and there is no registration, no password
+reset and no reminder.
+
+**The `users` table** has a `username` (the key) and a `password_hash`, and nothing
+else. Only a hash of the password is stored (scrypt from the standard library, with a
+salt of its own for each password: `app/persistence/passwords.py`), never the password.
+To add a user, get the statement from the script (it asks for the username and the
+password twice, and does not touch the database), and run what it prints in `psql`:
+
+```
+docker compose exec backend python -m app.persistence.passwords      # in Docker
+python -m app.persistence.passwords                                  # or on the host
+```
+
+```
+INSERT INTO users (username, password_hash) VALUES ('anna', 'scrypt$16384$8$1$...$...');
+```
+
+In **development** there is a shortcut that adds the user itself, with the connection
+that the app has (the `POSTGRES_*` variables), so there is nothing to paste:
+
+```
+docker compose exec backend python -m app.persistence.passwords --insert
+```
+
+It asks the same questions, and prints `Added the user 'anna'`. It **refuses while
+`PROD` is true** (the default), before it asks anything: in production run the
+statement yourself. It says so if the username is taken, if there is no `users` table
+(start the backend once with `PROD=false`), or if the database cannot be reached.
+
+(`make into_db` opens `psql` in the development database.) To change a password, run
+the script again and `UPDATE users SET password_hash = '...' WHERE username = 'anna'`;
+to remove a user, `DELETE FROM users WHERE username = 'anna'` (a session that exists
+goes on until it runs out, at most 24 hours). The table is part of the schema
+(`schema.py`): a development database that has the other tables gets it when the
+backend starts (`PROD=false`); in production create it by hand, and give the `tiron`
+user `SELECT` on it.
+
+**`POST /auth/login`** takes `{"username": ..., "password": ...}`. If they match
+(`Database.check_user`) the answer is `{"username": ...}` and a cookie `tiron_session`:
+`HttpOnly` (the scripts of the page cannot read it), `SameSite=Lax` (a request from
+another site does not carry it, which is what stops a forged `POST`), `Secure` when the
+browser is on HTTPS (it is, behind a proxy that sends `X-Forwarded-Proto: https`), and
+good for 24 hours. Otherwise the answer is 401 `Wrong username or password`: the same
+for an unknown username and for a wrong password, and it takes as long for both (an
+unknown user is checked against a dummy hash). A request with any other field is 422.
+
+The session is a token that the backend signs (`app/auth.py`): `payload.signature`,
+the payload being the username and when the session ends, and the signature an
+HMAC-SHA256 of it with `SESSION_SECRET`. Nothing is kept on the server, so there is no
+logout on the server either (the cookie runs out; there is no logout button yet).
+**`SESSION_SECRET`** must be set in production (`openssl rand -hex 32`): with
+`PROD` true the backend does not start without it (`AuthNotConfigured`), because with
+a guessable secret anybody could make a session. While `PROD` is false it has a fixed
+default, so local development needs nothing. Changing it logs everybody out.
+
+**Every endpoint but those three answers 401 `Login required` without a valid
+session.** It is a dependency of the whole app (`require_login`), not of each
+endpoint, so an endpoint that is added later is protected too; a test goes through all
+the routes of the app to check it, and fails if one that is not in `PUBLIC` is open.
+
+**The frontend**: when a request is answered with 401 (opening the address of a page
+without a session, or a session that has run out while the page is open) the app shows
+the **login page**: the main page's Dürer background, a card with a username, a
+password and a "Log in" button, and one message if they are wrong. The address stays
+as it was, so after the login the same page is opened. The main page needs no login.
+In development (`npm run dev` or `docker compose up`) `/auth` is proxied to the
+backend like the other routes, so the cookie works there too.
+
+Not done: there is no limit on how often a password may be tried (scrypt makes each
+try cost the attacker about 50 ms, but that is all), so use long passwords and, in
+production, keep the VM behind a firewall as well.
 
 ### The schema of the database
 

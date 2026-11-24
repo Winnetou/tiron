@@ -6,10 +6,27 @@ from typing import Annotated
 from uuid import UUID
 
 import psycopg.errors
-from fastapi import FastAPI, HTTPException, Path, Query, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi_pagination import add_pagination
 
 from app import page_provider
+from app.auth import (
+    COOKIE_NAME,
+    SESSION_SECONDS,
+    create_token,
+    is_https,
+    require_login,
+    session_secret,
+)
 from app.persistence.db import Database, WorkExists
 from app.persistence.ontology import (
     EditionMetadata,
@@ -67,6 +84,8 @@ from app.view_models import (
     LineRemoval,
     LineRemoved,
     LineSplit,
+    LoginRequest,
+    LoginResult,
     NerRequest,
     NerResult,
     NewLegalSpelling,
@@ -101,7 +120,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Docker), the backend still starts, because everything else works without
     it: it logs a warning, and the endpoint that needs it answers 503.
     """
-    # first: without the schema nothing else is of any use (see `ensure_schema`)
+    # first: without the secret there is no login (production), and without the schema
+    # nothing else is of any use (see `ensure_schema`)
+    session_secret()
     ensure_schema(db)
     logger.info("Loading the spaCy model %s ...", MODEL_NAME)
     started = time.perf_counter()
@@ -128,7 +149,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="tiron", lifespan=lifespan)
+# Every endpoint needs a login, except those in `app.auth.PUBLIC` (the list of
+# editions, /health, and the login itself).
+app = FastAPI(title="tiron", lifespan=lifespan, dependencies=[Depends(require_login)])
+
+
+@app.post("/auth/login", response_model=LoginResult)
+def login(
+    credentials: LoginRequest, request: Request, response: Response
+) -> LoginResult:
+    """Log in with a username and a password: the answer has the session cookie.
+
+    The users are in the `users` table (added by hand: there is no registration and
+    no way to change a password). The cookie is `HttpOnly` (the page's scripts cannot
+    read it), `SameSite=Lax` (a request from another site does not carry it), and
+    `Secure` when the browser is on HTTPS. It is a signed token that is good for 24
+    hours (`app.auth`), and every other endpoint, except the list of editions and
+    `/health`, answers 401 `Login required` without it.
+
+    401 `Wrong username or password` for an unknown username or a wrong password
+    (the answer is the same for both, and so is the time it takes).
+    """
+    if not db.check_user(credentials.username, credentials.password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong username or password")
+    response.set_cookie(
+        COOKIE_NAME,
+        create_token(credentials.username),
+        max_age=SESSION_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=is_https(request),
+        path="/",
+    )
+    return LoginResult(username=credentials.username)
 
 
 @app.get("/health")

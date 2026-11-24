@@ -73,6 +73,50 @@ main.main-page {
   border-radius: 1rem;
 }
 
+/* The login page: the main page's background (Dürer), and a card in the middle. */
+main.login-page {
+  display: grid;
+  place-items: center;
+}
+
+.login-box {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(22rem, 100%);
+  box-sizing: border-box;
+  padding: 1.5rem 2rem 2rem;
+  background: rgba(255, 252, 244, 0.88);
+  border-radius: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #3a3a3a;
+}
+
+.login-box h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.login-field .styled-input {
+  font-size: 1rem;
+}
+
+.login-error {
+  margin: 0;
+  color: #9b1c1c;
+}
+
+.login-box button {
+  align-self: center;
+}
+
 /* The panel of the metadata of an edition: a small box, not a big one. */
 .metadata-box {
   width: min(32rem, 92vw);
