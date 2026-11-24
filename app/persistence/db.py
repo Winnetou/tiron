@@ -7,10 +7,17 @@ Connection details are read from environment variables:
     POSTGRES_PASSWORD  (required)
     POSTGRES_HOST      (default: localhost)
     POSTGRES_PORT      (default: 5432)
+    POSTGRES_SSLMODE   (optional: `require`, `verify-ca` or `verify-full` for TLS;
+                        unset, libpq's default `prefer` is used)
+    POSTGRES_SSLROOTCERT (optional: the CA certificate that the server is checked
+                        against, for `verify-ca` and `verify-full`)
 """
 
+import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from typing import Any
 from uuid import UUID
 
@@ -71,19 +78,123 @@ from app.text_tools.token_occurrences import (
     find_token,
 )
 
+logger = logging.getLogger(__name__)
+
+# How long a connection attempt may take (seconds), so that an unreachable database
+# is an error and not a request that waits for ever.
+CONNECT_TIMEOUT = 10
+
+# TCP keepalives, so that a connection that a firewall or a NAT has dropped silently
+# (they do that to idle connections) is noticed, and not waited on.
+_KEEPALIVES = {
+    "keepalives": "1",
+    "keepalives_idle": "30",
+    "keepalives_interval": "10",
+    "keepalives_count": "3",
+}
+
 
 def get_conninfo() -> str:
     """Build a libpq connection string from the environment.
 
-    Raises KeyError naming the variable if a required one is missing.
+    Raises KeyError naming the variable if a required one is missing. The TLS
+    settings (`POSTGRES_SSLMODE`, `POSTGRES_SSLROOTCERT`) are only in it if they
+    are set.
     """
+    tls = {
+        option: os.environ[name]
+        for option, name in (
+            ("sslmode", "POSTGRES_SSLMODE"),
+            ("sslrootcert", "POSTGRES_SSLROOTCERT"),
+        )
+        if os.environ.get(name)
+    }
     return make_conninfo(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
         port=os.environ.get("POSTGRES_PORT", "5432"),
         dbname=os.environ["POSTGRES_DB"],
         user=os.environ["POSTGRES_USER"],
         password=os.environ["POSTGRES_PASSWORD"],
+        connect_timeout=CONNECT_TIMEOUT,
+        **_KEEPALIVES,
+        **tls,
     )
+
+
+def _lost(conn: psycopg.Connection) -> bool:
+    """Whether the connection is closed or broken (the server went away)."""
+    return conn.closed is True or conn.broken is True
+
+
+class ReconnectingConnection:
+    """The connection of `Database`, which opens itself again when it is lost.
+
+    A database in the cloud drops connections now and then: it is restarted for
+    maintenance, fails over, or the network between loses an idle one. A single
+    long-lived connection would then fail every request until the backend is
+    restarted. This one is used like a psycopg connection (`execute`,
+    `transaction`, `close`), and:
+
+    - if it is found lost before a statement, it is opened again first;
+    - if it is lost while a statement is sent, it is opened again and the
+      statement is sent once more, but only outside a transaction. The rest of a
+      transaction went with the connection, so there the error is raised (the
+      next statement opens a new connection).
+
+    A statement that is sent again may have been done already, if the connection
+    went down after the database did it and before the answer came back: that is
+    rare, and the statements here are single, so it is accepted.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._transactions = 0
+        self._conn = self._connect()
+
+    @staticmethod
+    def _connect() -> psycopg.Connection:
+        # autocommit: the connection is long-lived, so avoid idle open transactions
+        return psycopg.connect(get_conninfo(), row_factory=dict_row, autocommit=True)
+
+    def _reconnect(self, lost: psycopg.Connection) -> None:
+        """Open a new connection in place of `lost`, unless another thread did."""
+        with self._lock:
+            if self._conn is not lost:
+                return
+            logger.warning("The database connection was lost: connecting again")
+            with suppress(psycopg.Error):
+                lost.close()
+            self._conn = self._connect()
+
+    def _live(self) -> psycopg.Connection:
+        conn = self._conn
+        if _lost(conn):
+            self._reconnect(conn)
+            conn = self._conn
+        return conn
+
+    def execute(self, query: Any, params: Any = None) -> psycopg.Cursor:
+        conn = self._live()
+        try:
+            return conn.execute(query, params)
+        except psycopg.OperationalError:
+            if self._transactions or not _lost(conn):
+                raise
+            self._reconnect(conn)
+            return self._conn.execute(query, params)
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        conn = self._live()
+        self._transactions += 1
+        try:
+            with conn.transaction() as transaction:
+                yield transaction
+        finally:
+            self._transactions -= 1
+
+    def close(self) -> None:
+        self._conn.close()
 
 
 SCHEMA = """
@@ -153,17 +264,25 @@ _MOST_WORDS = 5
 
 
 class Database:
-    """Persistence layer. Connects to PostgreSQL when instantiated."""
+    """Persistence layer. Connects to PostgreSQL when instantiated, and connects
+    again if the connection is lost (see `ReconnectingConnection`)."""
 
     def __init__(self) -> None:
-        # autocommit: the connection is long-lived, so avoid idle open transactions
-        self.conn: psycopg.Connection = psycopg.connect(
-            get_conninfo(), row_factory=dict_row, autocommit=True
-        )
+        self.conn = ReconnectingConnection()
         self.conn.execute(SCHEMA)
 
     def close(self) -> None:
         self.conn.close()
+
+    def is_reachable(self) -> bool:
+        """Whether the database answers `SELECT 1`. Never raises: a database that
+        cannot be reached (or does not answer) is False, and the reason is logged."""
+        try:
+            row = self.conn.execute("SELECT 1 AS ok").fetchone()
+        except psycopg.Error as exc:
+            logger.warning("The database is not reachable: %s", exc)
+            return False
+        return row is not None and row["ok"] == 1
 
     # Works
 

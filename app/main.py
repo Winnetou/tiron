@@ -128,6 +128,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="tiron", lifespan=lifespan)
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    """Whether the backend can do its work: the database is asked `SELECT 1`.
+
+    `{"status": "ok", "database": "ok"}` if it answers, 503 if it cannot be
+    reached. For a load balancer, an uptime check, or a look after a deploy. It
+    does not wait for the spaCy model or the dictionary (those have their own
+    503s), and a lost connection is opened again before the answer.
+    """
+    if not db.is_reachable():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The database is not reachable"
+        )
+    return {"status": "ok", "database": "ok"}
+
+
 @app.get("/editions", response_model=CollectionPage)
 def list_editions() -> CollectionPage:
     """The main page: the editions in the collection, 100 on a page.

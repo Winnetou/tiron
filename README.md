@@ -1495,6 +1495,42 @@ stub.
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.
 
+### The database connection
+
+The backend and the Celery worker read the connection from the environment
+(`app/persistence/db.py`): `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+`POSTGRES_HOST` (default `localhost`) and `POSTGRES_PORT` (default `5432`). For a
+database that is not in Docker, such as Cloud SQL, there are two optional ones:
+`POSTGRES_SSLMODE` (`require`, `verify-ca` or `verify-full`; unset, libpq's default
+`prefer` is used) and `POSTGRES_SSLROOTCERT` (the CA certificate for the last two).
+They are only in the connection string if they are set. The Cloud SQL Auth Proxy
+encrypts by itself, so it needs neither.
+
+A connection attempt gives up after 10 seconds, and TCP keepalives are on, so that a
+connection that a firewall dropped silently is noticed.
+
+**The connection is opened again when it is lost.** A database in the cloud drops
+connections: maintenance, a failover, an idle one that the network let go. The
+backend has one long-lived connection, so without this every request would fail
+until it was restarted. `ReconnectingConnection` is the `db.conn` of `Database`:
+
+- a connection that is found closed or broken before a statement is opened again
+  first;
+- a statement that finds the connection lost is sent again on a new one (once), but
+  not inside a transaction, where the rest of the transaction went with the
+  connection: the error is raised, and the next statement opens a new connection;
+- an error of a connection that is alive (a constraint, a cancelled query) is raised
+  as it is. A warning is logged each time the connection is opened again.
+
+A statement that is sent again may have been done already, if the connection went
+down after the database did it and before the answer came back. That is rare, and
+the statements are single ones.
+
+**`GET /health`** asks the database `SELECT 1` (`Database.is_reachable`) and answers
+`{"status": "ok", "database": "ok"}`, or 503 `The database is not reachable` (the
+reason is in the log). It is for a load balancer, an uptime check, or a look after a
+deploy. It does not wait for the spaCy model or the dictionary.
+
 ### Logging
 
 Every module logs with `logging.getLogger(__name__)` (`app.main`, `app.text_tools.ner`,
