@@ -144,8 +144,12 @@ one included. `PATCH /editions/{edition_id}/metadata` changes it; the body has s
   one per author and title (case does not matter): if another work has the new author
   and title already, the answer is 409 and nothing is changed (the place and year
   too). Polona is not called.
-- **In the frontend**, the page has a pencil button at the top, next to the one that
-  goes back to the editions. It opens a panel with two parts, "Work" (author and
+- **In the frontend**, a line at the very top of a page, above the page number, says
+  what the edition is, the way the main page does and with the place and the year:
+  "Prus B.; Lalka · Warszawa, 1890" (the short author, the short title, then the place
+  and the year; what is not known is left out, a full stop after the place is dropped).
+  It is asked for once for an edition (`GET .../metadata`) and shows what is saved at
+  once. Right next to it is a pencil button. It opens a panel with two parts, "Work" (author and
   title, with a note of how many other editions are changed too) and "This edition"
   (place and year), filled in, and a Save button (disabled until something changes).
   Save sends only what was changed. The year must be a number; if the backend refuses,
