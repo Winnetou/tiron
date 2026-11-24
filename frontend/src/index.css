@@ -90,6 +90,12 @@ main.main-page {
   line-height: 1.8;
 }
 
+.editions li a,
+.editions li a:visited {
+  color: #3a3a3a;
+  text-decoration: none;
+}
+
 .editions li a {
   display: inline-block;
   transform-origin: left center;
