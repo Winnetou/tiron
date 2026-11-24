@@ -20,6 +20,24 @@ A failing run only blocks a merge if the checks are required: in the repository'
 Settings, Branches, protect `main` and require the status checks **Backend tests**
 and **Frontend tests** (and that branches are up to date before merging).
 
+### Dependabot
+
+`.github/dependabot.yml` makes Dependabot look for new versions once a week, on Monday,
+and open a pull request for them. It watches seven places: the backend (`pyproject.toml`
+and `uv.lock`, the `uv` ecosystem), the frontend (`frontend/package.json` and its lock
+file), the actions of the workflows, the base images of the two Dockerfiles, the images of
+`docker-compose.yml`, and the hooks of `.pre-commit-config.yaml`. The minor and patch
+updates of the backend, of the frontend and of the actions are each in one pull request
+(a group); a new major version, which may need a change in the code, is in a pull request
+of its own, and so is every update of an image or a hook.
+
+These pull requests go through the workflow "Tests" like any other, so an update that
+breaks something is a red check. Merge them like the others, once the checks are green
+(and look at the changelog of a major version first). If you require the checks of the
+workflow in the branch protection (see above), Dependabot's pull requests need them too.
+Dependabot's own page is in the repository's Insights, Dependency graph, Dependabot: it
+shows the last checks, and tells if `dependabot.yml` has a mistake.
+
 ## Running with Docker Compose
 
 `docker compose up --build` (or `make up`) starts the backend together with its

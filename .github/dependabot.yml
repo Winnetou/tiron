@@ -1,0 +1,68 @@
+# Dependabot opens a pull request when a dependency has a new version. The pull
+# requests go through the same checks as any other (the workflow "Tests"), so a
+# version that breaks something shows as a red check and is not merged by mistake.
+#
+# Once a week, on Monday, and the updates of one kind in one pull request (a group),
+# so that there are a few pull requests, not one for each package. A major version
+# is in a pull request of its own: it is the one that may need a change in the code.
+# (Dependabot labels its pull requests itself: "dependencies" and the ecosystem.)
+version: 2
+
+updates:
+  # The backend: pyproject.toml and uv.lock (the "uv" ecosystem keeps the lock file
+  # that the workflow installs with `uv sync --locked`).
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      backend-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The frontend: frontend/package.json and package-lock.json.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      frontend-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The actions of .github/workflows. The ones that are pinned to a commit
+  # (with a "# v4.7" comment) are updated to the commit of the new version.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # The base images of the two Dockerfiles (python, node).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+
+  # The images of docker-compose.yml (postgres, rabbitmq).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+
+  # The hooks of .pre-commit-config.yaml (ruff).
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
