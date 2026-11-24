@@ -1155,6 +1155,12 @@ the scan and the buttons stay usable. This way there is one definition of
 "correct TEI" and one way to read text out of it, and the frontend can't
 disagree with it.
 
+The font size of the text follows the page (`frontend/src/fitFont.ts`): it is set so that
+the longest line just fits the width of the box, without wrapping, smaller if it
+would not fit and bigger if there is room to spare, between 12px and 30px (a longer
+line wraps then). It is measured in the browser, and done again when the text or the
+width of the box changes.
+
 A switch above the text box ("Text" / "XML") changes what is shown. "Text" is
 the default; "XML" shows the page's `content`, the TEI XML itself, as it is
 (also read-only), with the markup (tags, comments, the XML declaration) on a
