@@ -3,7 +3,7 @@ PORT ?= 8000
 ENV_FILE ?= .env
 BACKEND_URL ?= http://localhost:$(PORT)
 
-.PHONY: build run frontend up down
+.PHONY: build run frontend up down prod-up prod-down prod-config
 
 build:
 	docker build -t $(IMAGE) .
@@ -25,6 +25,20 @@ up:
 
 down:
 	docker compose down
+
+# Production (docker-compose.prod.yml, settings in .env.prod): no database of its own
+# (it is in Google Cloud), the built frontend behind Caddy. `prod-config` prints what
+# compose makes of it, and fails if a setting that has no default is missing.
+PROD_COMPOSE = docker compose -f docker-compose.prod.yml --env-file .env.prod
+
+prod-up:
+	$(PROD_COMPOSE) up -d --build
+
+prod-down:
+	$(PROD_COMPOSE) down
+
+prod-config:
+	$(PROD_COMPOSE) config
 into_db:
 	docker exec -it  tiron-db-1 psql -Uu tiron
 	

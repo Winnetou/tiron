@@ -1,0 +1,66 @@
+# Caddy in front of the backend, in production (docker-compose.prod.yml).
+#
+# It serves the built app, passes the backend's routes on to it, and does HTTPS: with
+# a domain as SITE_ADDRESS, Caddy gets a Let's Encrypt certificate for it by itself
+# and renews it before it runs out (the certificates are kept in the /data volume).
+# Without one SITE_ADDRESS is ":80", plain HTTP, and there is no certificate.
+#
+# It does what the Vite dev server does (vite.config.ts): the address of a page in the
+# browser is the endpoint's path too (/editions/{uuid}/pages/{n}), so under /editions a
+# request that asks for HTML (a browser opening the address) gets the app, and
+# anything else gets the backend.
+
+{$SITE_ADDRESS::80} {
+	root * /srv
+	encode zstd gzip
+
+	# a browser opening the address of a page: the app
+	@page_in_browser {
+		path /editions /editions/*
+		header Accept *text/html*
+	}
+	handle @page_in_browser {
+		header Cache-Control "no-cache"
+		rewrite * /index.html
+		file_server
+	}
+
+	# the routes of the backend (and /health, for an uptime check: the database is
+	# asked SELECT 1). The pages of a big edition are fetched from Polona on the first
+	# request, so the backend may take a while to answer. The backend is looked up when
+	# a request comes, so Caddy starts while the backend is still loading its models
+	# (a few minutes); until then the API answers 502.
+	@backend path /editions /editions/* /tei /tei/* /ner /ner/* /spellcheck /spellcheck/* /health
+	handle @backend {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy backend:8000 {
+			transport http {
+				response_header_timeout 120s
+			}
+		}
+	}
+
+	# the files that vite names by their content never change: keep them. One that is
+	# not there is a 404 (not the app, and not kept: it may be there after a deploy)
+	@asset {
+		path /assets/*
+		file
+	}
+	handle @asset {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+	handle /assets/* {
+		respond "Not found" 404
+	}
+
+	# anything else is the app (it has no routes of its own, but an address that is
+	# not a file is the app, not a 404)
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}
