@@ -773,6 +773,14 @@ button {
   white-space: normal;
 }
 
+.continued-editor {
+  gap: 0.2rem;
+}
+
+.continued-editor button {
+  margin-left: 0.3rem;
+}
+
 .word-editor-actions {
   position: absolute;
   top: calc(100% + 0.25rem);

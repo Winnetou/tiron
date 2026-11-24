@@ -76,6 +76,7 @@ from app.text_tools.tei_xml import (
 from app.text_tools.token_occurrences import InvalidToken
 from app.view_models import (
     CollectionPage,
+    ContinuedWord,
     EditionMetadataUpdate,
     EntityLabel,
     EntityTag,
@@ -1155,6 +1156,80 @@ def correct_word(
         edition_id,
         correction.start,
         correction.end,
+    )
+    return PageView.from_page(page)
+
+
+@app.post(
+    "/editions/{edition_id}/pages/{number}/continued-words", response_model=PageView
+)
+def correct_continued_word(
+    edition_id: UUID, number: Annotated[int, Path(ge=0)], word: ContinuedWord
+) -> PageView:
+    """Correct a word that goes on in the next line, as one word: the last word
+    of a line (`first`) and the first word of the next one (`second`).
+
+    The body is `{"first": {"start": 9, "end": 19, "before": "wszechsiia",
+    "after": "wszechświa-"}, "second": {"start": 20, "end": 26, "before":
+    "iowymi", "after": "towymi"}}`. The offsets are those of the text that `POST
+    /tei/text` gives for this page. Only a line break may be between the two
+    words. `first.after` ends with the hyphen that marks the split (one hyphen);
+    `second.after` may be the same as `second.before`, if that part was right.
+
+    Both words are replaced in the XML, and one Correction is recorded for the
+    word as a whole, without the hyphen: `wszechsiiaiowymi` -> `wszechświatowymi`
+    (none if that is the same), in one transaction: all of it happens, or none.
+    Nothing is made a legal spelling here.
+
+    404 if the page is not stored. 409 if the text at an offset is not `before`,
+    because the page has changed since. 422 if the page has no valid TEI XML, the
+    words are not on two lines of the text, or a replacement is not acceptable.
+    Returns the updated page as a PageView.
+    """
+    first, second = word.first, word.second
+    recorded = (first.before + second.before, first.after[:-1] + second.after)
+
+    def replace_in_xml(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to correct")
+        text = tei_xml_to_text(xml)
+        if text[first.end : second.start] != "\n":
+            raise CannotReplace("The words are not on two lines, one after the other")
+        # the second first: the offsets of the first do not move
+        if second.after != second.before:
+            xml = replace_text_range(
+                xml, second.start, second.end, second.before, second.after
+            )
+        return replace_text_range(
+            xml, first.start, first.end, first.before, first.after
+        )
+
+    try:
+        page = db.apply_corrections(
+            edition_id,
+            number,
+            replace_in_xml,
+            [recorded] if recorded[0] != recorded[1] else [],
+        )
+    except TextChanged as exc:
+        logger.warning(
+            "Continued word not corrected on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotReplace) as exc:
+        logger.warning(
+            "Continued word not corrected on page %s of %s: %s", number, edition_id, exc
+        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning("Page %s of edition %s is not stored", number, edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Continued word corrected on page %s of %s (%s-%s)",
+        number,
+        edition_id,
+        first.start,
+        second.end,
     )
     return PageView.from_page(page)
 

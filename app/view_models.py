@@ -282,6 +282,45 @@ class WordCorrection(BaseModel):
         return self
 
 
+class WordPart(BaseModel):
+    """A word of the text of a page, as the user saw it (`before`, the characters
+    `start` to `end`), and what it becomes (`after`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    before: str = Field(min_length=1, max_length=200)
+    after: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def check_range(self) -> WordPart:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
+
+class ContinuedWord(BaseModel):
+    """A word that goes on in the next line, corrected as one word: `first` is the
+    last word of a line, whose `after` ends with the hyphen that marks the split,
+    and `second` is the first word of the next line."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    first: WordPart
+    second: WordPart
+
+    @model_validator(mode="after")
+    def check_parts(self) -> ContinuedWord:
+        if not self.first.after.endswith("-") or len(self.first.after) < 2:
+            raise ValueError("first.after must be a word and the hyphen of the split")
+        if self.first.after.endswith("--") or self.second.start < self.first.end:
+            raise ValueError("first.after has one hyphen, and first is before second")
+        if any(c.isspace() for c in self.first.after + self.second.after):
+            raise ValueError("The words must not contain spaces")
+        return self
+
+
 class NewToken(BaseModel):
     """A text token that the OCR missed, to be added at `position` of the text of
     a page (an offset between two characters). It may be several words."""

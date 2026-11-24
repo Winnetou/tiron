@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   addLegalSpelling,
+  correctContinuedWord,
   addToken,
   correctWord,
   joinLines,
@@ -52,7 +53,7 @@ import {
 } from './EditionWideCorrection'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
-import type { Word } from './segments'
+import { wholeWord, type Word } from './segments'
 import {
   sectionLabel,
   type SectionKind,
@@ -626,6 +627,58 @@ export default function App() {
   }
 
   /**
+   * Have the backend correct a word that goes on in the next line as one word:
+   * `first` (the last word of a line) becomes `firstAfter` and the hyphen of the
+   * split, `second` (the first word of the next line) becomes `secondAfter`, and
+   * one correction is recorded, of the whole word. If either part was misspelled,
+   * the whole new word is made a legal spelling of the edition. Nothing is
+   * offered for the whole edition.
+   */
+  async function continueWord(
+    page: Page,
+    first: Word,
+    second: Word,
+    firstAfter: string,
+    secondAfter: string,
+  ) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      let corrected: Page
+      try {
+        corrected = await correctContinuedWord(
+          page.edition_id,
+          page.number,
+          first,
+          second,
+          firstAfter,
+          secondAfter,
+        )
+      } catch (error) {
+        setActionError(errorMessage(error))
+        return
+      }
+      let legalError: string | null = null
+      const whole = firstAfter.replace(/-+$/, '') + secondAfter
+      if (!first.correct || !second.correct) {
+        try {
+          await addLegalSpelling(page.edition_id, whole)
+        } catch (error) {
+          legalError = errorMessage(error)
+        }
+      }
+      setStatus({ kind: 'done', ...(await withText(corrected)) })
+      if (legalError) {
+        setActionError(
+          `The word was corrected, but not saved as a legal spelling: ${legalError}`,
+        )
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
    * Say that the spelling of a misspelled word is legal in the edition ("legal",
    * not "correct": what was correct in the 19th century often is not anymore, and
    * we have no better word for it). The text does not change, so only its words
@@ -636,7 +689,11 @@ export default function App() {
     setBusy(true)
     setActionError(null)
     try {
-      await addLegalSpelling(page.edition_id, word.text)
+      await addLegalSpelling(page.edition_id, wholeWord(
+          text,
+          status.kind === 'done' ? (status.words ?? []) : [],
+          word,
+        ))
       let update: Pick<PageWithText, 'words' | 'spellError'>
       try {
         update = {
@@ -718,6 +775,9 @@ export default function App() {
           onRejectEntity={(entity) => decide(text, entity, { kind: 'rejected' })}
           onCorrectWord={(word, after) => correct(page, word, after, text)}
           onLegalSpelling={(word) => legalize(page, text, word)}
+          onContinueWord={(first, second, firstAfter, secondAfter) =>
+            continueWord(page, first, second, firstAfter, secondAfter)
+          }
           onJoinWords={(words) =>
             run(joinTokens(page.edition_id, page.number, words))
           }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entity } from './entities'
-import { buildSegments, type Word } from './segments'
+import { buildSegments, wholeWord, type Word } from './segments'
 
 const word = (text: string, start: number, correct = true): Word => ({
   text,
@@ -132,5 +132,29 @@ describe('buildSegments', () => {
     ['x', [word('y', 0)], [entity('z', 0)]],
   ])('never loses or changes text: %s', (text, words, entities) => {
     expect(joined(text, words, entities)).toBe(text)
+  })
+})
+
+describe('wholeWord', () => {
+  const text = 'ala wszechświa-\ntowem ma'
+  const words = [
+    word('ala', 0),
+    word('wszechświa', 4),
+    word('-', 14),
+    word('towem', 16),
+    word('ma', 22),
+  ]
+  it('puts the parts of a word split over lines together, from either part', () => {
+    expect(wholeWord(text, words, words[1])).toBe('wszechświatowem')
+    expect(wholeWord(text, words, words[3])).toBe('wszechświatowem')
+  })
+  it('is the word itself when it is not split', () => {
+    expect(wholeWord(text, words, words[0])).toBe('ala')
+    expect(wholeWord(text, words, words[4])).toBe('ma')
+  })
+  it('is the word itself when the hyphen is not at the end of a line', () => {
+    const same = 'wszechświa- towem'
+    const w = [word('wszechświa', 0), word('-', 10), word('towem', 12)]
+    expect(wholeWord(same, w, w[0])).toBe('wszechświa')
   })
 })

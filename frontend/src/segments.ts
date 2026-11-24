@@ -61,3 +61,42 @@ export function buildSegments(
   }
   return segments
 }
+
+const WORD = /^[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*$/u
+const MOST_PARTS = 4
+
+/**
+ * The spelling of the word that `word` is part of. Usually it is the word itself,
+ * but a word split over lines ("wszechświa-" / "towem": a word, a hyphen at the
+ * end of the line, one line break and a word) is two tokens, and its spelling is
+ * the parts put together, without the hyphen of the split ("wszechświatowem"),
+ * whichever part is given. (Same rule as the backend's, which also looks at the
+ * word with the hyphen kept: a word that has its own hyphen is no concern here, as
+ * its hyphen was typed in the legal spelling by hand.)
+ */
+export function wholeWord(text: string, words: Word[], word: Word): string {
+  const chars = Array.from(text)
+  const isPart = (at: number) => at >= 0 && at < words.length && WORD.test(words[at].text)
+  // Is words[at] a part that a hyphen and a line break lead to words[at + 2]?
+  const splitAfter = (at: number) => {
+    if (!isPart(at) || !isPart(at + 2)) return false
+    const [part, hyphen, next] = words.slice(at, at + 3)
+    return (
+      hyphen.text === '-' &&
+      part.end === hyphen.start &&
+      chars.slice(hyphen.end, next.start).join('') === '\n'
+    )
+  }
+  const index = words.findIndex((w) => w.start === word.start && w.end === word.end)
+  if (index < 0) return word.text
+  let first = index
+  // The clicked token may be the hyphen: it has no spelling of its own.
+  if (!isPart(first)) return word.text
+  while (first - 2 >= 0 && index - first < MOST_PARTS && splitAfter(first - 2)) first -= 2
+  const parts = [first]
+  while (parts.length < MOST_PARTS && splitAfter(parts[parts.length - 1])) {
+    parts.push(parts[parts.length - 1] + 2)
+  }
+  if (parts.length < 2 || !parts.includes(index)) return word.text
+  return parts.map((at) => words[at].text).join('')
+}
