@@ -2,7 +2,7 @@
 # port 5173 and proxies the backend's routes to BACKEND_URL (see vite.config.ts).
 # The sources are mounted over /app by docker-compose.yml, so edits show at once;
 # the dependencies stay the ones installed here.
-FROM node:22-slim
+FROM node:25-slim
 
 WORKDIR /app
 
