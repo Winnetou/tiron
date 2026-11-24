@@ -44,7 +44,11 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-    environment: *database
+    environment:
+      <<: *database
+      # What the login sessions are signed with: the backend does not start without
+      # it (the worker does not use it). A new one logs everybody out.
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET, e.g. openssl rand -hex 32}
     # Not published: Caddy reaches it as backend:8000.
     expose:
       - "8000"

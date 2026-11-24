@@ -1209,3 +1209,24 @@ class TestLoginThroughTheEndpoint:
 
         assert wrong.status_code == unknown.status_code == 401
         assert wrong.json() == unknown.json()
+
+
+def test_create_user_then_check_user(db):
+    db.create_user("anna", "secret")
+
+    assert db.check_user("anna", "secret") is True
+    assert db.check_user("anna", "other") is False
+    stored = db.conn.execute("SELECT password_hash FROM users").fetchone()
+    assert stored["password_hash"].startswith("scrypt$")  # not the password
+
+
+def test_create_user_refuses_a_username_that_is_taken(db):
+    from app.persistence.db import UserExists
+
+    db.create_user("anna", "secret")
+
+    with pytest.raises(UserExists):
+        db.create_user("anna", "other")
+
+    assert db.check_user("anna", "secret") is True  # nothing was changed
+    assert db.check_user("anna", "other") is False

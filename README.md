@@ -121,8 +121,8 @@ What differs from `docker-compose.yml`, which is for development:
   string is plain SQL), and give `tiron` `SELECT, INSERT, UPDATE, DELETE` on them.
 - **The frontend is built and served by Caddy** (`frontend/Dockerfile.prod`,
   `frontend/Caddyfile`), not by the Vite dev server. Caddy does what the dev server's
-  proxy does: it serves the files, and passes `/editions`, `/tei`, `/ner`,
-  `/spellcheck` and `/health` to the backend. Under `/editions`, a request that asks
+  proxy does: it serves the files, and passes `/editions`, `/auth`, `/tei`,
+  `/ner`, `/spellcheck` and `/health` to the backend. Under `/editions`, a request that asks
   for HTML (a browser opening the address of a page) gets the app, and any other gets
   the API. Any other address is the app, except a missing file under `/assets/`, which
   is a 404. The backend's own docs (`/openapi.json`) are not published. Caddy looks the
@@ -143,6 +143,10 @@ What differs from `docker-compose.yml`, which is for development:
   answers. Let's Encrypt itself cannot be tried without a real domain.
 - **Only Caddy is published**, on the ports 80 and 443: the backend, the broker and
   their ports are inside the compose network.
+- **`SESSION_SECRET` has no default** and the backend does not start without it: it
+  signs the login sessions (see "Login"). Make it with `openssl rand -hex 32`. The
+  `users` table is part of the schema that is created by hand in Cloud SQL, and the
+  users are added to it by hand (the script is in "Login").
 - **Passwords have no defaults** (`RABBITMQ_PASSWORD` too), `restart: always`, and
   the logs of each container are limited to 5 files of 10 MB, so that they do not
   fill the disk.
@@ -1575,6 +1579,18 @@ python -m app.persistence.passwords                                  # or on the
 ```
 INSERT INTO users (username, password_hash) VALUES ('anna', 'scrypt$16384$8$1$...$...');
 ```
+
+In **development** there is a shortcut that adds the user itself, with the connection
+that the app has (the `POSTGRES_*` variables), so there is nothing to paste:
+
+```
+docker compose exec backend python -m app.persistence.passwords --insert
+```
+
+It asks the same questions, and prints `Added the user 'anna'`. It **refuses while
+`PROD` is true** (the default), before it asks anything: in production run the
+statement yourself. It says so if the username is taken, if there is no `users` table
+(start the backend once with `PROD=false`), or if the database cannot be reached.
 
 (`make into_db` opens `psql` in the development database.) To change a password, run
 the script again and `UPDATE users SET password_hash = '...' WHERE username = 'anna'`;

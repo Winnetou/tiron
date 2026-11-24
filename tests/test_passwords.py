@@ -1,5 +1,6 @@
 from unittest import mock
 
+import psycopg
 import pytest
 
 from app.persistence import passwords
@@ -66,7 +67,7 @@ def test_the_script_asks_and_prints_the_statement(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt: " anna ")
     monkeypatch.setattr(passwords.getpass, "getpass", lambda prompt: "secret")
 
-    passwords.main()
+    passwords.main([])
 
     assert "VALUES ('anna', 'scrypt$" in capsys.readouterr().out
 
@@ -85,7 +86,7 @@ def test_the_script_refuses_bad_input(monkeypatch, username, answers, message):
     monkeypatch.setattr(passwords.getpass, "getpass", lambda prompt: next(given))
 
     with pytest.raises(SystemExit, match=message):
-        passwords.main()
+        passwords.main([])
 
 
 class TestCheckUser:
@@ -130,3 +131,128 @@ class TestCheckUser:
         self.stored(db, None)
 
         assert db.check_user("nobody", "") is False
+
+
+# --- --insert ---
+
+
+@pytest.fixture
+def typed(monkeypatch):
+    """The user types this username and password (twice)."""
+    monkeypatch.setattr("builtins.input", lambda prompt: "anna")
+    monkeypatch.setattr(passwords.getpass, "getpass", lambda prompt: "secret")
+
+
+@pytest.fixture
+def database(monkeypatch):
+    """The Database that --insert uses: a mock, made once and handed out."""
+    made = mock.MagicMock()
+    monkeypatch.setattr("app.persistence.db.Database", mock.Mock(return_value=made))
+    return made
+
+
+def test_insert_adds_the_user_to_the_database(monkeypatch, typed, database, capsys):
+    monkeypatch.setenv("PROD", "false")
+
+    passwords.main(["--insert"])
+
+    database.create_user.assert_called_once_with("anna", "secret")
+    database.close.assert_called_once()
+    out = capsys.readouterr().out
+    assert "Added the user 'anna'" in out
+    assert "INSERT" not in out and "secret" not in out
+
+
+@pytest.mark.parametrize("prod", [None, "true", "yes"])
+def test_insert_is_refused_in_production_before_anything_is_asked(
+    monkeypatch, database, prod
+):
+    if prod is None:
+        monkeypatch.delenv("PROD", raising=False)
+    else:
+        monkeypatch.setenv("PROD", prod)
+    asked = mock.Mock()
+    monkeypatch.setattr("builtins.input", asked)
+
+    with pytest.raises(SystemExit, match="PROD is true"):
+        passwords.main(["--insert"])
+
+    asked.assert_not_called()
+    database.create_user.assert_not_called()
+
+
+def test_insert_says_so_when_the_username_is_taken(monkeypatch, typed, database):
+    from app.persistence.db import UserExists
+
+    monkeypatch.setenv("PROD", "false")
+    database.create_user.side_effect = UserExists("There is a user 'anna' already")
+
+    with pytest.raises(SystemExit, match="already.*UPDATE users"):
+        passwords.main(["--insert"])
+
+    database.close.assert_called_once()
+
+
+def test_insert_says_so_when_there_is_no_users_table(monkeypatch, typed, database):
+    monkeypatch.setenv("PROD", "false")
+    database.create_user.side_effect = psycopg.errors.UndefinedTable("no table")
+
+    with pytest.raises(SystemExit, match="no users table"):
+        passwords.main(["--insert"])
+
+
+def test_insert_says_so_when_the_database_cannot_be_reached(monkeypatch, typed):
+    monkeypatch.setenv("PROD", "false")
+    monkeypatch.setattr(
+        "app.persistence.db.Database",
+        mock.Mock(side_effect=psycopg.OperationalError("connection refused")),
+    )
+
+    with pytest.raises(SystemExit, match="Cannot connect.*refused"):
+        passwords.main(["--insert"])
+
+
+def test_insert_checks_the_input_like_the_statement_does(monkeypatch, database):
+    monkeypatch.setenv("PROD", "false")
+    monkeypatch.setattr("builtins.input", lambda prompt: "anna")
+    given = iter(["one", "two"])
+    monkeypatch.setattr(passwords.getpass, "getpass", lambda prompt: next(given))
+
+    with pytest.raises(SystemExit, match="differ"):
+        passwords.main(["--insert"])
+
+    database.create_user.assert_not_called()
+
+
+def test_without_insert_nothing_is_written(monkeypatch, typed, database, capsys):
+    monkeypatch.setenv("PROD", "false")
+
+    passwords.main([])
+
+    database.create_user.assert_not_called()
+    assert "INSERT INTO users" in capsys.readouterr().out
+
+
+def test_create_user_stores_a_hash_of_the_password(monkeypatch):
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", mock.MagicMock())
+    db = Database()
+    db.conn.execute = mock.Mock()
+
+    db.create_user("anna", "secret")
+
+    query, params = db.conn.execute.call_args.args
+    assert query.startswith("INSERT INTO users")
+    assert params[0] == "anna"
+    assert params[1] != "secret"
+    assert verify_password("secret", params[1])
+
+
+def test_create_user_raises_user_exists_for_a_taken_username(monkeypatch):
+    from app.persistence.db import UserExists
+
+    monkeypatch.setattr("app.persistence.db.psycopg.connect", mock.MagicMock())
+    db = Database()
+    db.conn.execute = mock.Mock(side_effect=psycopg.errors.UniqueViolation("dup"))
+
+    with pytest.raises(UserExists, match="anna"):
+        db.create_user("anna", "secret")

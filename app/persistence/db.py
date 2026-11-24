@@ -51,7 +51,7 @@ from app.persistence.ontology import (
     TokenOccurrence,
     Work,
 )
-from app.persistence.passwords import DUMMY_HASH, verify_password
+from app.persistence.passwords import DUMMY_HASH, hash_password, verify_password
 from app.text_tools.hyphens import find_missing_hyphens
 from app.text_tools.inflection import find_forms, forms_of_phrase
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
@@ -202,6 +202,10 @@ class WorkExists(ValueError):
     """Another work has the author and title that were asked for."""
 
 
+class UserExists(ValueError):
+    """There is a user with that username already."""
+
+
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 
@@ -222,6 +226,20 @@ class Database:
         self.conn.close()
 
     # Users
+
+    def create_user(self, username: str, password: str) -> None:
+        """Add a user: only a hash of the password is stored (`hash_password`).
+
+        Raises UserExists if the username is taken, and nothing is changed. (Users
+        are added by hand: no endpoint does this. See `app/persistence/passwords.py`.)
+        """
+        try:
+            self.conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+                (username, hash_password(password)),
+            )
+        except psycopg.errors.UniqueViolation as exc:
+            raise UserExists(f"There is a user {username!r} already") from exc
 
     def check_user(self, username: str, password: str) -> bool:
         """Whether there is a user with this username and this password.
