@@ -1,3 +1,10 @@
+/* The beige page with the Dürer detail behind, of the main page. */
+:root {
+  --durer-background:
+    linear-gradient(rgba(246, 239, 223, 0.8), rgba(246, 239, 223, 0.8)),
+    url('/durer-four-horsemen-detail.jpg') center / cover no-repeat fixed #f6efdf;
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -59,9 +66,7 @@ main.main-page {
   /* A detail of Albrecht Dürer's woodcut "The Four Horsemen" (1498), in the public
      domain, over the whole page and under a veil of the colour of the paper, so that
      it is a background and the list is read over it. */
-  background:
-    linear-gradient(rgba(246, 239, 223, 0.8), rgba(246, 239, 223, 0.8)),
-    url('/durer-four-horsemen-detail.jpg') center / cover no-repeat fixed #f6efdf;
+  background: var(--durer-background);
 }
 
 /* The list is on a sheet of its own, so that it can be read over the picture. */
@@ -229,6 +234,7 @@ button {
 
 .viewer {
   height: 100vh;
+  background: #f6efdf; /* the beige of the main page, without the picture */
   display: grid;
   grid-template-columns: 1fr 1fr auto;
 }
@@ -615,6 +621,8 @@ button {
   padding: 0.5rem;
   border: 1px solid #767676;
   border-radius: 0.25rem;
+  /* the sheet of the text, so that it is read over the picture */
+  background: rgba(255, 252, 244, 0.88);
   /* A serif face suits the old print, and is easier to read at length. */
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 1.25rem;

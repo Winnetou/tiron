@@ -15,6 +15,7 @@ import {
   type Decision,
   type Entity,
 } from './entities'
+import { useFitFontSize } from './fitFont'
 import { caretAt, caretInText, selectionInText } from './selection'
 import { buildSegments, type Segment, type Word } from './segments'
 import type { TextSelection } from './sections'
@@ -616,6 +617,8 @@ export default function PageText({
 }: Props) {
   const wrap = useRef<HTMLDivElement>(null)
   const box = useRef<HTMLPreElement>(null)
+  // the font size follows the longest line: it fits the box, and the box is full
+  useFitFontSize(box, text)
   // The selection that a new entity can be made of, and the label chosen for it.
   const [pending, setPending] = useState<Pending | null>(null)
   const [label, setLabel] = useState('')
