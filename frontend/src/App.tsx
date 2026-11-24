@@ -52,7 +52,7 @@ import {
 } from './EditionWideCorrection'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
-import type { Word } from './segments'
+import { wholeWord, type Word } from './segments'
 import {
   sectionLabel,
   type SectionKind,
@@ -636,7 +636,11 @@ export default function App() {
     setBusy(true)
     setActionError(null)
     try {
-      await addLegalSpelling(page.edition_id, word.text)
+      await addLegalSpelling(page.edition_id, wholeWord(
+          text,
+          status.kind === 'done' ? (status.words ?? []) : [],
+          word,
+        ))
       let update: Pick<PageWithText, 'words' | 'spellError'>
       try {
         update = {
