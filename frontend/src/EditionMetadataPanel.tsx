@@ -26,8 +26,11 @@ const fieldsOf = (metadata: EditionMetadata): Fields => ({
   year: metadata.year === null ? '' : String(metadata.year),
 })
 
-/** A year is a whole number (the backend takes 1500 to 2030), or nothing. */
-const isYear = (text: string) => text.trim() === '' || /^\d{1,4}$/.test(text.trim())
+const FIRST_YEAR = 1500
+const LAST_YEAR = 2030
+/** The year that the list is opened at when none is known: the likeliest one. */
+const LIKELY_YEAR = 1900
+const YEARS = Array.from({ length: LAST_YEAR - FIRST_YEAR + 1 }, (_, i) => FIRST_YEAR + i)
 
 interface Props {
   editionId: string
@@ -42,7 +45,7 @@ interface Props {
  * parts: the work, its author and title (the work is the book, and the editions that
  * share it have the change too, which the panel says), and the edition itself, its
  * place and year. Save sends the fields that were changed; an empty one clears it.
- * The backend is the judge of what is valid (the year from 1500 to 2030): its reason
+ * The backend is the judge of what is valid (the year is picked from 1500 to 2030, and the list opens at 1900 when none is known): its reason
  * is shown if it refuses.
  */
 export default function EditionMetadataPanel({
@@ -103,11 +106,10 @@ export default function EditionMetadataPanel({
           (name) => fields[name].trim() !== saved[name],
         )
   const changed = changedNames.length > 0
-  const valid = isYear(fields.year)
 
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (!changed || !valid || busy) return
+    if (!changed || busy) return
     setBusy(true)
     setError(null)
     try {
@@ -199,23 +201,25 @@ export default function EditionMetadataPanel({
                 </label>
                 <label className="metadata-field">
                   Year
-                  <input
+                  <select
                     className="styled-input"
                     value={fields.year}
-                    inputMode="numeric"
-                    maxLength={4}
-                    size={6}
                     disabled={busy}
-                    aria-invalid={!valid}
+                    // a year that is not known opens the list at the likeliest one
+                    onMouseDown={() => {
+                      if (fields.year === '') change('year', String(LIKELY_YEAR))
+                    }}
                     onChange={(event) => change('year', event.target.value)}
-                  />
+                  >
+                    <option value="">—</option>
+                    {YEARS.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </fieldset>
-              {!valid && (
-                <p role="alert" className="review-error">
-                  The year is a number, like 1890.
-                </p>
-              )}
               {error && (
                 <p role="alert" className="review-error">
                   {error}
@@ -223,7 +227,7 @@ export default function EditionMetadataPanel({
               )}
               {done && <p role="status">✓ Saved</p>}
               <div className="metadata-actions">
-                <button type="submit" disabled={!changed || !valid || busy}>
+                <button type="submit" disabled={!changed || busy}>
                   Save
                 </button>
               </div>

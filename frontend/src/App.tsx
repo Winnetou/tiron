@@ -6,6 +6,8 @@ import {
   joinLines,
   joinTokens,
   splitLine,
+  ApiError,
+  DEFAULT_PAGE_NUMBER,
   getEditionMetadata,
   getPage,
   type EditionMetadata,
@@ -72,7 +74,8 @@ type Status =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | ({ kind: 'done' } & PageWithText)
-  | { kind: 'error'; message: string }
+  // `editionId` is the edition of the address if it is stored (so it can be gone back to)
+  | { kind: 'error'; message: string; editionId: string | null }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed'
@@ -139,12 +142,32 @@ function addsLineContinuation(text: string, word: Word, after: string): boolean 
   return after === `${word.text}-` && (next === undefined || next === '\n')
 }
 
+/** Whether the backend has the edition stored (its metadata can be had). */
+async function editionIsStored(editionId: string): Promise<boolean> {
+  try {
+    await getEditionMetadata(editionId)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export default function App() {
   // An address that names a page (/editions/{uuid}/pages/{number}) opens it.
   const fromPath = pageFromPath(window.location.pathname)
   const opens = fromPath !== null && UUID_PATTERN.test(fromPath.editionId)
+  // An address of a page whose edition is not a uuid names no edition: say so (and
+  // link to the main page), and don't quietly show the main page instead.
   const [status, setStatus] = useState<Status>(
-    opens ? { kind: 'loading' } : { kind: 'idle' },
+    opens
+      ? { kind: 'loading' }
+      : fromPath !== null
+        ? {
+            kind: 'error',
+            message: 'Edition not found: the edition in the address is not a valid uuid',
+            editionId: null,
+          }
+        : { kind: 'idle' },
   )
   // What is known of the open page's edition (author, title, place, year): shown above
   // the page number. It is looked for once for an edition, and changes when edited.
@@ -229,7 +252,17 @@ export default function App() {
       window.history.replaceState(null, '', pageUrl(editionId, number))
       setStatus({ kind: 'done', ...(await withText(page)) })
     } catch (error) {
-      setStatus({ kind: 'error', message: errorMessage(error) })
+      // "Not found" is for the page or for the edition: the edition is only gone
+      // back to if it is stored (it is, when the page is the one that is missing)
+      const gone =
+        error instanceof ApiError && error.status === 404
+          ? !(await editionIsStored(editionId))
+          : false
+      setStatus({
+        kind: 'error',
+        message: errorMessage(error),
+        editionId: gone ? null : editionId,
+      })
     }
   }
 
@@ -792,10 +825,27 @@ export default function App() {
   }
 
   if (status.kind === 'error') {
+    // the way back: the edition of the address (its first page) if it is stored,
+    // otherwise the main page
+    const way =
+      status.editionId === null
+        ? { href: '/', label: 'Back to the list of editions' }
+        : {
+            href: pageUrl(status.editionId, DEFAULT_PAGE_NUMBER),
+            label: 'Back to the edition',
+          }
     return (
-      <main>
-        <p role="alert">{status.message}</p>
-        <a href="/">Back to the editions</a>
+      <main className="error-page review-styled">
+        {/* the skeleton points its finger at the message */}
+        <img className="error-page-image" src="/vademecum.jpg" alt="" />
+        <div className="error-page-text">
+          <p role="alert" className="error-page-message">
+            {status.message}
+          </p>
+          <button type="button" onClick={() => window.location.assign(way.href)}>
+            {way.label}
+          </button>
+        </div>
       </main>
     )
   }

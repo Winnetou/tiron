@@ -559,6 +559,14 @@ const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
 const withoutSuggestions = () =>
   calls.filter((c) => !c.url.endsWith('/spellcheck/suggestions'))
 
+/** Click the button of the error page and say where it goes (the page is not left). */
+async function clickWayBack(name: string): Promise<string> {
+  const assign = vi.fn()
+  vi.stubGlobal('location', { ...window.location, assign })
+  await userEvent.click(screen.getByRole('button', { name }))
+  return assign.mock.calls[0]?.[0]
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
   window.history.pushState({}, '', '/')
@@ -591,17 +599,41 @@ describe('the page address', () => {
     await openPage({ page: () => new Error('Edition not found') })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
-    expect(calledUrls()).toEqual([`GET /editions/${UUID}/pages/0`]) // no TEI call
+    // no TEI call; only the check of whether the edition is stored (for the link)
+    expect(calledUrls()).toEqual([
+      `GET /editions/${UUID}/pages/0`,
+      `GET /editions/${UUID}/metadata`,
+    ])
   })
 
-  it('links back to the main page when the page cannot be loaded', async () => {
-    await openPage({ page: () => new Error('Page not found') })
+  it('links to the edition of the address, not to the main page, when the page cannot be loaded', async () => {
+    await openPage({}, 19999)
 
-    await screen.findByRole('alert')
-    expect(screen.getByRole('link', { name: 'Back to the editions' })).toHaveAttribute(
-      'href',
-      '/',
-    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.queryByRole('button', { name: 'Back to the list of editions' })).toBeNull()
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/19999`) // no redirect
+    expect(await clickWayBack('Back to the edition')).toBe(`/editions/${UUID}/pages/0`)
+  })
+
+  it('links to the main page when the edition itself is not known', async () => {
+    await openPage({ metadata: new Error('Edition not found') }, 19999)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.queryByRole('button', { name: 'Back to the edition' })).toBeNull()
+    expect(await clickWayBack('Back to the list of editions')).toBe('/')
+  })
+
+  it('shows the skeleton that points at the message, with the message in the type of the edition titles', async () => {
+    const { container } = render(<></>)
+    container.remove()
+    await openPage({}, 19999)
+
+    const message = await screen.findByRole('alert')
+    const page = message.closest('main')!
+    expect(page).toHaveClass('error-page')
+    expect(page).toHaveClass('review-styled') // the look of the buttons
+    expect(page.querySelector('img')).toHaveAttribute('src', '/vademecum.jpg')
+    expect(message).toHaveClass('error-page-message')
   })
 
   it('shows an error when the request fails', async () => {
@@ -613,11 +645,23 @@ describe('the page address', () => {
   })
 
   it('shows the main page for an address that is not a page', async () => {
-    window.history.pushState({}, '', '/editions/not-a-uuid/pages/3')
+    window.history.pushState({}, '', '/editions/whatever')
     fakeBackend()
     render(<App />)
 
     expect(await screen.findByRole('navigation', { name: 'Editions' })).toBeInTheDocument()
+  })
+
+  it('shows an error with a link to the main page when the edition in the address is not a uuid', async () => {
+    window.history.pushState({}, '', '/editions/not-a-uuid/pages/3')
+    fakeBackend()
+    render(<App />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
+    expect(screen.queryByRole('navigation', { name: 'Editions' })).toBeNull()
+    expect(window.location.pathname).toBe('/editions/not-a-uuid/pages/3') // no redirect
+    expect(calls).toEqual([]) // nothing to ask the backend
+    expect(await clickWayBack('Back to the list of editions')).toBe('/')
   })
 })
 
@@ -3024,7 +3068,7 @@ describe('applying a correction to the entire edition', () => {
       await correct()
       await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
 
-      await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
       expect(offer()).toBeNull()
     })
@@ -6236,9 +6280,9 @@ describe('page navigation', () => {
     await open(1)
     await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
 
-    const home = screen.getByRole('button', { name: 'Back to the editions' })
+    const home = screen.getByRole('button', { name: 'Back to the list of editions' })
     expect(home.querySelector('svg')).not.toBeNull()
-    expect(home).toHaveAttribute('data-tooltip', 'Back to the editions')
+    expect(home).toHaveAttribute('data-tooltip', 'Back to the list of editions')
     expect(getComputedStyle(home).borderRadius).toBe('50%')
 
     await userEvent.click(home)
@@ -6801,7 +6845,7 @@ describe('the missing hyphens of a page', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -7100,7 +7144,7 @@ describe('the OCR rubbish of the edition', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -7467,7 +7511,7 @@ describe('the same named entity in all its forms', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -8203,7 +8247,7 @@ describe('accepting spellings by their substring', () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -8562,7 +8606,7 @@ describe('replacing a token in the edition', () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -8572,7 +8616,8 @@ describe('editing the metadata of the edition', () => {
   const editButton = () =>
     screen.getByRole('button', { name: 'Edit the metadata of the edition' })
   const panel = () => screen.queryByRole('dialog', { name: 'Edition metadata' })
-  const field = (name: string) => screen.getByRole('textbox', { name })
+  const field = (name: string) =>
+    screen.getByRole(name === 'Year' ? 'combobox' : 'textbox', { name })
   const saveButton = () => screen.getByRole('button', { name: 'Save' })
   const metadataCalls = () => calls.filter((c) => c.url.endsWith('/metadata'))
 
@@ -8686,7 +8731,7 @@ describe('editing the metadata of the edition', () => {
     expect(work.getByRole('textbox', { name: 'Author' })).toBeInTheDocument()
     expect(work.getByRole('textbox', { name: 'Title' })).toBeInTheDocument()
     expect(edition.getByRole('textbox', { name: 'Place' })).toBeInTheDocument()
-    expect(edition.getByRole('textbox', { name: 'Year' })).toBeInTheDocument()
+    expect(edition.getByRole('combobox', { name: 'Year' })).toBeInTheDocument()
   })
 
   it('says that the other editions of the work are changed too', async () => {
@@ -8729,27 +8774,43 @@ describe('editing the metadata of the edition', () => {
     expect(saveButton()).toBeDisabled() // nothing changed since
   })
 
-  it('does not send a year that is not a number', async () => {
+  it('picks the year from a list of 1500 to 2030, with none as the first choice', async () => {
     await open()
     await waitFor(() => expect(field('Year')).toHaveValue('1890'))
 
-    await userEvent.clear(field('Year'))
-    await userEvent.type(field('Year'), 'abc')
+    const options = within(field('Year')).getAllByRole('option')
 
-    expect(screen.getByText('The year is a number, like 1890.')).toBeInTheDocument()
-    expect(saveButton()).toBeDisabled()
+    expect(options).toHaveLength(2030 - 1500 + 2)
+    expect(options[0]).toHaveTextContent('—')
+    expect(options[1]).toHaveTextContent('1500')
+    expect(options[options.length - 1]).toHaveTextContent('2030')
   })
 
-  it('shows the reason when the backend refuses', async () => {
-    await open({ patchMetadata: () => new Error('Input should be less than or equal to 2030') })
+  it('opens the year list at 1900 when no year is known, and it is not saved by that alone', async () => {
+    await open({ metadata: { ...METADATA, year: null } })
+    await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
+    expect(field('Year')).toHaveValue('')
+
+    fireEvent.mouseDown(field('Year'))
+
+    expect(field('Year')).toHaveValue('1900')
+    await userEvent.selectOptions(field('Year'), '1867')
+    await userEvent.click(saveButton())
+    await screen.findByText('✓ Saved')
+    expect(metadataCalls().find((c) => c.method === 'PATCH')!.body).toEqual({ year: 1867 })
+  })
+
+  it('keeps a known year when the list is opened, and clears it with the first choice', async () => {
+    await open()
     await waitFor(() => expect(field('Year')).toHaveValue('1890'))
 
-    await userEvent.clear(field('Year'))
-    await userEvent.type(field('Year'), '2099')
-    await userEvent.click(saveButton())
+    fireEvent.mouseDown(field('Year'))
+    expect(field('Year')).toHaveValue('1890')
 
-    expect(await screen.findByText(/less than or equal to 2030/)).toBeInTheDocument()
-    expect(screen.queryByText('✓ Saved')).toBeNull()
+    await userEvent.selectOptions(field('Year'), '')
+    await userEvent.click(saveButton())
+    await screen.findByText('✓ Saved')
+    expect(metadataCalls().find((c) => c.method === 'PATCH')!.body).toEqual({ year: null })
   })
 
   it('shows why the metadata cannot be had', async () => {

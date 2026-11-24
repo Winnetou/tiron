@@ -419,8 +419,8 @@ export default function PageViewer({
             <button
               type="button"
               className="page-nav-button home"
-              aria-label="Back to the editions"
-              data-tooltip="Back to the editions"
+              aria-label="Back to the list of editions"
+              data-tooltip="Back to the list of editions"
               onClick={onBackToEditions}
             >
               <HomeIcon />
