@@ -22,6 +22,7 @@ from app.persistence.ontology import (
     SimilarPageNumbers,
     SpellingGroup,
 )
+from app.persistence.schema_creator import ensure_schema
 from app.polona.polona_connector import PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import (
@@ -100,6 +101,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Docker), the backend still starts, because everything else works without
     it: it logs a warning, and the endpoint that needs it answers 503.
     """
+    # first: without the schema nothing else is of any use (see `ensure_schema`)
+    ensure_schema(db)
     logger.info("Loading the spaCy model %s ...", MODEL_NAME)
     started = time.perf_counter()
     try:

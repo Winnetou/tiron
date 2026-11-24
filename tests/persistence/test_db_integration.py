@@ -21,6 +21,7 @@ from app.persistence.ontology import (
     Page,
     Work,
 )
+from app.persistence.schema_creator import SchemaCreator
 from app.text_tools.tei_xml import mark_section, text_to_tei_xml
 from app.view_models import CollectionEdition
 from tests.conftest import real_connect
@@ -33,7 +34,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def db(monkeypatch):
     monkeypatch.setattr("app.persistence.db.psycopg.connect", real_connect)
+    monkeypatch.setenv("PROD", "false")  # the schema is created in a test database
     database = Database()
+    SchemaCreator(database).create_schema()
     database.conn.execute(
         "TRUNCATE collection, corrections, legal_spellings, pages, editions, works"
         " RESTART IDENTITY CASCADE"

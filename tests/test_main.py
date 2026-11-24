@@ -36,6 +36,13 @@ META = {
 }
 
 
+@pytest.fixture(autouse=True)
+def no_schema_check(monkeypatch):
+    """The tests have no database: starting the backend does not look at its schema
+    (that is tested in TestSchemaAtStartup)."""
+    monkeypatch.setattr("app.main.ensure_schema", mock.Mock())
+
+
 @pytest.fixture
 def polona(monkeypatch):
     monkeypatch.setattr(
@@ -780,6 +787,54 @@ class TestNer:
         assert {"NerRequest", "NerResult", "Entity"} <= schema["components"][
             "schemas"
         ].keys()
+
+
+class TestSchemaAtStartup:
+    @pytest.fixture(autouse=True)
+    def no_models(self, monkeypatch):
+        monkeypatch.setattr("app.main.get_nlp", mock.Mock())
+        monkeypatch.setattr("app.main.get_checker", mock.Mock())
+
+    def test_the_schema_is_ensured_for_the_database_when_the_backend_starts(
+        self, monkeypatch
+    ):
+        ensure = mock.Mock()
+        monkeypatch.setattr("app.main.ensure_schema", ensure)
+
+        with TestClient(app):
+            ensure.assert_called_once_with(db)
+
+    def test_the_schema_is_ensured_before_the_models_are_loaded(self, monkeypatch):
+        events = []
+        monkeypatch.setattr(
+            "app.main.ensure_schema", lambda _db: events.append("schema")
+        )
+        monkeypatch.setattr("app.main.get_nlp", lambda: events.append("model"))
+
+        with TestClient(app):
+            pass
+
+        assert events == ["schema", "model"]
+
+    def test_the_backend_does_not_start_without_the_schema_in_production(
+        self, monkeypatch
+    ):
+        from app.persistence.schema_creator import SchemaMissing
+
+        monkeypatch.setattr(
+            "app.main.ensure_schema", mock.Mock(side_effect=SchemaMissing("no schema"))
+        )
+
+        with pytest.raises(SchemaMissing), TestClient(app):
+            pass
+
+    def test_it_is_not_ensured_without_starting_the_backend(self, monkeypatch):
+        ensure = mock.Mock()
+        monkeypatch.setattr("app.main.ensure_schema", ensure)
+
+        client.get("/openapi.json")
+
+        ensure.assert_not_called()
 
 
 class TestModelLoadedAtStartup:

@@ -1495,6 +1495,41 @@ stub.
 A page stored before pages were converted to TEI holds plain text, not XML, so
 the backend rejects it and the frontend shows that error instead of its text.
 
+### The schema of the database
+
+The SQL of the schema is in `app/persistence/schema.py` (`SCHEMA`, and `TABLES`, the
+names of the tables). `Database` does not run it.
+
+**`PROD`** is a flag for the whole app (`app/config.py`, `is_prod()`), read from the
+environment, and **true if it is not set**. Only `false`, `0`, `no` or `off` make it
+false; any other value, an empty or a misspelled one too, is true, so that a mistake
+leaves the database protected. While `PROD` is true the app does not change the
+schema of the database: in production the database user (`tiron`) has no right to
+do that, and the schema is created beforehand, by hand, from `schema.py`.
+
+**`SchemaCreator`** (`app/persistence/schema_creator.py`) has two methods:
+
+- `schema_exists()` is true if every table of the schema is in the database (the
+  tables only, not their columns);
+- `create_schema()` runs the schema (`CREATE ... IF NOT EXISTS`, so what is there is
+  left as it is). If `PROD` is true it raises `SchemaCreationForbidden` and does
+  nothing.
+
+**When the backend starts** it is the first thing it does, before the models are
+loaded (`ensure_schema` in the lifespan of `app/main.py`):
+
+| the schema is there | `PROD` | what happens |
+|---|---|---|
+| yes | any | nothing is changed |
+| no | false | it is created (and checked), and the backend starts |
+| no | true | the backend stops with `SchemaMissing`, and says why: it may not create it, and cannot work without it |
+
+The Celery worker does not look at the schema: its tasks are sent by the backend,
+which has started by then. `docker compose up` sets `PROD=false` for the backend and
+the worker (their own database is empty at first); a `PROD` in `.env` overrides it.
+For `make run` against an empty local database set `PROD=false` in `.env`. The tests
+that need the tables (`INTEGRATION_DB=1`) create them with `PROD=false`.
+
 ### The database connection
 
 The backend and the Celery worker read the connection from the environment
