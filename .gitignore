@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+# the settings of a production deployment (see .env.prod.example)
+.env.prod
 .envrc
 .venv
 env/

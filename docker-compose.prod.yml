@@ -1,0 +1,130 @@
+# Production, on a Compute Engine VM: the backend, the Celery worker, the RabbitMQ
+# broker, and Caddy in front of them (the built frontend, HTTPS, and the only ports
+# that are published). There is NO database here: it is PostgreSQL in Google Cloud (Cloud
+# SQL), reached by POSTGRES_HOST.
+#
+#   cp .env.prod.example .env.prod      (then fill it in)
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#                                       (or: make prod-up)
+#
+# What differs from docker-compose.yml (which is for development):
+#   - no `db` service, and no bind mounts of the sources: the code is in the image
+#   - the frontend is built and served by Caddy, which also does HTTPS (a Let's
+#     Encrypt certificate for SITE_ADDRESS, renewed by itself), not the Vite dev server
+#   - PROD is true, and cannot be changed from the environment: the backend does not
+#     create the schema (the database user may not change it), and does not start if
+#     it is not there. Create it by hand first (app/persistence/schema.py).
+#   - the passwords have no defaults, and nothing but Caddy is published
+x-logging: &logging
+  # the logs of a container stay on the VM's disk: keep them from filling it
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-database: &database
+  POSTGRES_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST, the Cloud SQL address}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+  # TLS to the database, if it is not in the VPC / behind the proxy; empty is unset
+  POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-}
+  POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
+  # not from the environment: production does not create the schema
+  PROD: "true"
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-tiron}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}@rabbitmq:5672//
+
+services:
+  backend:
+    build: .
+    restart: always
+    logging: *logging
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment: *database
+    # Not published: Caddy reaches it as backend:8000.
+    expose:
+      - "8000"
+    healthcheck:
+      # It answers once it has loaded the spaCy model and the dictionary: a few
+      # minutes on a cold start. /health asks the database SELECT 1 too.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+
+  celery-worker:
+    # The same image as the backend: the tasks are part of the app.
+    build: .
+    restart: always
+    logging: *logging
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - worker
+      - --loglevel=${LOG_LEVEL:-INFO}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment: *database
+
+  rabbitmq:
+    image: rabbitmq:4
+    restart: always
+    logging: *logging
+    # RabbitMQ keeps its data under the node name, which is made of the hostname:
+    # without a fixed one, a recreated container would not find its queues.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-tiron}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    # Not published: only the containers of this network reach the broker.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    # Caddy: the built app, the routes of the backend passed on to it, and HTTPS.
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: always
+    logging: *logging
+    # Only started, not healthy: the backend takes minutes to load its models, and
+    # Caddy looks it up when a request comes.
+    depends_on:
+      - backend
+    environment:
+      # A domain (tiron.example.com): HTTPS, with a Let's Encrypt certificate that
+      # Caddy gets and renews by itself. The domain must point at this VM, and the
+      # ports 80 and 443 must be open to the internet (the certificate is asked for
+      # over them). ":80": plain HTTP, no certificate (until there is a domain).
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      # The certificates and the account at Let's Encrypt. Keep them: a new volume
+      # asks for new certificates each time, and Let's Encrypt limits how many.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  rabbitmq-data:
+  caddy-data:
+  caddy-config:

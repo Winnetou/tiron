@@ -96,6 +96,65 @@ worker (`docker-compose.yml`):
 
 `make down` stops everything and keeps the data.
 
+## Production, on a Compute Engine VM
+
+`docker-compose.prod.yml` runs the backend, the Celery worker, the RabbitMQ broker
+and Caddy. **There is no database in it**: it is PostgreSQL in Google Cloud (Cloud
+SQL, on a private IP in the VM's VPC), reached through `POSTGRES_HOST`.
+
+```
+cp .env.prod.example .env.prod      # fill it in; it is not committed (chmod 600)
+make prod-up                        # docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+make prod-config                    # what compose makes of it; fails if a setting is missing
+make prod-down
+```
+
+What differs from `docker-compose.yml`, which is for development:
+
+- **No `db`, and no bind mounts**: the code is in the image, and the database is
+  Cloud SQL (`POSTGRES_HOST`, `POSTGRES_DB`, `POSTGRES_USER` and `POSTGRES_PASSWORD`
+  have no defaults, and compose refuses to start without them).
+- **`PROD` is `true` and is not read from the environment** (it is fixed in the file).
+  The backend does not create the schema, since the `tiron` user may not change it,
+  and it **does not start if the tables are missing** (`SchemaMissing`). Create them
+  by hand first, with an administrator, from `app/persistence/schema.py` (the `SCHEMA`
+  string is plain SQL), and give `tiron` `SELECT, INSERT, UPDATE, DELETE` on them.
+- **The frontend is built and served by Caddy** (`frontend/Dockerfile.prod`,
+  `frontend/Caddyfile`), not by the Vite dev server. Caddy does what the dev server's
+  proxy does: it serves the files, and passes `/editions`, `/tei`, `/ner`,
+  `/spellcheck` and `/health` to the backend. Under `/editions`, a request that asks
+  for HTML (a browser opening the address of a page) gets the app, and any other gets
+  the API. Any other address is the app, except a missing file under `/assets/`, which
+  is a 404. The backend's own docs (`/openapi.json`) are not published. Caddy looks the
+  backend up when a request comes, so it starts even while the backend is still loading
+  its models (a few minutes); until then the API answers 502. A request body over 5 MB
+  is refused.
+- **HTTPS is Caddy's**, and it is set by `SITE_ADDRESS`. With a domain
+  (`SITE_ADDRESS=tiron.example.com` in `.env.prod`) Caddy gets a Let's Encrypt
+  certificate for it by itself when it starts, renews it before it runs out (there is
+  no certbot and no cron job), and sends HTTP to HTTPS (HTTP/3 too). For that the
+  domain must have an A record pointing at the VM's static IP, and the ports 80 and
+  443 must be open to the internet in the VPC firewall: the certificate is asked for
+  over them. The certificates are kept in the `caddy-data` volume, so keep it: a new
+  volume asks for new certificates, and Let's Encrypt limits how many it gives. Without
+  `SITE_ADDRESS` (the default, `:80`) it is plain HTTP with no certificate, for
+  before there is a domain. Tried locally with a name that Caddy makes its own
+  certificate for (`SITE_ADDRESS=localhost`): HTTP is redirected (308) and HTTPS
+  answers. Let's Encrypt itself cannot be tried without a real domain.
+- **Only Caddy is published**, on the ports 80 and 443: the backend, the broker and
+  their ports are inside the compose network.
+- **Passwords have no defaults** (`RABBITMQ_PASSWORD` too), `restart: always`, and
+  the logs of each container are limited to 5 files of 10 MB, so that they do not
+  fill the disk.
+- The backend's health check is `GET /health`, which asks the database `SELECT 1`:
+  the container is unhealthy while the database cannot be reached.
+
+TLS to the database is optional (`POSTGRES_SSLMODE`, `POSTGRES_SSLROOTCERT`, see
+"The database connection"). **The app has no login**: as it is, anyone who can reach
+the port can read and edit everything, and HTTPS does not change that (it only
+encrypts). Restrict it (the firewall to your address, Identity-Aware Proxy, or a login
+in front of the app) before you rely on it.
+
 ## How it works
 
 The app shows a scan of a page next to its text, so the OCR can be corrected.
