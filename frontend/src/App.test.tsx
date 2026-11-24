@@ -8572,7 +8572,8 @@ describe('editing the metadata of the edition', () => {
   const editButton = () =>
     screen.getByRole('button', { name: 'Edit the metadata of the edition' })
   const panel = () => screen.queryByRole('dialog', { name: 'Edition metadata' })
-  const field = (name: string) => screen.getByRole('textbox', { name })
+  const field = (name: string) =>
+    screen.getByRole(name === 'Year' ? 'combobox' : 'textbox', { name })
   const saveButton = () => screen.getByRole('button', { name: 'Save' })
   const metadataCalls = () => calls.filter((c) => c.url.endsWith('/metadata'))
 
@@ -8686,7 +8687,7 @@ describe('editing the metadata of the edition', () => {
     expect(work.getByRole('textbox', { name: 'Author' })).toBeInTheDocument()
     expect(work.getByRole('textbox', { name: 'Title' })).toBeInTheDocument()
     expect(edition.getByRole('textbox', { name: 'Place' })).toBeInTheDocument()
-    expect(edition.getByRole('textbox', { name: 'Year' })).toBeInTheDocument()
+    expect(edition.getByRole('combobox', { name: 'Year' })).toBeInTheDocument()
   })
 
   it('says that the other editions of the work are changed too', async () => {
@@ -8729,27 +8730,43 @@ describe('editing the metadata of the edition', () => {
     expect(saveButton()).toBeDisabled() // nothing changed since
   })
 
-  it('does not send a year that is not a number', async () => {
+  it('picks the year from a list of 1500 to 2030, with none as the first choice', async () => {
     await open()
     await waitFor(() => expect(field('Year')).toHaveValue('1890'))
 
-    await userEvent.clear(field('Year'))
-    await userEvent.type(field('Year'), 'abc')
+    const options = within(field('Year')).getAllByRole('option')
 
-    expect(screen.getByText('The year is a number, like 1890.')).toBeInTheDocument()
-    expect(saveButton()).toBeDisabled()
+    expect(options).toHaveLength(2030 - 1500 + 2)
+    expect(options[0]).toHaveTextContent('—')
+    expect(options[1]).toHaveTextContent('1500')
+    expect(options[options.length - 1]).toHaveTextContent('2030')
   })
 
-  it('shows the reason when the backend refuses', async () => {
-    await open({ patchMetadata: () => new Error('Input should be less than or equal to 2030') })
+  it('opens the year list at 1900 when no year is known, and it is not saved by that alone', async () => {
+    await open({ metadata: { ...METADATA, year: null } })
+    await waitFor(() => expect(field('Title')).toHaveValue('Lalka'))
+    expect(field('Year')).toHaveValue('')
+
+    fireEvent.mouseDown(field('Year'))
+
+    expect(field('Year')).toHaveValue('1900')
+    await userEvent.selectOptions(field('Year'), '1867')
+    await userEvent.click(saveButton())
+    await screen.findByText('✓ Saved')
+    expect(metadataCalls().find((c) => c.method === 'PATCH')!.body).toEqual({ year: 1867 })
+  })
+
+  it('keeps a known year when the list is opened, and clears it with the first choice', async () => {
+    await open()
     await waitFor(() => expect(field('Year')).toHaveValue('1890'))
 
-    await userEvent.clear(field('Year'))
-    await userEvent.type(field('Year'), '2099')
-    await userEvent.click(saveButton())
+    fireEvent.mouseDown(field('Year'))
+    expect(field('Year')).toHaveValue('1890')
 
-    expect(await screen.findByText(/less than or equal to 2030/)).toBeInTheDocument()
-    expect(screen.queryByText('✓ Saved')).toBeNull()
+    await userEvent.selectOptions(field('Year'), '')
+    await userEvent.click(saveButton())
+    await screen.findByText('✓ Saved')
+    expect(metadataCalls().find((c) => c.method === 'PATCH')!.body).toEqual({ year: null })
   })
 
   it('shows why the metadata cannot be had', async () => {

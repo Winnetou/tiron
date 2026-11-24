@@ -156,7 +156,7 @@ one included. `PATCH /editions/{edition_id}/metadata` changes it; the body has s
   space, is cleared. The text is trimmed and white space in it becomes one space.
   The author is written the way the catalogue writes it, "Last name, First names
   (years)", which is what the main page shortens to "Prus B.".
-- **Checks**: `year` is a whole number from 1500 to 2030; `author` and `place` have at
+- **Checks**: `year` is a whole number from 1500 to 2030 (the panel picks it from a list that opens at 1900 when none is known); `author` and `place` have at
   most 300 characters, `title` 1000. Any other field (`id`, `work_id`, ...) and an empty
   body are a 422, and nothing is changed. 404 if the edition is not stored. A work is
   one per author and title (case does not matter): if another work has the new author

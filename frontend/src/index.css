@@ -90,6 +90,23 @@ main.main-page {
   line-height: 1.8;
 }
 
+.editions li a {
+  display: inline-block;
+  transform-origin: left center;
+  transition: transform 0.15s ease;
+}
+
+.editions li a:hover,
+.editions li a:focus-visible {
+  transform: scale(1.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editions li a {
+    transition: none;
+  }
+}
+
 .editions-pages {
   display: flex;
   align-items: center;
