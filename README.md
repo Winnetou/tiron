@@ -1528,7 +1528,12 @@ The Celery worker does not look at the schema: its tasks are sent by the backend
 which has started by then. `docker compose up` sets `PROD=false` for the backend and
 the worker (their own database is empty at first); a `PROD` in `.env` overrides it.
 For `make run` against an empty local database set `PROD=false` in `.env`. The tests
-that need the tables (`INTEGRATION_DB=1`) create them with `PROD=false`.
+that need the tables (`INTEGRATION_DB=1`) create them with `PROD=false`. They also
+empty the tables, so they **refuse to run (fail, not skip) unless `POSTGRES_HOST` is
+local** (`localhost`, `127.0.0.1`, `::1`, or a socket directory) **and `POSTGRES_DB`
+has "test" in its name** (`refuse_remote_database` in `tests/conftest.py`). The
+second keeps them off the development database, which is local too (it is `tiron`).
+CI's database is `test`.
 
 ### The database connection
 

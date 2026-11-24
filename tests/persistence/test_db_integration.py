@@ -1,7 +1,8 @@
 """CRUD tests against a real PostgreSQL.
 
 Skipped unless INTEGRATION_DB=1 and the POSTGRES_* variables point to a
-disposable database (tables are dropped and recreated).
+disposable database (its tables are emptied). They refuse to run unless
+POSTGRES_HOST is local (see `refuse_remote_database` in conftest.py).
 """
 
 import os
@@ -24,7 +25,7 @@ from app.persistence.ontology import (
 from app.persistence.schema_creator import SchemaCreator
 from app.text_tools.tei_xml import mark_section, text_to_tei_xml
 from app.view_models import CollectionEdition
-from tests.conftest import real_connect
+from tests.conftest import real_connect, refuse_remote_database
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("INTEGRATION_DB") != "1", reason="set INTEGRATION_DB=1"
@@ -33,6 +34,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def db(monkeypatch):
+    refuse_remote_database()  # the tables are emptied below
     monkeypatch.setattr("app.persistence.db.psycopg.connect", real_connect)
     monkeypatch.setenv("PROD", "false")  # the schema is created in a test database
     database = Database()
