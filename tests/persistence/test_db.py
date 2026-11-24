@@ -107,7 +107,7 @@ def test_database_connects_on_instantiation(monkeypatch):
     assert db.conn._conn is connect.return_value
 
 
-def test_database_creates_schema_on_instantiation(monkeypatch):
+def test_database_does_not_create_the_schema_on_instantiation(monkeypatch):
     for name, value in ENV.items():
         monkeypatch.setenv(name, value)
     connect = mock.Mock()
@@ -115,16 +115,7 @@ def test_database_creates_schema_on_instantiation(monkeypatch):
 
     Database()
 
-    sql = connect.return_value.execute.call_args.args[0]
-    for table in (
-        "works",
-        "editions",
-        "pages",
-        "corrections",
-        "collection",
-        "legal_spellings",
-    ):
-        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    connect.return_value.execute.assert_not_called()  # that is SchemaCreator's
 
 
 @pytest.mark.parametrize(

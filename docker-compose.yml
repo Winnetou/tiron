@@ -38,6 +38,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tiron}
       POSTGRES_USER: ${POSTGRES_USER:-tiron}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+      # This compose file is for development, with its own database: the backend
+      # creates the schema in it when it starts. (In production PROD is true, the
+      # default, and the schema is not created by the app.)
+      PROD: ${PROD:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # The backend sends tasks to the celery-worker through the broker.
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-tiron}:${RABBITMQ_PASSWORD:-tiron}@rabbitmq:5672//
@@ -101,6 +105,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tiron}
       POSTGRES_USER: ${POSTGRES_USER:-tiron}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD, e.g. in .env}
+      PROD: ${PROD:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./app:/app/app
