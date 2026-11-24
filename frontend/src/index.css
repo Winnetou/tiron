@@ -9,6 +9,48 @@ main {
   place-items: center;
 }
 
+/* The page of an error: the skeleton that points at the message, and the way back. */
+main.error-page {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem 2rem;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.error-page-image {
+  max-width: min(100%, 56rem);
+  max-height: 92vh;
+  height: auto;
+  object-fit: contain;
+}
+
+.error-page-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.25rem;
+  max-width: 24rem;
+}
+
+/* on a wide screen the message goes into the empty right side of the picture, which
+   is white around the skeleton, so that the finger points at it */
+@media (min-width: 70rem) {
+  .error-page-text {
+    margin-left: -12rem;
+  }
+}
+
+/* the message is in the type of the titles of the editions on the main page */
+.error-page-message {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+  color: #3a3a3a;
+}
+
 /* The main page: the list of editions, from the top of the page. */
 main.main-page {
   display: block;
@@ -87,7 +129,19 @@ main.main-page {
   padding: 0;
   list-style: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  line-height: 1.8;
+  line-height: 1.5;
+}
+
+/* a faint rule under each entry, so that where one ends is clear when it wraps */
+.editions li {
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid rgba(90, 80, 64, 0.35);
+  background: rgba(246, 239, 223, 0.55);
+}
+
+.editions li:hover,
+.editions li:focus-within {
+  background: rgba(246, 239, 223, 0.85);
 }
 
 .editions li a,

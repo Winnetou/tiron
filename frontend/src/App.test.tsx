@@ -559,6 +559,14 @@ const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
 const withoutSuggestions = () =>
   calls.filter((c) => !c.url.endsWith('/spellcheck/suggestions'))
 
+/** Click the button of the error page and say where it goes (the page is not left). */
+async function clickWayBack(name: string): Promise<string> {
+  const assign = vi.fn()
+  vi.stubGlobal('location', { ...window.location, assign })
+  await userEvent.click(screen.getByRole('button', { name }))
+  return assign.mock.calls[0]?.[0]
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
   window.history.pushState({}, '', '/')
@@ -591,17 +599,41 @@ describe('the page address', () => {
     await openPage({ page: () => new Error('Edition not found') })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
-    expect(calledUrls()).toEqual([`GET /editions/${UUID}/pages/0`]) // no TEI call
+    // no TEI call; only the check of whether the edition is stored (for the link)
+    expect(calledUrls()).toEqual([
+      `GET /editions/${UUID}/pages/0`,
+      `GET /editions/${UUID}/metadata`,
+    ])
   })
 
-  it('links back to the main page when the page cannot be loaded', async () => {
-    await openPage({ page: () => new Error('Page not found') })
+  it('links to the edition of the address, not to the main page, when the page cannot be loaded', async () => {
+    await openPage({}, 19999)
 
-    await screen.findByRole('alert')
-    expect(screen.getByRole('link', { name: 'Back to the editions' })).toHaveAttribute(
-      'href',
-      '/',
-    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.queryByRole('button', { name: 'Back to the list of editions' })).toBeNull()
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/19999`) // no redirect
+    expect(await clickWayBack('Back to the edition')).toBe(`/editions/${UUID}/pages/0`)
+  })
+
+  it('links to the main page when the edition itself is not known', async () => {
+    await openPage({ metadata: new Error('Edition not found') }, 19999)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    expect(screen.queryByRole('button', { name: 'Back to the edition' })).toBeNull()
+    expect(await clickWayBack('Back to the list of editions')).toBe('/')
+  })
+
+  it('shows the skeleton that points at the message, with the message in the type of the edition titles', async () => {
+    const { container } = render(<></>)
+    container.remove()
+    await openPage({}, 19999)
+
+    const message = await screen.findByRole('alert')
+    const page = message.closest('main')!
+    expect(page).toHaveClass('error-page')
+    expect(page).toHaveClass('review-styled') // the look of the buttons
+    expect(page.querySelector('img')).toHaveAttribute('src', '/vademecum.jpg')
+    expect(message).toHaveClass('error-page-message')
   })
 
   it('shows an error when the request fails', async () => {
@@ -613,11 +645,23 @@ describe('the page address', () => {
   })
 
   it('shows the main page for an address that is not a page', async () => {
-    window.history.pushState({}, '', '/editions/not-a-uuid/pages/3')
+    window.history.pushState({}, '', '/editions/whatever')
     fakeBackend()
     render(<App />)
 
     expect(await screen.findByRole('navigation', { name: 'Editions' })).toBeInTheDocument()
+  })
+
+  it('shows an error with a link to the main page when the edition in the address is not a uuid', async () => {
+    window.history.pushState({}, '', '/editions/not-a-uuid/pages/3')
+    fakeBackend()
+    render(<App />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
+    expect(screen.queryByRole('navigation', { name: 'Editions' })).toBeNull()
+    expect(window.location.pathname).toBe('/editions/not-a-uuid/pages/3') // no redirect
+    expect(calls).toEqual([]) // nothing to ask the backend
+    expect(await clickWayBack('Back to the list of editions')).toBe('/')
   })
 })
 
@@ -3024,7 +3068,7 @@ describe('applying a correction to the entire edition', () => {
       await correct()
       await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
 
-      await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
       expect(offer()).toBeNull()
     })
@@ -6236,9 +6280,9 @@ describe('page navigation', () => {
     await open(1)
     await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
 
-    const home = screen.getByRole('button', { name: 'Back to the editions' })
+    const home = screen.getByRole('button', { name: 'Back to the list of editions' })
     expect(home.querySelector('svg')).not.toBeNull()
-    expect(home).toHaveAttribute('data-tooltip', 'Back to the editions')
+    expect(home).toHaveAttribute('data-tooltip', 'Back to the list of editions')
     expect(getComputedStyle(home).borderRadius).toBe('50%')
 
     await userEvent.click(home)
@@ -6801,7 +6845,7 @@ describe('the missing hyphens of a page', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -7100,7 +7144,7 @@ describe('the OCR rubbish of the edition', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -7467,7 +7511,7 @@ describe('the same named entity in all its forms', () => {
     await openReview()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -8203,7 +8247,7 @@ describe('accepting spellings by their substring', () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })
@@ -8562,7 +8606,7 @@ describe('replacing a token in the edition', () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: 'Close' }))
 
-    await userEvent.click(screen.getByRole('button', { name: 'Back to the editions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the list of editions' }))
 
     expect(review()).toBeNull()
   })

@@ -1036,9 +1036,17 @@ The main page (`/`) lists the editions of the collection as links, 100 on a page
 (`/?page=2`, ...). There is no field to type a uuid in. Each link goes to the
 first page of its edition, `/editions/{uuid}/pages/0`: the address of a page in
 the browser is the same as the endpoint's, and opening it shows that page. If the
-page cannot be loaded, the reason is shown with a link back to the main page.
+page cannot be loaded (for example, the number is past the last page), the reason is
+shown, and the address stays as it is, with a link "Back to the edition" to the
+first page of the edition that is in the address (not to the main page). If that
+edition is not known either (the backend has no metadata for it), the link is "Back
+to the editions", to the main page. The same goes for an address whose edition is not
+a uuid at all (`/editions/abc/pages/0`): the error is shown, not the main page.
+The error page is a skeleton pointing its finger at the message
+(`frontend/public/vademecum.jpg`), with the message in the type of the edition titles
+on the main page and the way back as a button.
 
-On a page, a round **house** button ("Back to the editions", at the left of the
+On a page, a round **house** button ("Back to the list of editions", at the left of the
 Previous button) goes back to the main page: the frontend shows the list again
 and the address becomes `/`, with no reload.
 
