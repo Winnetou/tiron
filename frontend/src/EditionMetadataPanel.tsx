@@ -31,6 +31,8 @@ const isYear = (text: string) => text.trim() === '' || /^\d{1,4}$/.test(text.tri
 
 interface Props {
   editionId: string
+  /** Told what is known of the edition once it was saved (for what shows it). */
+  onSaved?: (metadata: EditionMetadata) => void
   onClose: () => void
 }
 
@@ -43,7 +45,11 @@ interface Props {
  * The backend is the judge of what is valid (the year from 1500 to 2030): its reason
  * is shown if it refuses.
  */
-export default function EditionMetadataPanel({ editionId, onClose }: Props) {
+export default function EditionMetadataPanel({
+  editionId,
+  onSaved,
+  onClose,
+}: Props) {
   const [loaded, setLoaded] = useState<Loaded>({ kind: 'loading' })
   const [fields, setFields] = useState<Fields>({
     author: '',
@@ -116,6 +122,7 @@ export default function EditionMetadataPanel({ editionId, onClose }: Props) {
       setFields(fieldsOf(metadata))
       setLoaded({ kind: 'done', saved: metadata })
       setDone(true)
+      onSaved?.(metadata)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Request failed')
     } finally {

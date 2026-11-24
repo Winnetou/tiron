@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { authorLabel, editionLabel, titleLabel } from './editionLabel'
+import { authorLabel, editionLabel, editionSummary, titleLabel } from './editionLabel'
 
 describe('authorLabel', () => {
   it('is the last name and the first letter of the first name', () => {
@@ -90,5 +90,40 @@ describe('editionLabel', () => {
 
   it('is the id when nothing is known of the book', () => {
     expect(editionLabel({ id, author: null, title: null })).toBe(id)
+  })
+})
+
+describe('editionSummary', () => {
+  const id = '00000000-0000-4000-8000-000000000001'
+  const prus = 'Prus, Bolesław (1847-1912)'
+
+  it('is the label, the place and the year', () => {
+    expect(
+      editionSummary({ id, author: prus, title: 'Lalka', place: 'Warszawa', year: 1890 }),
+    ).toBe('Prus B.; Lalka · Warszawa, 1890')
+  })
+
+  it('drops the full stop or comma that the catalogue leaves after the place', () => {
+    expect(
+      editionSummary({ id, author: prus, title: 'Lalka', place: 'Warszawa.', year: 1890 }),
+    ).toBe('Prus B.; Lalka · Warszawa, 1890')
+    expect(
+      editionSummary({ id, author: prus, title: 'Lalka', place: 'Kraków,', year: null }),
+    ).toBe('Prus B.; Lalka · Kraków')
+  })
+
+  it('leaves out the place or the year that is not known', () => {
+    expect(editionSummary({ id, author: prus, title: 'Lalka', place: null, year: 1890 })).toBe(
+      'Prus B.; Lalka · 1890',
+    )
+    expect(editionSummary({ id, author: prus, title: 'Lalka', place: null, year: null })).toBe(
+      'Prus B.; Lalka',
+    )
+  })
+
+  it('is the id, and the place and year, when nothing is known of the book', () => {
+    expect(editionSummary({ id, author: null, title: null, place: 'Wilno', year: 1830 })).toBe(
+      `${id} · Wilno, 1830`,
+    )
   })
 })

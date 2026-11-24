@@ -577,7 +577,13 @@ describe('the page address', () => {
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 2'))
     expect(calledUrls()[0]).toBe(`GET /editions/${UUID}/pages/2`)
-    expect(calledUrls().filter((u) => u.startsWith('GET'))).toHaveLength(1)
+    // (the page, and then what is known of its edition, for the line above the page)
+    await waitFor(() =>
+      expect(calledUrls().filter((u) => u.startsWith('GET'))).toEqual([
+        `GET /editions/${UUID}/pages/2`,
+        `GET /editions/${UUID}/metadata`,
+      ]),
+    )
     expect(window.location.pathname).toBe(`/editions/${UUID}/pages/2`)
   })
 
@@ -717,11 +723,14 @@ describe('text from the TEI XML', () => {
     await openPage()
 
     await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
-    expect(calledUrls()).toEqual([
-      `GET /editions/${UUID}/pages/0`,
-      'POST /tei/text',
-      'POST /spellcheck',
-    ])
+    await waitFor(() =>
+      expect(calledUrls()).toEqual([
+        `GET /editions/${UUID}/pages/0`,
+        'POST /tei/text',
+        'POST /spellcheck',
+        `GET /editions/${UUID}/metadata`, // for the line above the page number
+      ]),
+    )
     expect(calls[1].body).toEqual({ xml: xmlOf('text of page 0') })
   })
 
@@ -2516,11 +2525,14 @@ describe('spell check', () => {
     await openPage(spellOptions())
 
     await waitFor(() => expect(spellCalls()).toHaveLength(1))
-    expect(calledUrls()).toEqual([
-      `GET /editions/${UUID}/pages/0`,
-      'POST /tei/text',
-      'POST /spellcheck',
-    ])
+    await waitFor(() =>
+      expect(calledUrls()).toEqual([
+        `GET /editions/${UUID}/pages/0`,
+        'POST /tei/text',
+        'POST /spellcheck',
+        `GET /editions/${UUID}/metadata`, // for the line above the page number
+      ]),
+    )
   })
 
   it('sends the text, and the XML it is of (a quotation in another language is not checked)', async () => {
@@ -8571,16 +8583,85 @@ describe('editing the metadata of the edition', () => {
     await screen.findByRole('dialog', { name: 'Edition metadata' })
   }
 
-  it('has a button with an icon, next to the one that goes back to the editions', async () => {
+  const line = () => document.querySelector('.edition-line')!
+
+  it('has a button with an icon, right next to the line that says what the edition is', async () => {
     await openPage()
     await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    await waitFor(() => expect(line().querySelector('.edition-line-text')).not.toBeNull())
 
     const edit = editButton()
 
     expect(edit.querySelector('svg')).not.toBeNull()
     expect(edit).toHaveAttribute('data-tooltip', 'Edit the metadata of the edition')
-    expect(edit.previousElementSibling).toBe(
-      screen.getByRole('button', { name: 'Back to the editions' }),
+    expect(edit.previousElementSibling).toHaveClass('edition-line-text')
+    expect(edit.parentElement).toBe(line())
+  })
+
+  it('shows the short author, the short title, the place and the year above the page number', async () => {
+    await openPage({
+      metadata: {
+        ...METADATA,
+        author: 'Kraszewski, Józef Ignacy (1812-1887)',
+        title: 'Zasady geometryi dla szkół średnich i wyższych',
+        place: 'Warszawa.',
+        year: 1867,
+      },
+    })
+
+    const text = await waitFor(() => {
+      const found = line().querySelector('.edition-line-text')
+      expect(found).not.toBeNull()
+      return found!
+    })
+
+    expect(text).toHaveTextContent(
+      'Kraszewski J.; Zasady geometryi dla szkół średnich... · Warszawa, 1867',
+    )
+    // the line is above the navigation that has the page number
+    expect(line().nextElementSibling).toHaveClass('page-nav')
+    expect(line().nextElementSibling).toHaveTextContent('Page 0')
+  })
+
+  it('leaves out what is not known, and has NN for an author that is not', async () => {
+    await openPage({ metadata: { ...METADATA, author: null, place: null, year: null } })
+
+    await waitFor(() =>
+      expect(line().querySelector('.edition-line-text')).toHaveTextContent('NN; Lalka'),
+    )
+  })
+
+  it('shows no line of text, only the button, when the metadata cannot be had', async () => {
+    await openPage({ metadata: new Error('Edition not found') })
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    await waitFor(() => expect(calledUrls()).toContain(`GET /editions/${UUID}/metadata`))
+
+    expect(line().querySelector('.edition-line-text')).toBeNull()
+    expect(editButton()).toBeInTheDocument()
+  })
+
+  it('asks for the metadata once for an edition, not for each page', async () => {
+    await openPage()
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 0'))
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(pageText().textContent).toBe('text of page 1'))
+
+    expect(calls.filter((c) => c.url.endsWith('/metadata'))).toHaveLength(1)
+  })
+
+  it('shows what was saved in the panel, at once', async () => {
+    await openPage()
+    await waitFor(() => expect(line().querySelector('.edition-line-text')).not.toBeNull())
+    await userEvent.click(editButton())
+    await screen.findByRole('dialog', { name: 'Edition metadata' })
+    await waitFor(() => expect(field('Place')).toHaveValue(''))
+
+    await userEvent.type(field('Place'), 'Lwów')
+    await userEvent.click(saveButton())
+    await screen.findByText('✓ Saved')
+
+    expect(line().querySelector('.edition-line-text')).toHaveTextContent(
+      'Prus B.; Lalka · Lwów, 1890',
     )
   })
 

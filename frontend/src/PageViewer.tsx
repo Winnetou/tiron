@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode, type UIEvent } from 'react'
-import { getSpellingSuggestions, type Page } from './api'
+import { getSpellingSuggestions, type EditionMetadata, type Page } from './api'
+import { editionSummary } from './editionLabel'
 import type { EntityExample } from './EditionWideEntities'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageText from './PageText'
@@ -94,6 +95,8 @@ interface Props {
   onNext: () => void
   /** The user wants the editions (the main page) back. */
   onBackToEditions: () => void
+  /** What is known of the edition, shown above the page number; null if not known. */
+  metadata: EditionMetadata | null
   /** Open the panel where the metadata of the edition is edited. */
   onEditMetadata: () => void
   /** The named entities found in `text`; null if not recognized yet. */
@@ -176,6 +179,7 @@ export default function PageViewer({
   onPrevious,
   onNext,
   onBackToEditions,
+  metadata,
   onEditMetadata,
   entities,
   recognizing,
@@ -391,6 +395,25 @@ export default function PageViewer({
         // (scroll events do not bubble: the capture phase sees the text box's)
         onScrollCapture={followText}
       >
+        <div className="edition-line">
+          {metadata && (
+            <span
+              className="edition-line-text"
+              title={[metadata.author, metadata.title].filter(Boolean).join('; ')}
+            >
+              {editionSummary(metadata)}
+            </span>
+          )}
+          <button
+            type="button"
+            className="page-nav-button edit"
+            aria-label="Edit the metadata of the edition"
+            data-tooltip="Edit the metadata of the edition"
+            onClick={onEditMetadata}
+          >
+            <EditIcon />
+          </button>
+        </div>
         <nav className="page-nav">
           <span className="page-nav-start">
             <button
@@ -401,15 +424,6 @@ export default function PageViewer({
               onClick={onBackToEditions}
             >
               <HomeIcon />
-            </button>
-            <button
-              type="button"
-              className="page-nav-button edit"
-              aria-label="Edit the metadata of the edition"
-              data-tooltip="Edit the metadata of the edition"
-              onClick={onEditMetadata}
-            >
-              <EditIcon />
             </button>
             <button
               type="button"

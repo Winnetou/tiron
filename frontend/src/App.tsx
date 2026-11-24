@@ -6,7 +6,9 @@ import {
   joinLines,
   joinTokens,
   splitLine,
+  getEditionMetadata,
   getPage,
+  type EditionMetadata,
   type EntityMatch,
   type MissingHyphen,
   type PageNumberMatch,
@@ -144,6 +146,21 @@ export default function App() {
   const [status, setStatus] = useState<Status>(
     opens ? { kind: 'loading' } : { kind: 'idle' },
   )
+  // What is known of the open page's edition (author, title, place, year): shown above
+  // the page number. It is looked for once for an edition, and changes when edited.
+  const [metadata, setMetadata] = useState<EditionMetadata | null>(null)
+  const openEdition = status.kind === 'done' ? status.page.edition_id : null
+  useEffect(() => {
+    if (openEdition === null) return
+    let current = true
+    getEditionMetadata(openEdition)
+      .then((found) => current && setMetadata(found))
+      // without it the line is just not shown: the page is what matters
+      .catch(() => current && setMetadata(null))
+    return () => {
+      current = false
+    }
+  }, [openEdition])
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   // The entities found in a text, with the text they belong to, so that they
@@ -625,6 +642,7 @@ export default function App() {
           onPrevious={() => goToPage(page.edition_id, page.number - 1)}
           onNext={() => goToPage(page.edition_id, page.number + 1)}
           onBackToEditions={backToEditions}
+          metadata={metadata?.id === page.edition_id ? metadata : null}
           onEditMetadata={() => setEditingMetadata({ editionId: page.edition_id })}
           entities={withMarked(
             recognized?.text === text ? recognized.entities : null,
@@ -702,6 +720,7 @@ export default function App() {
         {editingMetadata && (
           <EditionMetadataPanel
             editionId={editingMetadata.editionId}
+            onSaved={setMetadata}
             onClose={() => setEditingMetadata(null)}
           />
         )}

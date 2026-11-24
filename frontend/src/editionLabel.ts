@@ -35,6 +35,27 @@ export function titleLabel(title: string | null): string {
 }
 
 /**
+ * The line above a page: what the link of the edition says (`editionLabel`) and,
+ * after a dot between, the place and the year, "Prus B.; Lalka · Warszawa, 1890". A
+ * full stop or a comma that the catalogue leaves at the end of the place
+ * ("Warszawa.") is dropped. What is not known is left out.
+ */
+export function editionSummary(edition: {
+  id: string
+  author: string | null
+  title: string | null
+  place: string | null
+  year: number | null
+}): string {
+  const place = (edition.place ?? '').replace(/[\s.,;:]+$/u, '').trim()
+  const where = [place, edition.year === null ? '' : String(edition.year)]
+    .filter(Boolean)
+    .join(', ')
+  const label = editionLabel(edition)
+  return where ? `${label} · ${where}` : label
+}
+
+/**
  * What the link of an edition says: "Author; title", the author as `authorLabel`
  * and the title as `titleLabel` ("NN" and "Bez tytułu" for what is not known). If
  * neither the author nor the title is known, the edition has no metadata yet and it

@@ -255,6 +255,36 @@ button {
 }
 
 
+/* What is known of the edition, in a line of its own at the very top of the half,
+   centered, with the button that edits it right next to it. */
+.edition-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+/* the pencil is smaller than the buttons of the navigation */
+.edition-line .page-nav-button {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.edition-line .page-nav-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.edition-line-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  color: #444;
+}
+
 .page-nav {
   display: flex;
   align-items: center;
