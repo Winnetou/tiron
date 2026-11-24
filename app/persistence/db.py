@@ -51,6 +51,7 @@ from app.persistence.ontology import (
     TokenOccurrence,
     Work,
 )
+from app.persistence.passwords import DUMMY_HASH, verify_password
 from app.text_tools.hyphens import find_missing_hyphens
 from app.text_tools.inflection import find_forms, forms_of_phrase
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
@@ -219,6 +220,21 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    # Users
+
+    def check_user(self, username: str, password: str) -> bool:
+        """Whether there is a user with this username and this password.
+
+        An unknown username and a wrong password are the same False, and take the
+        same time (the password is checked against a dummy hash when there is no
+        such user), so the answer does not say which of the two it was.
+        """
+        row = self.conn.execute(
+            "SELECT password_hash FROM users WHERE username = %s", (username,)
+        ).fetchone()
+        stored = row["password_hash"] if row else DUMMY_HASH
+        return verify_password(password, stored) and row is not None
 
     def is_reachable(self) -> bool:
         """Whether the database answers `SELECT 1`. Never raises: a database that

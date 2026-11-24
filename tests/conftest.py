@@ -13,6 +13,8 @@ real_connect = psycopg.connect
 os.environ.setdefault("POSTGRES_DB", "test")
 os.environ.setdefault("POSTGRES_USER", "test")
 os.environ.setdefault("POSTGRES_PASSWORD", "test")
+# production (the default) does not start without it
+os.environ.setdefault("SESSION_SECRET", "a-secret-for-the-tests")
 
 mock.patch("psycopg.connect").start()
 

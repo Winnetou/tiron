@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS legal_spellings (
     PRIMARY KEY (edition_id, spelling)
 );
 
+-- the people who may log in; they are added by hand (see passwords.py), there is no
+-- registration. Only a hash of the password is kept.
+CREATE TABLE IF NOT EXISTS users (
+    username text PRIMARY KEY CHECK (username <> ''),
+    password_hash text NOT NULL CHECK (password_hash <> '')
+);
+
 -- one work per (author, title), case-insensitive; unknown values never match
 CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
     ON works (lower(author), lower(title))
@@ -65,4 +72,5 @@ TABLES = (
     "corrections",
     "collection",
     "legal_spellings",
+    "users",
 )

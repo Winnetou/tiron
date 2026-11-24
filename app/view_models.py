@@ -56,6 +56,21 @@ class PageView(BaseModel):
         )
 
 
+class LoginRequest(BaseModel):
+    """The username and the password of a user. Any other field is rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=1000)
+
+
+class LoginResult(BaseModel):
+    """Who is logged in now (the session itself is a cookie)."""
+
+    username: str
+
+
 class EditionMetadataUpdate(BaseModel):
     """The metadata of an edition that can be edited: `author` and `title` (of its
     work), and `place` and `year` of the edition. A field that is not in the request

@@ -8,6 +8,7 @@ import {
   splitLine,
   ApiError,
   DEFAULT_PAGE_NUMBER,
+  LOGIN_REQUIRED,
   getEditionMetadata,
   getPage,
   type EditionMetadata,
@@ -29,6 +30,7 @@ import {
   type Page,
 } from './api'
 import EditionList from './EditionList'
+import LoginPage from './LoginPage'
 import EditionMetadataPanel from './EditionMetadataPanel'
 import { PageLoading } from './Loading'
 import {
@@ -72,6 +74,8 @@ interface PageWithText {
 
 type Status =
   | { kind: 'idle' }
+  // the backend wants a login (no session, or it has run out): the login page
+  | { kind: 'login' }
   | { kind: 'loading' }
   | ({ kind: 'done' } & PageWithText)
   // `editionId` is the edition of the address if it is stored (so it can be gone back to)
@@ -252,6 +256,12 @@ export default function App() {
       window.history.replaceState(null, '', pageUrl(editionId, number))
       setStatus({ kind: 'done', ...(await withText(page)) })
     } catch (error) {
+      // no session: the login page, and the address stays, so that after the login
+      // the same page is opened
+      if (error instanceof ApiError && error.status === 401) {
+        setStatus({ kind: 'login' })
+        return
+      }
       // "Not found" is for the page or for the edition: the edition is only gone
       // back to if it is stored (it is, when the page is the one that is missing)
       const gone =
@@ -263,6 +273,24 @@ export default function App() {
         message: errorMessage(error),
         editionId: gone ? null : editionId,
       })
+    }
+  }
+
+  // Whatever asks for a login (a page that is opened, or an action after the session
+  // has run out) is answered with the login page.
+  useEffect(() => {
+    const needLogin = () => setStatus({ kind: 'login' })
+    window.addEventListener(LOGIN_REQUIRED, needLogin)
+    return () => window.removeEventListener(LOGIN_REQUIRED, needLogin)
+  }, [])
+
+  /** After the login: open the page of the address again, or show the main page. */
+  function loggedIn() {
+    const fromAddress = pageFromPath(window.location.pathname)
+    if (fromAddress && UUID_PATTERN.test(fromAddress.editionId)) {
+      void open(fromAddress.editionId, fromAddress.number)
+    } else {
+      setStatus({ kind: 'idle' })
     }
   }
 
@@ -815,6 +843,8 @@ export default function App() {
       </>
     )
   }
+
+  if (status.kind === 'login') return <LoginPage onLoggedIn={loggedIn} />
 
   if (status.kind === 'loading') {
     return (

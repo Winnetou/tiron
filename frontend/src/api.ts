@@ -46,9 +46,22 @@ export function pageFromPath(
   return match ? { editionId: match[1], number: Number(match[2]) } : null
 }
 
+/**
+ * Sent on `window` when the backend says that a login is needed (401): no session
+ * (the user never logged in, or the session has run out). The app shows the login
+ * page then. The login itself does not send it: a wrong password is 401 too, and
+ * it is answered on the login page.
+ */
+export const LOGIN_REQUIRED = 'tiron:login-required'
+
+export const LOGIN_URL = '/auth/login'
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await (init ? fetch(url, init) : fetch(url))
   if (!response.ok) {
+    if (response.status === 401 && url !== LOGIN_URL) {
+      window.dispatchEvent(new Event(LOGIN_REQUIRED))
+    }
     let detail = response.statusText
     try {
       const body = await response.json()
@@ -59,6 +72,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, detail)
   }
   return response.json()
+}
+
+/**
+ * Calls POST /auth/login: the answer has the session cookie (the browser keeps it,
+ * the page's scripts cannot read it). Rejects with an ApiError if the username or the
+ * password is wrong (401, message "Wrong username or password").
+ */
+export function login(username: string, password: string): Promise<{ username: string }> {
+  return request<{ username: string }>(LOGIN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
 }
 
 /** An edition of the collection: its id and the metadata of its book, if known. */

@@ -17,6 +17,7 @@ export default defineConfig({
         bypass: (request) =>
           request.headers.accept?.includes('text/html') ? '/index.html' : undefined,
       },
+      '/auth': backendUrl,
       '/tei': backendUrl,
       '/ner': backendUrl,
       '/spellcheck': backendUrl,

@@ -107,6 +107,12 @@ interface Call {
 }
 
 interface Options {
+  /**
+   * Whether the user has a session. Default true. With false every endpoint but the
+   * list of editions and the login answers 401, until POST /auth/login is given the
+   * right username and password (`LOGIN`).
+   */
+  session?: boolean
   /** Pages by number; defaults to a page 0..3 whose text is "text of page N". */
   page?: (number: number) => Partial<Page> | Error
   /** Answer of POST /tei/text; defaults to the text between <p> and </p>. */
@@ -202,6 +208,9 @@ interface Options {
   sections?: (xml: string) => SectionSpan[] | Error
 }
 
+/** The user that the fake backend lets in. */
+const LOGIN = { username: 'anna', password: 'secret' }
+
 const reply = (ok: boolean, status: number, body: unknown) => ({
   ok,
   status,
@@ -232,10 +241,21 @@ function fakeBackend(options: Options = {}) {
       }
     )
   }
+  let session = options.session ?? true
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ method, url, body })
+    if (url === '/auth/login') {
+      if (body.username === LOGIN.username && body.password === LOGIN.password) {
+        session = true
+        return reply(true, 200, { username: body.username })
+      }
+      return failure(401, new Error('Wrong username or password'))
+    }
+    if (!session && !url.startsWith('/editions?page=')) {
+      return failure(401, new Error('Login required'))
+    }
     if (url.endsWith('/metadata')) {
       const stored: EditionMetadata =
         options.metadata instanceof Error
@@ -570,6 +590,123 @@ async function clickWayBack(name: string): Promise<string> {
 afterEach(() => {
   vi.unstubAllGlobals()
   window.history.pushState({}, '', '/')
+})
+
+describe('login', () => {
+  const username = () => screen.getByRole('textbox', { name: 'Username' })
+  const password = () => screen.getByLabelText('Password')
+  const logInButton = () => screen.getByRole('button', { name: 'Log in' })
+  const fill = async (name: string, secret: string) => {
+    await userEvent.type(username(), name)
+    await userEvent.type(password(), secret)
+  }
+
+  it('shows the login page, not the page, when the address needs a login', async () => {
+    await openPage({ session: false })
+
+    expect(await screen.findByRole('form', { name: 'Log in' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Page text' })).toBeNull()
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/0`) // kept
+    expect(calls.map((c) => c.url)).toEqual([`/editions/${UUID}/pages/0`])
+  })
+
+  it('has two fields and a button, the password hidden, and no error at first', async () => {
+    await openPage({ session: false })
+    await screen.findByRole('form', { name: 'Log in' })
+
+    expect(username()).toBeInTheDocument()
+    expect(password()).toHaveAttribute('type', 'password')
+    expect(logInButton()).toBeDisabled() // nothing to send yet
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('main')).toHaveClass('review-styled') // the look of the buttons
+  })
+
+  it('opens the page of the address after a login', async () => {
+    await openPage({ session: false }, 2)
+    await screen.findByRole('form', { name: 'Log in' })
+
+    await fill('anna', 'secret')
+    await userEvent.click(logInButton())
+
+    expect(await screen.findByText('text of page 2')).toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: 'Log in' })).toBeNull()
+    const login = calls.find((c) => c.url === '/auth/login')!
+    expect(login.method).toBe('POST')
+    expect(login.body).toEqual({ username: 'anna', password: 'secret' })
+    expect(window.location.pathname).toBe(`/editions/${UUID}/pages/2`)
+  })
+
+  it('logs in with Enter', async () => {
+    await openPage({ session: false })
+    await screen.findByRole('form', { name: 'Log in' })
+
+    await userEvent.type(username(), 'anna')
+    await userEvent.type(password(), 'secret{Enter}')
+
+    expect(await screen.findByText('text of page 0')).toBeInTheDocument()
+  })
+
+  it('says so with one message when the username or the password is wrong', async () => {
+    await openPage({ session: false })
+    await screen.findByRole('form', { name: 'Log in' })
+
+    await fill('anna', 'wrong')
+    await userEvent.click(logInButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Wrong username or password',
+    )
+    expect(screen.getByRole('form', { name: 'Log in' })).toBeInTheDocument()
+    expect(username()).toHaveValue('anna') // kept, to be corrected
+    expect(password()).toHaveValue('wrong')
+    expect(logInButton()).toBeEnabled() // and another try
+  })
+
+  it('tries again after a wrong password, and the message goes', async () => {
+    await openPage({ session: false })
+    await screen.findByRole('form', { name: 'Log in' })
+    await fill('anna', 'wrong')
+    await userEvent.click(logInButton())
+    await screen.findByRole('alert')
+
+    await userEvent.clear(password())
+    await userEvent.type(password(), 'secret')
+    await userEvent.click(logInButton())
+
+    expect(await screen.findByText('text of page 0')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows another failure of the login as it is', async () => {
+    await openPage({ session: false })
+    await screen.findByRole('form', { name: 'Log in' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new Error('Network down')),
+    )
+
+    await fill('anna', 'secret')
+    await userEvent.click(logInButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+  })
+
+  it('does not ask for a login on the main page', async () => {
+    openMainPage({ session: false })
+
+    expect(await screen.findByRole('navigation', { name: 'Editions' })).toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: 'Log in' })).toBeNull()
+  })
+
+  it('shows the login page when the session runs out while the page is open', async () => {
+    const backend = await openPage()
+    await screen.findByText('text of page 0')
+    backend.mockImplementation(async () => failure(401, new Error('Login required')))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    expect(await screen.findByRole('form', { name: 'Log in' })).toBeInTheDocument()
+  })
 })
 
 describe('the page address', () => {

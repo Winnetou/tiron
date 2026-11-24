@@ -22,6 +22,7 @@ from app.persistence.ontology import (
     Page,
     Work,
 )
+from app.persistence.passwords import hash_password
 from app.persistence.schema_creator import SchemaCreator
 from app.text_tools.tei_xml import mark_section, text_to_tei_xml
 from app.view_models import CollectionEdition
@@ -40,7 +41,8 @@ def db(monkeypatch):
     database = Database()
     SchemaCreator(database).create_schema()
     database.conn.execute(
-        "TRUNCATE collection, corrections, legal_spellings, pages, editions, works"
+        "TRUNCATE collection, corrections, legal_spellings, pages, editions, works,"
+        " users"
         " RESTART IDENTITY CASCADE"
     )
     yield database
@@ -589,7 +591,14 @@ class TestLegalSpellingsThroughTheEndpoint:
         import app.main as main
 
         monkeypatch.setattr(main, "db", db)
-        return TestClient(main.app)
+        client = TestClient(main.app)
+        # logged in for real: a user in the table, and the login endpoint
+        add_user(db, "anna", "secret")
+        login = client.post(
+            "/auth/login", json={"username": "anna", "password": "secret"}
+        )
+        assert login.status_code == 200
+        return client
 
     def stored(self, db):
         return db.conn.execute(
@@ -1117,3 +1126,86 @@ class TestRubbishLines:
 
     def test_none_for_an_edition_without_pages(self, db, edition):
         assert db.get_rubbish_lines(edition.id) == []
+
+
+def add_user(db, username, password):
+    db.conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+        (username, hash_password(password)),
+    )
+
+
+def test_check_user_with_the_right_password(db):
+    add_user(db, "anna", "secret")
+
+    assert db.check_user("anna", "secret") is True
+
+
+def test_check_user_with_a_wrong_password_or_an_unknown_user(db):
+    add_user(db, "anna", "secret")
+
+    assert db.check_user("anna", "Secret") is False
+    assert db.check_user("anna", "") is False
+    assert db.check_user("Anna", "secret") is False  # the username is exact
+    assert db.check_user("nobody", "secret") is False
+
+
+def test_check_user_is_not_fooled_by_sql_in_the_username(db):
+    add_user(db, "anna", "secret")
+
+    assert db.check_user("anna' OR '1'='1", "secret") is False
+    assert db.check_user("' OR 1=1 --", "x") is False
+
+
+def test_users_have_a_username_and_a_password_hash_and_nothing_else(db):
+    columns = db.conn.execute(
+        "SELECT column_name FROM information_schema.columns"
+        " WHERE table_name = 'users' ORDER BY ordinal_position"
+    ).fetchall()
+
+    assert [c["column_name"] for c in columns] == ["username", "password_hash"]
+
+
+def test_a_username_is_unique_and_neither_field_is_empty(db):
+    add_user(db, "anna", "secret")
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        add_user(db, "anna", "other")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        add_user(db, "", "secret")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.conn.execute("INSERT INTO users VALUES ('bob', '')")
+
+
+class TestLoginThroughTheEndpoint:
+    """POST /auth/login with the real database behind it."""
+
+    @pytest.fixture
+    def client(self, db, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        import app.main as main
+
+        monkeypatch.setattr(main, "db", db)
+        add_user(db, "anna", "secret")
+        return TestClient(main.app)
+
+    def login(self, client, username, password):
+        return client.post(
+            "/auth/login", json={"username": username, "password": password}
+        )
+
+    def test_a_user_in_the_table_logs_in_and_is_let_in(self, client, db, edition):
+        url = f"/editions/{edition.id}/metadata"
+        assert client.get(url).status_code == 401
+
+        assert self.login(client, "anna", "secret").json() == {"username": "anna"}
+
+        assert client.get(url).status_code == 200
+
+    def test_a_wrong_password_and_an_unknown_user_are_401(self, client):
+        wrong = self.login(client, "anna", "nope")
+        unknown = self.login(client, "bob", "secret")
+
+        assert wrong.status_code == unknown.status_code == 401
+        assert wrong.json() == unknown.json()
