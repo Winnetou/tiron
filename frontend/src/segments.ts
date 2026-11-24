@@ -66,15 +66,15 @@ const WORD = /^[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*$/u
 const MOST_PARTS = 4
 
 /**
- * The spelling of the word that `word` is part of. Usually it is the word itself,
- * but a word split over lines ("wszechświa-" / "towem": a word, a hyphen at the
- * end of the line, one line break and a word) is two tokens, and its spelling is
- * the parts put together, without the hyphen of the split ("wszechświatowem"),
- * whichever part is given. (Same rule as the backend's, which also looks at the
- * word with the hyphen kept: a word that has its own hyphen is no concern here, as
- * its hyphen was typed in the legal spelling by hand.)
+ * The parts of the word that `word` is part of, in order: usually only the word
+ * itself, but a word split over lines ("wszechświa-" / "towem": a word, a hyphen at
+ * the end of the line, one line break and a word) is two tokens (up to four parts),
+ * and either of them gives both. The hyphens of the split are not parts. (Same rule
+ * as the backend's, which also looks at the word with the hyphen kept: a word that
+ * has its own hyphen is no concern here, as it was typed in the legal spelling by
+ * hand.) A token that is no word (a hyphen, a sign) has no parts: the list is empty.
  */
-export function wholeWord(text: string, words: Word[], word: Word): string {
+export function partsOf(text: string, words: Word[], word: Word): Word[] {
   const chars = Array.from(text)
   const isPart = (at: number) => at >= 0 && at < words.length && WORD.test(words[at].text)
   // Is words[at] a part that a hyphen and a line break lead to words[at + 2]?
@@ -88,15 +88,66 @@ export function wholeWord(text: string, words: Word[], word: Word): string {
     )
   }
   const index = words.findIndex((w) => w.start === word.start && w.end === word.end)
-  if (index < 0) return word.text
+  if (index < 0 || !isPart(index)) return []
   let first = index
-  // The clicked token may be the hyphen: it has no spelling of its own.
-  if (!isPart(first)) return word.text
   while (first - 2 >= 0 && index - first < MOST_PARTS && splitAfter(first - 2)) first -= 2
   const parts = [first]
   while (parts.length < MOST_PARTS && splitAfter(parts[parts.length - 1])) {
     parts.push(parts[parts.length - 1] + 2)
   }
-  if (parts.length < 2 || !parts.includes(index)) return word.text
-  return parts.map((at) => words[at].text).join('')
+  return parts.includes(index) ? parts.map((at) => words[at]) : [words[index]]
+}
+
+/**
+ * The spelling of the word that `word` is part of: the parts put together, without
+ * the hyphens of the split ("wszechświatowem"), whichever part is given; the word
+ * itself if it is not split.
+ */
+export function wholeWord(text: string, words: Word[], word: Word): string {
+  const parts = partsOf(text, words, word)
+  return parts.length > 0 ? parts.map((part) => part.text).join('') : word.text
+}
+
+/** Where the parts of a word that is split over two pages are. */
+export interface PageBreak {
+  /** The text of the page and its words, and the first line of the next page and its words. */
+  text: string
+  words: Word[]
+  nextText: string
+  nextWords: Word[]
+}
+
+/**
+ * The spelling of a word that is split over two pages: the text of the page ends
+ * with the first part and a hyphen ("wszechświa-"), and the first line of the next
+ * page starts with the rest ("towem"). `word` is a word of the page (`side` is
+ * 'page') or of the first line of the next one ('next'), and `after`, if given, is
+ * what it becomes. The result is all the parts put together ("wszechświatowem"),
+ * or null if the word is not part of a word that is split over the pages.
+ */
+export function pageBreakWord(
+  { text, words, nextText, nextWords }: PageBreak,
+  side: 'page' | 'next',
+  word: Word,
+  after?: string,
+): string | null {
+  const content = words
+  // the page ends with a word and a hyphen, and nothing else
+  const hyphen = content[content.length - 1]
+  const last = content[content.length - 2]
+  const end = Array.from(text).slice(hyphen?.end ?? 0).join('')
+  if (!hyphen || !last || hyphen.text !== '-' || end.trim() !== '' || hyphen.start !== last.end)
+    return null
+  const first = nextWords[0]
+  if (!first || !WORD.test(first.text)) return null
+  const before = partsOf(text, words, last)
+  const rest = partsOf(nextText, nextWords, first)
+  if (before.length === 0 || rest.length === 0) return null
+  const mine = side === 'page' ? before : rest
+  if (!mine.some((part) => part.start === word.start && part.end === word.end)) return null
+  const put = (part: Word, own: Word[]) =>
+    own === mine && part.start === word.start && part.end === word.end && after !== undefined
+      ? after
+      : part.text
+  return [...before.map((part) => put(part, before)), ...rest.map((part) => put(part, rest))].join('')
 }

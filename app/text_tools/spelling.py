@@ -145,6 +145,7 @@ def check_words(
     text: str,
     legal: Collection[str] = (),
     ignore: Collection[tuple[int, int]] = (),
+    continuation: str = "",
 ) -> list[Word]:
     """Every word of `text`, in order, and whether it is spelled correctly.
 
@@ -161,7 +162,12 @@ def check_words(
     is correct, or the word with the hyphen kept ("biało-czerwony"), because the
     hyphen at the end of a line may be a hyphen of the word or a mark of the
     split. The hyphen itself is a sign, so it is correct. A word that is split
-    over pages is not looked for: only the text of one page is known here.
+    over pages is not looked for, unless the caller gives the `continuation`: the
+    text that follows (the first lines of the next page: the first one that has a
+    letter is where the word goes on, a page number above it does not count). If
+    `text` ends with the first part of a word, a hyphen, and that line starts with a
+    word, they are judged as one word, as above (the part in the continuation is
+    not returned: only the words of `text` are).
 
     `legal` are spellings that are legal in the edition the text is from: such a
     word is reported as correct even if the dictionary does not know it. ("Legal",
@@ -182,6 +188,20 @@ def check_words(
     """
     verdict = word_verdict(legal)
 
+    own_length = len(text)
+    # the first line with a letter in it: a page number or a sign above it is not
+    # where the word goes on
+    first_line = next(
+        (
+            line.strip()
+            for line in continuation.split("\n")
+            if any(character.isalpha() for character in line)
+        ),
+        "",
+    )
+    if first_line and text and not text[-1].isspace():
+        text = f"{text}\n{first_line}"
+
     tokens = tokenize(text)
     split = _split_words(text, tokens)
     whole: dict[int, bool] = {}  # the verdict of each split word, by its first part
@@ -200,7 +220,8 @@ def check_words(
         words.append(
             Word(text=word, start=match.start(), end=match.end(), correct=correct)
         )
-    logger.debug("%d words in %d characters", len(words), len(text))
+    words = [word for word in words if word.end <= own_length]
+    logger.debug("%d words in %d characters", len(words), own_length)
     return words
 
 

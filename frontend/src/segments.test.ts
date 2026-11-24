@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Entity } from './entities'
-import { buildSegments, wholeWord, type Word } from './segments'
+import { buildSegments, pageBreakWord, wholeWord, type Word } from './segments'
 
 const word = (text: string, start: number, correct = true): Word => ({
   text,
@@ -156,5 +156,37 @@ describe('wholeWord', () => {
     const same = 'wszechświa- towem'
     const w = [word('wszechświa', 0), word('-', 10), word('towem', 12)]
     expect(wholeWord(same, w, w[0])).toBe('wszechświa')
+  })
+})
+
+describe('pageBreakWord', () => {
+  const text = 'ala wszechświa-'
+  const words = [word('ala', 0), word('wszechświa', 4), word('-', 14)]
+  const nextText = 'towem ma'
+  const nextWords = [word('towem', 0), word('ma', 6)]
+  const page = { text, words, nextText, nextWords }
+
+  it('puts the part of the page and the part of the next page together, from either', () => {
+    expect(pageBreakWord(page, 'page', words[1])).toBe('wszechświatowem')
+    expect(pageBreakWord(page, 'next', nextWords[0])).toBe('wszechświatowem')
+  })
+
+  it('puts what the word becomes in its place', () => {
+    expect(pageBreakWord(page, 'page', words[1], 'wszechświa')).toBe('wszechświatowem')
+    expect(pageBreakWord(page, 'next', nextWords[0], 'tową')).toBe('wszechświatową')
+  })
+
+  it('is null for a word that is no part of it', () => {
+    expect(pageBreakWord(page, 'page', words[0])).toBeNull()
+    expect(pageBreakWord(page, 'next', nextWords[1])).toBeNull()
+  })
+
+  it('is null when the page does not end with a hyphen', () => {
+    const plain = { ...page, text: 'ala wszechświa', words: words.slice(0, 2) }
+    expect(pageBreakWord(plain, 'page', words[1])).toBeNull()
+  })
+
+  it('is null when the next page starts with no word', () => {
+    expect(pageBreakWord({ ...page, nextWords: [] }, 'page', words[1])).toBeNull()
   })
 })

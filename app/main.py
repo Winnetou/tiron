@@ -79,6 +79,7 @@ from app.text_tools.token_occurrences import InvalidToken
 from app.view_models import (
     CollectionPage,
     ContinuedWord,
+    ContinuedWordOnNextPage,
     EditionMetadataUpdate,
     EntityLabel,
     EntityTag,
@@ -594,6 +595,11 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
     reported as correct, as the dictionary is a Polish one. If `text` is not the
     text of the `xml` the response is 422.
 
+    The body may also have the `continuation`, what follows the text: the first line
+    of the next page. A word that is split over the two pages (the text ends with
+    "wszechświa-", the continuation starts with "towem") is then judged as one
+    word, and both parts get its verdict; only the words of `text` are returned.
+
     The dictionary is loaded when the backend starts (see `lifespan`). If it is
     not available the response is 503. The text may have up to 100,000
     characters, otherwise the response is 422. Nothing is stored.
@@ -613,7 +619,9 @@ def spellcheck(request: SpellcheckRequest) -> SpellcheckResult:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)
                 ) from exc
-        return SpellcheckResult(words=check_words(request.text, legal, ignore))
+        return SpellcheckResult(
+            words=check_words(request.text, legal, ignore, request.continuation)
+        )
     except SpellcheckUnavailable as exc:
         logger.error(
             "Spellcheck requested, but the dictionary is not available: %s", exc
@@ -1290,6 +1298,97 @@ def correct_continued_word(
         edition_id,
         first.start,
         second.end,
+    )
+    return PageView.from_page(page)
+
+
+@app.post(
+    "/editions/{edition_id}/pages/{number}/continued-words-on-next-page",
+    response_model=PageView,
+)
+def correct_word_continued_on_next_page(
+    edition_id: UUID,
+    number: Annotated[int, Path(ge=0)],
+    word: ContinuedWordOnNextPage,
+) -> PageView:
+    """Correct a word that goes on in the next page, as one word: the last word of
+    page `number` (`first`) and the first word of the page after it (`second`).
+
+    The body is like that of `.../continued-words`: `{"first": {"start": 9,
+    "end": 19, "before": "wszechsiia", "after": "wszechświa-"}, "second":
+    {"start": 0, "end": 6, "before": "iowymi", "after": "towymi"}}`. The offsets of
+    `first` are those of the text of page `number`, those of `second` are those of
+    the text of the next page (`POST /tei/text`). The first word must be the last
+    thing on its page, and the second the first word of its page: only white
+    space may be after the first, and before the second only a page number or
+    signs (nothing with a letter). `first.after` ends with one hyphen;
+    `second.after` may be the same as `second.before`.
+
+    Both pages are changed, and one Correction is recorded, for page `number`, for
+    the word as a whole without the hyphen (`wszechsiiaiowymi` ->
+    `wszechświatowymi`; none if that is the same), in one transaction: all of it
+    happens, or none. Nothing is made a legal spelling here.
+
+    404 if one of the two pages is not stored. 409 if the text at an offset is not
+    `before`. 422 if a page has no valid TEI XML, the words are not at the end and
+    the start of the pages, or a replacement is not acceptable. Returns the updated
+    page `number` as a PageView.
+    """
+    first, second = word.first, word.second
+    recorded = (first.before + second.before, first.after[:-1] + second.after)
+
+    def change_first(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The page has no TEI XML to correct")
+        if tei_xml_to_text(xml)[first.end :].strip():
+            raise CannotReplace("The word is not at the end of the page")
+        return replace_text_range(
+            xml, first.start, first.end, first.before, first.after
+        )
+
+    def change_second(xml: str) -> str:
+        if not xml:
+            raise InvalidTei("The next page has no TEI XML to correct")
+        # (above it there may be a page number or a sign, but no word)
+        if any(c.isalpha() for c in tei_xml_to_text(xml)[: second.start]):
+            raise CannotReplace("The word is not at the start of the next page")
+        if second.after == second.before:
+            return xml
+        return replace_text_range(
+            xml, second.start, second.end, second.before, second.after
+        )
+
+    try:
+        page = db.apply_correction_over_pages(
+            edition_id,
+            number,
+            change_first,
+            change_second,
+            recorded if recorded[0] != recorded[1] else None,
+        )
+    except TextChanged as exc:
+        logger.warning(
+            "Word continued on the next page not corrected on page %s of %s: %s",
+            number,
+            edition_id,
+            exc,
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (InvalidTei, CannotReplace) as exc:
+        logger.warning(
+            "Word continued on the next page not corrected on page %s of %s: %s",
+            number,
+            edition_id,
+            exc,
+        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if page is None:
+        logger.warning(
+            "Page %s or the next one of edition %s is not stored", number, edition_id
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    logger.info(
+        "Word continued on the next page corrected on page %s of %s", number, edition_id
     )
     return PageView.from_page(page)
 

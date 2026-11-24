@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   addLegalSpelling,
   correctContinuedWord,
+  correctContinuedWordOnNextPage,
   addToken,
   correctWord,
   joinLines,
@@ -54,7 +55,7 @@ import {
 } from './EditionWideCorrection'
 import { entityKey, type Decision, type Entity } from './entities'
 import PageViewer from './PageViewer'
-import { wholeWord, type Word } from './segments'
+import { pageBreakWord, wholeWord, type PageBreak, type Word } from './segments'
 import {
   sectionLabel,
   type SectionKind,
@@ -83,6 +84,49 @@ type Status =
   // `editionId` is the edition of the address if it is stored (so it can be gone back to)
   | { kind: 'error'; message: string; editionId: string | null }
 
+/** The first line of the next page, shown for the page `pageNumber` of an edition. */
+interface NextLineKey {
+  editionId: string
+  pageNumber: number
+  text: string
+}
+interface NextLine extends NextLineKey {
+  lead: number
+  /**
+   * Where the line that the word goes on in starts in `text` (code points): the
+   * first line with a letter, as a page number above it is not part of the word.
+   */
+  start: number
+  words: Word[] | null
+}
+
+/** Where the first line of `text` that has a letter starts (code points); 0 if none. */
+function wordLineStart(text: string): number {
+  let offset = 0
+  for (const line of text.split('\n')) {
+    if (/\p{L}/u.test(line)) return offset
+    offset += Array.from(line).length + 1
+  }
+  return 0
+}
+
+/**
+ * The first two lines of the text of the page (the first can be a page number: the
+ * word goes on in the next one), with the offset where they start.
+ */
+function firstLinesOf(text: string): { text: string; lead: number } | null {
+  const space = /^\s*/.exec(text)?.[0] ?? ''
+  const rest = text.slice(space.length)
+  let end = 0
+  let lines = 0
+  for (const match of rest.matchAll(/[^\n]+/g)) {
+    if (match[0].trim() === '') continue
+    end = match.index + match[0].trimEnd().length
+    if (++lines === 2) break
+  }
+  return lines === 0 ? null : { text: rest.slice(0, end), lead: Array.from(space).length }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed'
 }
@@ -93,7 +137,10 @@ function errorMessage(error: unknown): string {
  * shown. The backend is the only judge of whether the XML is correct: if it
  * says no, we show its reason and no text.
  */
-async function withText(page: Page): Promise<PageWithText> {
+async function withText(
+  page: Page,
+  continuation = '',
+): Promise<PageWithText> {
   let text: string
   try {
     text = await teiToText(page.content)
@@ -114,7 +161,7 @@ async function withText(page: Page): Promise<PageWithText> {
       text,
       textError: null,
       // the edition's legal spellings count as correct
-      words: await spellcheck(text, page.edition_id, page.content),
+      words: await spellcheck(text, page.edition_id, page.content, continuation),
       spellError: null,
     }
   } catch (error) {
@@ -265,13 +312,79 @@ export default function App() {
     byKey: Record<string, Decision>
   }>({ text: '', byKey: {} })
 
+  // The first line of the next page, shown under the text of the page (to judge
+  // and correct a word that goes on in the next page). It belongs to the page it
+  // follows; it is not used for any other. `words` are those of the line, with
+  // offsets in the line, and null while they are not known. `lead` is where the
+  // line starts in the text of the next page.
+  const [nextLine, setNextLine] = useState<NextLine | null>(null)
+  const nextLineRef = useRef<NextLineKey | null>(null)
+  // Counted up when the legal spellings changed, to judge the line again.
+  const [legalVersion, setLegalVersion] = useState(0)
+
+  function keepNextLine(line: NextLine | null) {
+    nextLineRef.current = line
+    setNextLine(line)
+  }
+  /** The first line of the next page, if it is shown for `page` (else ''). */
+  function continuationFor(page: Page): string {
+    const shown = nextLineRef.current
+    return shown && shown.editionId === page.edition_id && shown.pageNumber === page.number
+      ? shown.text
+      : ''
+  }
+
+  // The words of the line are judged as the words of the page's last line and the
+  // line (the two lines are judged as one text, so that a word split over the
+  // pages is one word); they are judged again when the page's text or the legal
+  // spellings change.
+  const shownText = status.kind === 'done' ? status.text : null
+  const lineText = nextLine?.text ?? null
+  const lineKey = nextLine ? `${nextLine.editionId} ${nextLine.pageNumber}` : null
+  useEffect(() => {
+    if (shownText === null || lineText === null || lineKey === null) return
+    const [editionId] = lineKey.split(' ')
+    const tail = shownText.split('\n').pop() ?? ''
+    const skipped = Array.from(tail).length + 1
+    const start = wordLineStart(lineText)
+    const wordLine = Array.from(lineText).slice(start).join('').split('\n')[0]
+    let current = true
+    // the lines on their own, and the line that the word goes on in again, after
+    // the page's last line, which is the verdict of its words
+    Promise.all([
+      spellcheck(lineText, editionId),
+      spellcheck(`${tail}\n${wordLine}`, editionId),
+    ])
+      .then(([own, joint]) => {
+        if (!current) return
+        const joined = joint
+          .filter((word) => word.start >= skipped)
+          .map((word) => ({
+            ...word,
+            start: word.start - skipped + start,
+            end: word.end - skipped + start,
+          }))
+        const words = own.map(
+          (word) =>
+            joined.find((j) => j.start === word.start && j.end === word.end) ?? word,
+        )
+        setNextLine((previous) =>
+          previous && previous.text === lineText ? { ...previous, words } : previous,
+        )
+      })
+      .catch(() => current && setNextLine((p) => (p ? { ...p, words: null } : p)))
+    return () => {
+      current = false
+    }
+  }, [shownText, lineText, lineKey, legalVersion])
+
   /** Open a page of an edition, and put its edition and number in the address. */
   async function open(editionId: string, number: number) {
     setStatus({ kind: 'loading' })
     try {
       const page = await getPage(editionId, number)
       window.history.replaceState(null, '', pageUrl(editionId, number))
-      setStatus({ kind: 'done', ...(await withText(page)) })
+      setStatus({ kind: 'done', ...(await withText(page, continuationFor(page))) })
     } catch (error) {
       // no session: the login page, and the address stays, so that after the login
       // the same page is opened
@@ -326,7 +439,8 @@ export default function App() {
     setActionError(null)
     setNotice(null)
     try {
-      const shown = await withText(await request)
+      const got = await request
+      const shown = await withText(got, continuationFor(got))
       onSuccess?.(shown.page)
       setStatus({ kind: 'done', ...shown })
     } catch (error) {
@@ -400,7 +514,7 @@ export default function App() {
       status.page.number === pageNumber
     ) {
       loadMarked(updated.content)
-      setStatus({ kind: 'done', ...(await withText(updated)) })
+      setStatus({ kind: 'done', ...(await withText(updated, continuationFor(updated))) })
     }
   }
 
@@ -421,7 +535,7 @@ export default function App() {
       status.page.edition_id === editionId &&
       status.page.number === pageNumber
     ) {
-      setStatus({ kind: 'done', ...(await withText(updated)) })
+      setStatus({ kind: 'done', ...(await withText(updated, continuationFor(updated))) })
     }
     return removed
   }
@@ -438,7 +552,7 @@ export default function App() {
       status.page.edition_id === page.editionId &&
       status.page.number === page.page
     ) {
-      setStatus({ kind: 'done', ...(await withText(updated)) })
+      setStatus({ kind: 'done', ...(await withText(updated, continuationFor(updated))) })
     }
   }
 
@@ -460,7 +574,7 @@ export default function App() {
       status.page.edition_id === editionId &&
       status.page.number === match.page_number
     ) {
-      setStatus({ kind: 'done', ...(await withText(updated)) })
+      setStatus({ kind: 'done', ...(await withText(updated, continuationFor(updated))) })
     }
   }
 
@@ -501,7 +615,7 @@ export default function App() {
       status.page.edition_id === editionId &&
       status.page.number === pageNumber
     ) {
-      setStatus({ kind: 'done', ...(await withText(updated)) })
+      setStatus({ kind: 'done', ...(await withText(updated, continuationFor(updated))) })
     }
     return warning
   }
@@ -609,14 +723,19 @@ export default function App() {
       // removed token is not a spelling, and neither is the hyphen that says that
       // a word goes on in the next line)
       if (!word.correct && after !== '' && !/\s/.test(after) && !continued) {
+        // (a word that goes on in the next page is legal as a whole)
+        const known = pageBreakOf(text, status.kind === 'done' ? status.words : null)
         try {
-          await addLegalSpelling(page.edition_id, after)
+          await addLegalSpelling(
+            page.edition_id,
+            (known && pageBreakWord(known, 'page', word, after)) ?? after,
+          )
         } catch (error) {
           legalError = errorMessage(error)
         }
       }
       // The word is corrected either way, so that is what is shown.
-      setStatus({ kind: 'done', ...(await withText(corrected)) })
+      setStatus({ kind: 'done', ...(await withText(corrected, continuationFor(corrected))) })
       // A word that became another one may be wrong in other places too (the
       // backend takes the spellings of 1 to 100 characters). Not so for a hyphen
       // that marks the word as continued on the next line, nor for a single
@@ -686,7 +805,7 @@ export default function App() {
           legalError = errorMessage(error)
         }
       }
-      setStatus({ kind: 'done', ...(await withText(corrected)) })
+      setStatus({ kind: 'done', ...(await withText(corrected, continuationFor(corrected))) })
       if (legalError) {
         setActionError(
           `The word was corrected, but not saved as a legal spelling: ${legalError}`,
@@ -708,23 +827,221 @@ export default function App() {
     setBusy(true)
     setActionError(null)
     try {
-      await addLegalSpelling(page.edition_id, wholeWord(
-          text,
-          status.kind === 'done' ? (status.words ?? []) : [],
-          word,
-        ))
-      let update: Pick<PageWithText, 'words' | 'spellError'>
-      try {
-        update = {
-          words: await spellcheck(text, page.edition_id, page.content),
-          spellError: null,
-        }
-      } catch (error) {
-        update = { words: null, spellError: errorMessage(error) }
-      }
-      setStatus((previous) =>
-        previous.kind === 'done' ? { ...previous, ...update } : previous,
+      const words = status.kind === 'done' ? status.words : null
+      const known = pageBreakOf(text, words)
+      await addLegalSpelling(
+        page.edition_id,
+        (known && pageBreakWord(known, 'page', word)) ??
+          wholeWord(text, words ?? [], word),
       )
+      setLegalVersion((version) => version + 1)
+      await respell(page, text, continuationFor(page))
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * The first line of the page after `page`, with the offset where it starts in
+   * that page's text. Rejects with the reason if there is no such page or it has
+   * no text.
+   */
+  async function loadNextLine(page: Page): Promise<NextLine> {
+    const next = await getPage(page.edition_id, page.number + 1)
+    const line = firstLinesOf(await teiToText(next.content))
+    if (!line) throw new Error('The next page has no text')
+    return {
+      editionId: page.edition_id,
+      pageNumber: page.number,
+      text: line.text,
+      lead: line.lead,
+      start: wordLineStart(line.text),
+      words: null,
+    }
+  }
+
+  /** Judge the words of the page again, with the line that follows it (if any). */
+  async function respell(page: Page, text: string, continuation: string) {
+    let update: Pick<PageWithText, 'words' | 'spellError'>
+    try {
+      update = {
+        words: await spellcheck(text, page.edition_id, page.content, continuation),
+        spellError: null,
+      }
+    } catch (error) {
+      update = { words: null, spellError: errorMessage(error) }
+    }
+    setStatus((previous) =>
+      previous.kind === 'done' && previous.text === text
+        ? { ...previous, ...update }
+        : previous,
+    )
+  }
+
+  /**
+   * Show the first line of the next page under the text (the button at the bottom
+   * of the page). The words of the page are judged again with it, so that a word
+   * that goes on in the next page is one word.
+   */
+  async function showNextLine(page: Page, text: string) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      const line = await loadNextLine(page)
+      keepNextLine(line)
+      await respell(page, text, line.text)
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function hideNextLine(page: Page, text: string) {
+    keepNextLine(null)
+    await respell(page, text, '')
+  }
+
+  /** The line that follows the page is shown again (the next page was changed). */
+  async function reloadNextLine(page: Page, text: string) {
+    const line = await loadNextLine(page)
+    keepNextLine(line)
+    await respell(page, text, line.text)
+  }
+
+  /** Where the page's text ends and the shown line starts, if both words are known. */
+  function pageBreakOf(text: string, words: Word[] | null): PageBreak | null {
+    return words && nextLine?.words
+      ? {
+          text,
+          words,
+          nextText: nextLine.text,
+          // from the line that the word goes on in
+          nextWords: nextLine.words.filter((word) => word.start >= nextLine.start),
+        }
+      : null
+  }
+
+  /** The word of the line, as the next page's text has it (its offsets). */
+  const inNextPage = (word: Word, line: NextLine): Word => ({
+    ...word,
+    start: word.start + line.lead,
+    end: word.end + line.lead,
+  })
+
+  /**
+   * A word of the line under the text is corrected: the next page changes (the
+   * same request as for any word, to that page). If it was misspelled the new
+   * spelling is made legal, the whole word if it goes on from the page.
+   */
+  async function correctInNextPage(page: Page, text: string, word: Word, after: string) {
+    const line = nextLine
+    if (!line) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      try {
+        await correctWord(page.edition_id, page.number + 1, inNextPage(word, line), after)
+      } catch (error) {
+        setActionError(errorMessage(error))
+        return
+      }
+      let legalError: string | null = null
+      if (!word.correct && after !== '' && !/\s/.test(after)) {
+        const known = pageBreakOf(text, status.kind === 'done' ? status.words : null)
+        const spelling = (known && pageBreakWord(known, 'next', word, after)) ?? after
+        try {
+          await addLegalSpelling(page.edition_id, spelling)
+        } catch (error) {
+          legalError = errorMessage(error)
+        }
+      }
+      await reloadNextLine(page, text)
+      if (legalError) {
+        setActionError(
+          `The word was corrected, but not saved as a legal spelling: ${legalError}`,
+        )
+      }
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** The spelling of a word of the line under the text is legal in the edition. */
+  async function legalizeInNextPage(page: Page, text: string, word: Word) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      const known = pageBreakOf(text, status.kind === 'done' ? status.words : null)
+      await addLegalSpelling(
+        page.edition_id,
+        (known && pageBreakWord(known, 'next', word)) ?? word.text,
+      )
+      setLegalVersion((version) => version + 1)
+      await respell(page, text, continuationFor(page))
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Have the backend correct a word that goes on in the next page as one word:
+   * `first` (the last word of the page) becomes `firstAfter` and the hyphen of the
+   * split, the first word of the line becomes `secondAfter`; both pages change and
+   * one correction is recorded. Like `continueWord`, the whole new word is made a
+   * legal spelling if either part was misspelled.
+   */
+  async function continueWordOnNextPage(
+    page: Page,
+    first: Word,
+    firstAfter: string,
+    secondAfter: string,
+  ) {
+    const line = nextLine
+    const second = line?.words?.find((word) => word.start >= line.start)
+    if (!line || !second) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      let corrected: Page
+      try {
+        corrected = await correctContinuedWordOnNextPage(
+          page.edition_id,
+          page.number,
+          first,
+          inNextPage(second, line),
+          firstAfter,
+          secondAfter,
+        )
+      } catch (error) {
+        setActionError(errorMessage(error))
+        return
+      }
+      let legalError: string | null = null
+      if (!first.correct || !second.correct) {
+        try {
+          await addLegalSpelling(
+            page.edition_id,
+            firstAfter.replace(/-+$/, '') + secondAfter,
+          )
+        } catch (error) {
+          legalError = errorMessage(error)
+        }
+      }
+      const reloaded = await loadNextLine(corrected)
+      keepNextLine(reloaded)
+      setStatus({ kind: 'done', ...(await withText(corrected, reloaded.text)) })
+      if (legalError) {
+        setActionError(
+          `The word was corrected, but not saved as a legal spelling: ${legalError}`,
+        )
+      }
     } catch (error) {
       setActionError(errorMessage(error))
     } finally {
@@ -797,6 +1114,24 @@ export default function App() {
           onContinueWord={(first, second, firstAfter, secondAfter) =>
             continueWord(page, first, second, firstAfter, secondAfter)
           }
+          nextLine={
+            nextLine &&
+            nextLine.editionId === page.edition_id &&
+            nextLine.pageNumber === page.number
+              ? {
+                  text: nextLine.text,
+                  words: nextLine.words,
+                  start: nextLine.start,
+                  onCorrectWord: (word, after) =>
+                    correctInNextPage(page, text, word, after),
+                  onLegalSpelling: (word) => legalizeInNextPage(page, text, word),
+                  onContinueWord: (first, firstAfter, secondAfter) =>
+                    continueWordOnNextPage(page, first, firstAfter, secondAfter),
+                }
+              : null
+          }
+          onShowNextLine={() => showNextLine(page, text)}
+          onHideNextLine={() => hideNextLine(page, text)}
           onJoinWords={(words) =>
             run(joinTokens(page.edition_id, page.number, words))
           }

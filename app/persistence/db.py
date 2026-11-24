@@ -487,6 +487,53 @@ class Database:
                 )
         return Page.model_validate(updated)
 
+    def apply_correction_over_pages(
+        self,
+        edition_id: UUID,
+        number: int,
+        replace: Callable[[str], str],
+        replace_next: Callable[[str], str],
+        correction: tuple[str, str] | None,
+    ) -> Page | None:
+        """Correct a word that is split over two pages: the corrected content of
+        page `number` goes through `replace`, and that of the page after it
+        (`number` + 1) through `replace_next`. The Correction (`before`, `after`),
+        if there is one, is recorded for page `number`.
+
+        All of it happens in one transaction with both rows locked (the lower
+        number first, so that two such calls cannot wait for each other): both
+        pages change and the correction is recorded, or nothing is. If a function
+        raises, nothing is changed.
+
+        Returns the updated page `number`, or None if it, or the next page, is
+        not stored.
+        """
+        with self.conn.transaction():
+            rows = self.conn.execute(
+                "SELECT * FROM pages WHERE edition_id = %s AND number IN (%s, %s) "
+                "ORDER BY number FOR UPDATE",
+                (edition_id, number, number + 1),
+            ).fetchall()
+            if len(rows) != 2:
+                return None
+            first, second = (Page.model_validate(row) for row in rows)
+            updated = None
+            for page, change in ((first, replace), (second, replace_next)):
+                row = self.conn.execute(
+                    "UPDATE pages SET xml_content_corrected = %s WHERE id = %s "
+                    "RETURNING *",
+                    (change(page.xml_content_corrected or ""), page.id),
+                ).fetchone()
+                if page is first:
+                    updated = row
+            if correction is not None:
+                self.create_correction(
+                    Correction(
+                        page_id=first.id, before=correction[0], after=correction[1]
+                    )
+                )
+        return Page.model_validate(updated)
+
     def update_page(
         self,
         edition_id: UUID,

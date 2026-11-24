@@ -79,6 +79,24 @@ const ZOOM_STEP = 50
 
 type View = SidebarView
 
+/** The first line of the next page, as the viewer shows it under the text. */
+export interface NextLineView {
+  text: string
+  /** Its words, with offsets in the line; null while they are not known. */
+  words: Word[] | null
+  /** Where the line that the word goes on in starts in the text (code points). */
+  start: number
+  /** A word of the line is corrected: it becomes `after` (in the next page). */
+  onCorrectWord: (word: Word, after: string) => void
+  /** The spelling of a word of the line is legal in the edition. */
+  onLegalSpelling: (word: Word) => void
+  /**
+   * The user corrected the last word of the page and the first word of the line
+   * as one word: what they become (the first without the hyphen).
+   */
+  onContinueWord: (first: Word, firstAfter: string, secondAfter: string) => void
+}
+
 interface Props {
   page: Page
   /** The page's text, as extracted from its TEI XML by the backend. */
@@ -114,6 +132,11 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /** The first line of the next page, when it is shown under the text. */
+  nextLine: NextLineView | null
+  /** Show / hide the first line of the next page (for a word split over the pages). */
+  onShowNextLine: () => void
+  onHideNextLine: () => void
   /**
    * The user corrected a word that goes on in the next line: the last word of a
    * line and the first of the next one, and what they become.
@@ -205,6 +228,9 @@ export default function PageViewer({
   onCorrectWord,
   onLegalSpelling,
   onContinueWord,
+  nextLine,
+  onShowNextLine,
+  onHideNextLine,
   onMarkSection,
   onCreateEntity,
   onAddToken,
@@ -498,6 +524,14 @@ export default function PageViewer({
             onCorrectWord={onCorrectWord}
             onLegalSpelling={onLegalSpelling}
             onContinueWord={view === 'correction' ? onContinueWord : undefined}
+            nextPageWord={
+              view === 'correction'
+                ? nextLine?.words?.find((word) => word.start >= nextLine.start)
+                : undefined
+            }
+            onContinueOnNextPage={
+              view === 'correction' ? nextLine?.onContinueWord : undefined
+            }
             // the closest replacements of a misspelled word, from the backend
             onSuggestSpelling={(word) =>
               getSpellingSuggestions(text, word, page.edition_id)
@@ -514,6 +548,42 @@ export default function PageViewer({
             onJoinLines={view === 'correction' ? onJoinLines : undefined}
             highlight={view === 'correction' ? highlight : null}
           />
+        )}
+        {view === 'correction' && text.trim() !== '' && (
+          <div className="next-line">
+            {nextLine ? (
+              <>
+                <div className="next-line-header">
+                  <span>The start of the next page</span>
+                  <button type="button" disabled={busy} onClick={onHideNextLine}>
+                    Hide
+                  </button>
+                </div>
+                <PageText
+                  ariaLabel="Start of the next page"
+                  text={nextLine.text}
+                  words={nextLine.words}
+                  entities={null}
+                  decisions={{}}
+                  busy={busy}
+                  onConfirm={() => {}}
+                  onReject={() => {}}
+                  onCorrectWord={nextLine.onCorrectWord}
+                  onLegalSpelling={nextLine.onLegalSpelling}
+                />
+              </>
+            ) : (
+              <button
+                type="button"
+                className="next-line-button"
+                title="Show the first line of the next page (text only), for a word that goes on there"
+                disabled={busy}
+                onClick={onShowNextLine}
+              >
+                Show start of next page
+              </button>
+            )}
+          </div>
         )}
         {view === 'text' && (
           <PageText

@@ -1282,7 +1282,9 @@ class TestSpellcheck:
                 {"text": "jey", "start": 7, "end": 10, "correct": False},
             ]
         }
-        check.assert_called_once_with("Ala ma jey", (), [])  # no edition: no legal ones
+        check.assert_called_once_with(
+            "Ala ma jey", (), [], ""
+        )  # no edition: no legal ones
 
     def test_no_words_is_an_empty_list(self, check):
         check.return_value = []
@@ -4007,3 +4009,145 @@ class TestCorrectContinuedWord:
 
         assert response.status_code == 422
         assert stored["corrections"] == []
+
+
+class TestSpellcheckContinuation:
+    def test_the_continuation_is_given_to_the_check(self, monkeypatch):
+        seen = {}
+
+        def fake(text, legal, ignore, continuation):
+            seen["continuation"] = continuation
+            return []
+
+        monkeypatch.setattr("app.main.check_words", fake)
+
+        response = client.post(
+            "/spellcheck", json={"text": "przeczy-", "continuation": "tać\nx"}
+        )
+
+        assert response.status_code == 200
+        assert seen["continuation"] == "tać\nx"
+
+    def test_it_is_empty_when_not_given(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            "app.main.check_words",
+            lambda text, legal, ignore, continuation: seen.update(c=continuation) or [],
+        )
+
+        client.post("/spellcheck", json={"text": "Ala"})
+
+        assert seen["c"] == ""
+
+
+class TestCorrectContinuedWordOnNextPage:
+    TEXT_1 = "Ala ma wszechsiia"
+    TEXT_2 = "iowymi ludzi.\nKoniec"
+    FIRST = {"start": 7, "end": 17, "before": "wszechsiia", "after": "wszechświa-"}
+    SECOND = {"start": 0, "end": 6, "before": "iowymi", "after": "towymi"}
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        edition_id = uuid4()
+        pages = {
+            n: Page(
+                edition_id=edition_id,
+                number=n,
+                raw_ocr_content=text,
+                xml_content_corrected=str(text_to_tei_xml(text)),
+            )
+            for n, text in ((4, self.TEXT_1), (5, self.TEXT_2))
+        }
+        state = {"edition_id": edition_id, "pages": pages, "corrections": []}
+
+        def apply(edition_id, number, replace, replace_next, correction):
+            if number not in pages or number + 1 not in pages:
+                return None
+            one = replace(pages[number].xml_content_corrected)
+            two = replace_next(pages[number + 1].xml_content_corrected)
+            pages[number] = pages[number].model_copy(
+                update={"xml_content_corrected": one}
+            )
+            pages[number + 1] = pages[number + 1].model_copy(
+                update={"xml_content_corrected": two}
+            )
+            if correction:
+                state["corrections"].append(correction)
+            return pages[number]
+
+        monkeypatch.setattr(
+            db, "apply_correction_over_pages", mock.Mock(side_effect=apply)
+        )
+        return state
+
+    def post(self, stored, first=None, second=None, number=4):
+        url = (
+            f"/editions/{stored['edition_id']}/pages/{number}"
+            "/continued-words-on-next-page"
+        )
+        return client.post(
+            url, json={"first": first or self.FIRST, "second": second or self.SECOND}
+        )
+
+    def text(self, stored, number):
+        return tei_xml_to_text(stored["pages"][number].xml_content_corrected)
+
+    def test_changes_both_pages_and_records_one_correction(self, stored):
+        response = self.post(stored)
+
+        assert response.status_code == 200
+        assert self.text(stored, 4) == "Ala ma wszechświa-"
+        assert self.text(stored, 5) == "towymi ludzi.\nKoniec"
+        assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświatowymi")]
+
+    def test_a_second_part_that_was_right_is_left_alone(self, stored):
+        response = self.post(stored, second=self.SECOND | {"after": "iowymi"})
+
+        assert response.status_code == 200
+        assert self.text(stored, 5) == self.TEXT_2
+        assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświaiowymi")]
+
+    def test_the_first_word_must_end_its_page(self, stored):
+        first = {"start": 3, "end": 5, "before": " m", "after": "x-"}
+        first = {"start": 4, "end": 6, "before": "ma", "after": "ma-"}
+
+        response = self.post(stored, first=first)
+
+        assert response.status_code == 422
+        assert self.text(stored, 5) == self.TEXT_2
+
+    def test_a_page_number_may_be_above_the_second_word(self, stored):
+        text = "12\niowymi ludzi."
+        stored["pages"][5] = stored["pages"][5].model_copy(
+            update={"xml_content_corrected": str(text_to_tei_xml(text))}
+        )
+        second = self.SECOND | {"start": 3, "end": 9}
+
+        response = self.post(stored, second=second)
+
+        assert response.status_code == 200
+        assert self.text(stored, 5) == "12\ntowymi ludzi."
+
+    def test_the_second_word_must_start_its_page(self, stored):
+        second = {"start": 7, "end": 12, "before": "ludzi", "after": "ludzie"}
+
+        response = self.post(stored, second=second)
+
+        assert response.status_code == 422
+        assert self.text(stored, 4) == self.TEXT_1
+        assert stored["corrections"] == []
+
+    def test_the_page_has_changed(self, stored):
+        response = self.post(stored, second=self.SECOND | {"before": "xxxxxx"})
+
+        assert response.status_code == 409
+        assert self.text(stored, 4) == self.TEXT_1
+
+    def test_there_is_no_next_page(self, stored):
+        assert self.post(stored, number=5).status_code == 404
+
+    @pytest.mark.parametrize("after", ["wszechświa", "wszechświa--", "a b-", "-"])
+    def test_the_first_word_ends_with_one_hyphen(self, stored, after):
+        response = self.post(stored, first=self.FIRST | {"after": after})
+
+        assert response.status_code == 422

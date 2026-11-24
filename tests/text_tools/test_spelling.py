@@ -624,3 +624,43 @@ class TestSuggestSpelling:
 
         with pytest.raises(SpellcheckUnavailable):
             suggest_spelling("Ala ma kótka tu", 7, 12)
+
+
+class TestWordsSplitOverPages:
+    @pytest.fixture
+    def checker(self, monkeypatch):
+        known = FakeChecker("przeczytać", "ala", "ma")
+        monkeypatch.setattr(spelling, "get_checker", lambda: known)
+        return known
+
+    def pairs(self, text, continuation):
+        return [
+            (w.text, w.correct, w.start, w.end)
+            for w in check_words(text, continuation=continuation)
+        ]
+
+    def test_the_last_part_is_judged_with_the_start_of_the_next_page(self, checker):
+        assert self.pairs("Ala ma przeczy-", "tać się\nnext line") == [
+            ("Ala", True, 0, 3),
+            ("ma", True, 4, 6),
+            ("przeczy", True, 7, 14),
+            ("-", True, 14, 15),
+        ]
+
+    def test_only_the_words_of_the_text_are_returned(self, checker):
+        assert len(check_words("Ala ma przeczy-", continuation="tać")) == 4
+
+    def test_a_wrong_word_is_wrong_joined(self, checker):
+        assert self.pairs("przeczy-", "taćx")[0][:2] == ("przeczy", False)
+
+    def test_without_the_continuation_it_is_wrong(self, checker):
+        assert self.pairs("przeczy-", "")[0][:2] == ("przeczy", False)
+
+    def test_a_page_number_above_the_word_is_skipped(self, checker):
+        assert self.pairs("Ala przeczy-", "12\ntać się")[1][:2] == ("przeczy", True)
+
+    def test_a_text_that_does_not_end_with_a_hyphen_is_not_joined(self, checker):
+        assert self.pairs("Ala przeczy", "tać")[1][:2] == ("przeczy", False)
+
+    def test_a_text_that_ends_with_a_line_break_is_not_joined(self, checker):
+        assert self.pairs("przeczy-\n", "tać")[0][:2] == ("przeczy", False)

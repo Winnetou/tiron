@@ -569,6 +569,32 @@ first part counts once.
 - "Legal spelling" on a part of a word that is already split by a hyphen at the
   end of a line saves the whole word (the parts put together), not the part.
 
+### A word that goes on in the next page
+
+Under the text of a page (correction view) a small button, **"Show start of next
+page"**, fetches the next page and shows its first two lines, as text only (the first
+is often a page number: the word goes on in the first line that has a letter in it). Its words are
+spell-checked and can be corrected like the words of the page (a correction there
+changes the next page, with the normal `corrections` request). "Hide" removes it.
+
+- **Judging.** The spell check judges one page at a time, so the last word of a page
+  ("wszechświa-") is flagged. `POST /spellcheck` takes an optional `continuation`, the
+  first line of the next page: when the text ends with a word and a hyphen and the
+  continuation starts with a word, they are judged as one word, like a word split
+  over lines. Only the words of `text` are returned. The frontend sends it once the
+  line is shown, and judges the line's words with the last line of the page.
+- **Legal spelling**, on either part, saves the parts put together
+  (`wszechświatowem`), as for a word split over lines.
+- **Correcting both parts.** On the last word of the page the editor has the
+  "Continued on next line -" button too (the line must be shown): two fields, the
+  last word and the first word of the next page, and Save. It calls
+  `POST /editions/{id}/pages/{n}/continued-words-on-next-page`, with the body of
+  `.../continued-words` (the offsets of `second` are those of the next page's text):
+  both pages change, **one** correction is recorded for the whole word (for page
+  `n`, without the hyphen), in one transaction (`Database.apply_correction_over_pages`,
+  both rows locked). 404 if there is no next page, 409 if the text changed, 422 if
+  the words are not at the end of the page and the start of the next one.
+
 ### The same mistake in the rest of the edition
 
 The OCR makes the same mistake again and again: it reads the old Polish "é" as "ć",

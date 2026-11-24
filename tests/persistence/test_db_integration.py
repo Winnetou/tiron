@@ -1093,6 +1093,70 @@ class TestApplyCorrections:
         assert db.apply_corrections(edition.id, 9, lambda xml: xml, []) is None
 
 
+class TestApplyCorrectionOverPages:
+    def pages(self, db, edition):
+        for number, text in ((1, "Ala przeczy"), (2, "tać ma")):
+            db.create_page(
+                Page(
+                    edition_id=edition.id,
+                    number=number,
+                    raw_ocr_content=text,
+                    xml_content_corrected=str(text_to_tei_xml(text)),
+                )
+            )
+
+    def recorded(self, db):
+        return [
+            (c["before"], c["after"])
+            for c in db.conn.execute("SELECT before, after FROM corrections").fetchall()
+        ]
+
+    def test_changes_both_pages_and_records_the_correction_once(self, db, edition):
+        self.pages(db, edition)
+
+        page = db.apply_correction_over_pages(
+            edition.id,
+            1,
+            lambda xml: xml.replace("przeczy", "przeczy-"),
+            lambda xml: xml.replace("tać", "tac"),
+            ("przeczytać", "przeczytac"),
+        )
+
+        assert "przeczy-" in page.xml_content_corrected
+        assert "tac" in db.get_page_by_number(edition.id, 2).xml_content_corrected
+        assert self.recorded(db) == [("przeczytać", "przeczytac")]
+
+    def test_nothing_changes_if_the_second_page_fails(self, db, edition):
+        self.pages(db, edition)
+
+        def fail(xml):
+            raise ValueError("no")
+
+        with pytest.raises(ValueError):
+            db.apply_correction_over_pages(
+                edition.id,
+                1,
+                lambda xml: xml.replace("przeczy", "przeczy-"),
+                fail,
+                ("a", "b"),
+            )
+
+        assert (
+            "przeczy-" not in db.get_page_by_number(edition.id, 1).xml_content_corrected
+        )
+        assert self.recorded(db) == []
+
+    def test_none_if_there_is_no_next_page(self, db, edition):
+        self.pages(db, edition)
+
+        assert (
+            db.apply_correction_over_pages(
+                edition.id, 2, lambda x: x, lambda x: x, None
+            )
+            is None
+        )
+
+
 class TestRubbishLines:
     def page(self, db, edition, number, text, mark=None):
         xml = str(text_to_tei_xml(text))

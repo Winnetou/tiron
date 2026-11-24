@@ -271,6 +271,7 @@ export async function spellcheck(
   text: string,
   editionId?: string,
   xml?: string,
+  continuation?: string,
 ): Promise<Word[]> {
   const { words } = await request<{ words: Word[] }>('/spellcheck', {
     method: 'POST',
@@ -281,6 +282,9 @@ export async function spellcheck(
       // the XML the text is of: a quotation in another language is not Polish,
       // so the backend does not check it
       ...(xml === undefined ? {} : { xml }),
+      // what follows the text, the first line of the next page: a word that is
+      // split over the two pages is judged as one word
+      ...(continuation ? { continuation } : {}),
     }),
   })
   return words
@@ -785,6 +789,44 @@ export function correctContinuedWord(
       },
     }),
   })
+}
+
+/**
+ * Calls POST /editions/{editionId}/pages/{number}/continued-words-on-next-page:
+ * like `correctContinuedWord`, for a word that goes on in the next page. `first`
+ * is the last word of the page, `second` the first word of the next page (its
+ * offsets are those of that page's text). Both pages change, and one correction is
+ * recorded. The updated page `number` is returned.
+ */
+export function correctContinuedWordOnNextPage(
+  editionId: string,
+  number: number,
+  first: Word,
+  second: Word,
+  firstAfter: string,
+  secondAfter: string,
+): Promise<Page> {
+  return request<Page>(
+    `${pageUrl(editionId, number)}/continued-words-on-next-page`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        first: {
+          start: first.start,
+          end: first.end,
+          before: first.text,
+          after: `${firstAfter.replace(/-+$/, '')}-`,
+        },
+        second: {
+          start: second.start,
+          end: second.end,
+          before: second.text,
+          after: secondAfter,
+        },
+      }),
+    },
+  )
 }
 
 /**

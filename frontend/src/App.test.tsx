@@ -425,6 +425,21 @@ function fakeBackend(options: Options = {}) {
       pages.set(number, updated)
       return reply(true, 200, updated)
     }
+    const overPages = url.match(/\/pages\/(\d+)\/continued-words-on-next-page$/)
+    if (overPages) {
+      const number = Number(overPages[1])
+      const one = pages.get(number) ?? pageFor(number)
+      const two = pages.get(number + 1) ?? pageFor(number + 1)
+      if (one instanceof Error) return failure(404, one)
+      if (two instanceof Error) return failure(404, two)
+      const first = { ...one, content: one.content.replace(body.first.before, body.first.after) }
+      pages.set(number, first)
+      pages.set(number + 1, {
+        ...two,
+        content: two.content.replace(body.second.before, body.second.after),
+      })
+      return reply(true, 200, first)
+    }
     const continuing = url.match(/\/pages\/(\d+)\/continued-words$/)
     if (continuing) {
       const number = Number(continuing[1])
@@ -9538,5 +9553,190 @@ describe('the bulk spelling check', () => {
     expect(review()).toBeInTheDocument()
     await userEvent.keyboard('{Escape}')
     expect(review()).toBeNull()
+  })
+})
+
+describe('a word that goes on in the next page', () => {
+  // the backend's tokens: the words, and the runs of signs (the hyphen at the end of a line)
+  const tokensOf = (text: string, wrong: string[] = []): Word[] => {
+    const tokens: Word[] = []
+    for (const match of text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*|(?:[^\w\s]|_)+/gu)) {
+      const start = [...text.slice(0, match.index)].length
+      tokens.push({
+        text: match[0],
+        start,
+        end: start + [...match[0]].length,
+        correct: !wrong.includes(match[0]),
+      })
+    }
+    return tokens
+  }
+  const PAGES = ['Ala wszechsiia', 'iowymi ludzi.\nKoniec']
+  const lineBox = () => screen.getByRole('region', { name: 'Start of the next page' })
+  const show = () => screen.getByRole('button', { name: 'Show start of next page' })
+  const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+
+  async function open(pages = PAGES, wrong = ['wszechsiia', 'iowymi']) {
+    await openPage({
+      page: (n) => ({ content: xmlOf(pages[n] ?? `text of page ${n}`) }),
+      spell: (text) => tokensOf(text, wrong),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  async function showLine() {
+    await userEvent.click(show())
+    await screen.findByRole('region', { name: 'Start of the next page' })
+    // the words of the line are known once they are marked
+    await waitFor(() => expect(lineBox().querySelector('.word')).not.toBeNull())
+  }
+
+  it('has a button that shows the start of the next page as text', async () => {
+    await open()
+
+    await showLine()
+
+    expect(lineBox().textContent).toBe('iowymi ludzi.\nKoniec')
+    expect(calls.some((c) => c.method === 'GET' && c.url === `/editions/${UUID}/pages/1`)).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Show start of next page' })).toBeNull()
+  })
+
+  it('sends the line to the spell check of the page, to judge a split word as one', async () => {
+    await open()
+
+    await showLine()
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.url === '/spellcheck' &&
+            (c.body as { text: string }).text === PAGES[0] &&
+            (c.body as { continuation: string }).continuation === 'iowymi ludzi.\nKoniec',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('shows two lines, and the word that goes on is in the first one that has letters', async () => {
+    await open(['Ala wszechświa-', '12\ntowem ludzi.\nKoniec'], ['wszechświa', 'towem'])
+    await showLine()
+
+    expect(lineBox().textContent).toBe('12\ntowem ludzi.')
+    await userEvent.click(within(lineBox()).getByText('towem', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Legal spelling' }))
+
+    await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    expect(legalCalls()[0].body).toEqual({ spelling: 'wszechświatowem' })
+  })
+
+  it('corrects both parts of a word with a page number between the pages', async () => {
+    await open(['Ala wszechsiia', '12\niowymi ludzi.'])
+    await showLine()
+
+    await userEvent.click(within(pageText()).getByText('wszechsiia', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: /Continued on next line/ }))
+    expect(screen.getByLabelText('Second part')).toHaveValue('iowymi')
+    await userEvent.clear(screen.getByLabelText('Second part'))
+    await userEvent.type(screen.getByLabelText('Second part'), 'towymi')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const url = `/editions/${UUID}/pages/0/continued-words-on-next-page`
+    await waitFor(() => expect(calls.some((c) => c.url === url)).toBe(true))
+    expect(calls.find((c) => c.url === url)!.body).toMatchObject({
+      second: { start: 3, end: 9, before: 'iowymi', after: 'towymi' },
+    })
+  })
+
+  it('hides the line again', async () => {
+    await open()
+    await showLine()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Hide' }))
+
+    expect(screen.queryByRole('region', { name: 'Start of the next page' })).toBeNull()
+    expect(show()).toBeInTheDocument()
+  })
+
+  it('shows the error when there is no next page', async () => {
+    await openPage({
+      page: (n) => (n === 0 ? { content: xmlOf('Ala') } : new Error('Page not found')),
+      spell: (text) => wordsOf(text),
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+
+    await userEvent.click(show())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+  })
+
+  it('makes the whole word legal, from the first word of the next page', async () => {
+    await open(['Ala wszechświa-', 'towem ludzi.\nKoniec'], ['wszechświa', 'towem'])
+    await showLine()
+
+    await userEvent.click(within(lineBox()).getByText('towem', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Legal spelling' }))
+
+    await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    expect(legalCalls()[0].body).toEqual({ spelling: 'wszechświatowem' })
+  })
+
+  it('makes the whole word legal, from the last word of the page', async () => {
+    await open(['Ala wszechświa-', 'towem ludzi.\nKoniec'], ['wszechświa', 'towem'])
+    await showLine()
+
+    await userEvent.click(within(pageText()).getByText('wszechświa', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Legal spelling' }))
+
+    await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    expect(legalCalls()[0].body).toEqual({ spelling: 'wszechświatowem' })
+  })
+
+  it('corrects a word of the line in the next page', async () => {
+    await open()
+    await showLine()
+
+    await userEvent.click(within(lineBox()).getByText('ludzi', { selector: '.word' }))
+    const field = screen.getByRole('textbox')
+    await userEvent.clear(field)
+    await userEvent.type(field, 'ludziom{Enter}')
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url === `/editions/${UUID}/pages/1/corrections`)).toBe(true),
+    )
+    const sent = calls.find((c) => c.url === `/editions/${UUID}/pages/1/corrections`)!
+    expect(sent.body).toEqual({ start: 7, end: 12, before: 'ludzi', after: 'ludziom' })
+  })
+
+  it('corrects the last word of the page and the first of the next as one word', async () => {
+    await open()
+    await showLine()
+
+    await userEvent.click(within(pageText()).getByText('wszechsiia', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: /Continued on next line/ }))
+    expect(screen.getByLabelText('First part')).toHaveValue('wszechsiia')
+    expect(screen.getByLabelText('Second part')).toHaveValue('iowymi')
+    await userEvent.clear(screen.getByLabelText('First part'))
+    await userEvent.type(screen.getByLabelText('First part'), 'wszechświa')
+    await userEvent.clear(screen.getByLabelText('Second part'))
+    await userEvent.type(screen.getByLabelText('Second part'), 'towymi')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const url = `/editions/${UUID}/pages/0/continued-words-on-next-page`
+    await waitFor(() => expect(calls.some((c) => c.url === url)).toBe(true))
+    expect(calls.find((c) => c.url === url)!.body).toEqual({
+      first: { start: 4, end: 14, before: 'wszechsiia', after: 'wszechświa-' },
+      second: { start: 0, end: 6, before: 'iowymi', after: 'towymi' },
+    })
+    expect(legalCalls().map((c) => c.body)).toEqual([{ spelling: 'wszechświatowymi' }])
+    await waitFor(() => expect(pageText().textContent).toBe('Ala wszechświa-'))
+  })
+
+  it('offers no such button for a word that is not the last of the page', async () => {
+    await open(['Ala wszechsiia ma', 'iowymi'])
+    await showLine()
+
+    await userEvent.click(within(pageText()).getByText('wszechsiia', { selector: '.word' }))
+
+    expect(screen.queryByRole('button', { name: /Continued on next line/ })).toBeNull()
   })
 })

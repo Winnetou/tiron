@@ -564,6 +564,20 @@ interface Props {
     secondAfter: string,
   ) => void
   /**
+   * The first word of the first line of the next page, when that is shown. The
+   * last word of the page can then be corrected together with it, as one word
+   * that goes on in the next page: `onContinueOnNextPage` is given the last word,
+   * and what it and the first word of the next page become.
+   */
+  nextPageWord?: Word | null
+  onContinueOnNextPage?: (
+    first: Word,
+    firstAfter: string,
+    secondAfter: string,
+  ) => void
+  /** The accessible name of the text (default: Page text). */
+  ariaLabel?: string
+  /**
    * The best replacements for a misspelled word, closest first: shown as buttons
    * when the word is edited. Without it there are none.
    */
@@ -629,6 +643,9 @@ export default function PageText({
   onCorrectWord,
   onLegalSpelling,
   onContinueWord,
+  nextPageWord,
+  onContinueOnNextPage,
+  ariaLabel,
   onSuggestSpelling,
   onCreateEntity,
   onAddToken,
@@ -821,15 +838,26 @@ export default function PageText({
         setEditing(null)
         onJoinLines?.(pair)
       }
-      if (continuing && next && onContinueWord) {
+      // the last word of the page, with the first word of the next page
+      const endsPage =
+        !next &&
+        nextPageWord &&
+        onContinueOnNextPage &&
+        isWord(word) &&
+        isWord(nextPageWord) &&
+        codePoints.slice(word.end).join('').trim() === ''
+      const continuable = next && onContinueWord && lineGap(word, next) === 'break'
+      if (continuing && (continuable || endsPage)) {
         return (
           <ContinuedEditor
             key={key}
             first={word}
-            second={next}
+            second={continuable ? next : nextPageWord!}
             busy={busy}
             onSubmit={(firstAfter, secondAfter) =>
-              onContinueWord(word, next, firstAfter, secondAfter)
+              continuable
+                ? onContinueWord!(word, next!, firstAfter, secondAfter)
+                : onContinueOnNextPage!(word, firstAfter, secondAfter)
             }
             onCancel={() => setEditing(null)}
           />
@@ -870,11 +898,12 @@ export default function PageText({
           nextLineKind={next ? (lineGap(word, next) ?? undefined) : undefined}
           onLegal={() => onLegalSpelling(word)}
           onContinued={
-            onContinueWord &&
-            next &&
-            lineGap(word, next) === 'break' &&
-            isWord(word) &&
-            isWord(next)
+            (onContinueWord &&
+              next &&
+              lineGap(word, next) === 'break' &&
+              isWord(word) &&
+              isWord(next)) ||
+            endsPage
               ? () => setContinued(word)
               : undefined
           }
@@ -955,7 +984,7 @@ export default function PageText({
       ref={box}
       className="page-box"
       role="region"
-      aria-label="Page text"
+      aria-label={ariaLabel ?? 'Page text'}
       tabIndex={0}
       onMouseUp={onCreateEntity ? read : undefined}
       onKeyUp={onCreateEntity ? read : undefined}

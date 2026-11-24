@@ -226,6 +226,10 @@ class SpellcheckRequest(BaseModel):
     # The TEI XML that `text` is the text of: what is in a quotation in another
     # language (<quote xml:lang="la">) is not checked, as it is not Polish.
     xml: str | None = Field(default=None, max_length=1_000_000)
+    # What follows the text: the first line of the next page. A word that is split
+    # over the two pages ("wszechświa-" at the end of the text and "towem" here) is
+    # then judged as one word. Only the words of `text` are returned.
+    continuation: str = Field(default="", max_length=10_000)
 
 
 class Word(BaseModel):
@@ -316,6 +320,28 @@ class ContinuedWord(BaseModel):
             raise ValueError("first.after must be a word and the hyphen of the split")
         if self.first.after.endswith("--") or self.second.start < self.first.end:
             raise ValueError("first.after has one hyphen, and first is before second")
+        if any(c.isspace() for c in self.first.after + self.second.after):
+            raise ValueError("The words must not contain spaces")
+        return self
+
+
+class ContinuedWordOnNextPage(BaseModel):
+    """A word that goes on in the next page, corrected as one word: `first` is the
+    last word of the page (its offsets are those of the page's text), whose
+    `after` ends with the hyphen of the split, and `second` is the first word of the
+    next page (its offsets are those of that page's text)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    first: WordPart
+    second: WordPart
+
+    @model_validator(mode="after")
+    def check_parts(self) -> ContinuedWordOnNextPage:
+        if not self.first.after.endswith("-") or len(self.first.after) < 2:
+            raise ValueError("first.after must be a word and the hyphen of the split")
+        if self.first.after.endswith("--"):
+            raise ValueError("first.after must have one hyphen")
         if any(c.isspace() for c in self.first.after + self.second.after):
             raise ValueError("The words must not contain spaces")
         return self

@@ -1487,3 +1487,26 @@ main.loading-page {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 1rem;
 }
+
+/* The first line of the next page, under the text of a page: for a word that goes on there. */
+.next-line {
+  margin-top: 0.5rem;
+}
+
+.next-line-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.next-line .page-box {
+  min-height: 0;
+  height: auto;
+  margin-top: 0.25rem;
+}
+
+.next-line-button {
+  font-size: 0.85rem;
+}
