@@ -262,7 +262,7 @@ export function SimilarMisspellings({
         role="dialog"
         aria-modal="true"
         aria-label="The same mistake in the edition"
-        className="review-box"
+        className="review-box review-styled"
       >
         <header className="review-header">
           <h2>
