@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type ReactNode,
 } from 'react'
@@ -19,6 +20,10 @@ import { buildSegments, type Segment, type Word } from './segments'
 import type { TextSelection } from './sections'
 
 const NOT_NER = 'Not NER'
+
+/** Is the token a word (letters and digits), not a run of signs? */
+const isWord = (word: Word) =>
+  /^[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*$/u.test(word.text)
 
 /** About how wide the dialog of a new entity is, to keep it inside the box. */
 const POPUP_WIDTH = 300
@@ -176,6 +181,8 @@ interface WordEditorProps {
   nextLineKind?: LineGap
   /** The spelling is legal in this edition (only offered for a misspelled word). */
   onLegal: () => void
+  /** The word goes on in the next line (only for the last word of a line). */
+  onContinued?: () => void
   /**
    * The best replacements for the word, closest first (the backend gives none for
    * a word at the start or the end of a line). Asked for a misspelled word only.
@@ -215,6 +222,7 @@ function WordEditor({
   previousLineKind = 'break',
   nextLineKind = 'break',
   onLegal,
+  onContinued,
   onSuggest,
   onCancel,
 }: WordEditorProps) {
@@ -350,6 +358,18 @@ function WordEditor({
             Join with next →
           </button>
         )}
+        {onContinued && (
+          <button
+            type="button"
+            className="join-button"
+            title="The word goes on in the next line: correct both parts"
+            disabled={busy}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onContinued}
+          >
+            Continued on next line -
+          </button>
+        )}
         {onSplitLine && (
           <button
             type="button"
@@ -399,6 +419,99 @@ function WordEditor({
   )
 }
 
+interface ContinuedEditorProps {
+  first: Word
+  second: Word
+  busy: boolean
+  onSubmit: (firstAfter: string, secondAfter: string) => void
+  onCancel: () => void
+}
+
+/**
+ * The editor of a word that goes on in the next line: two fields with a hyphen
+ * between them, the last word of the line and the first word of the next one, and
+ * a "Save" button. Nothing is sent before it, so the second part can be corrected
+ * together with the first. A hyphen typed at the end of the first part counts once.
+ * Enter in a field saves; Escape (or leaving the editor) cancels.
+ */
+function ContinuedEditor({
+  first,
+  second,
+  busy,
+  onSubmit,
+  onCancel,
+}: ContinuedEditorProps) {
+  const [firstValue, setFirstValue] = useState(first.text)
+  const [secondValue, setSecondValue] = useState(second.text)
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    input.current?.focus()
+    input.current?.select()
+  }, [])
+  const firstAfter = firstValue.trim().replace(/-+$/, '')
+  const secondAfter = secondValue.trim()
+  const valid =
+    firstAfter !== '' &&
+    secondAfter !== '' &&
+    !/\s/.test(firstAfter) &&
+    !/\s/.test(secondAfter)
+
+  function submit() {
+    if (valid && !busy) onSubmit(firstAfter, secondAfter)
+  }
+  const keys = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      submit()
+    } else if (event.key === 'Escape') {
+      event.stopPropagation()
+      onCancel()
+    }
+  }
+
+  return (
+    <span
+      className="word-editor continued-editor"
+      role="group"
+      aria-label="Word continued on the next line"
+      onBlur={(event) => {
+        if (!busy && !event.currentTarget.contains(event.relatedTarget)) onCancel()
+      }}
+    >
+      <input
+        ref={input}
+        className="word-input"
+        aria-label="First part"
+        value={firstValue}
+        size={Math.max(firstValue.length, 2)}
+        disabled={busy}
+        spellCheck={false}
+        onChange={(event) => setFirstValue(event.target.value)}
+        onKeyDown={keys}
+      />
+      <span className="continued-hyphen">-</span>
+      <input
+        className="word-input"
+        aria-label="Second part"
+        value={secondValue}
+        size={Math.max(secondValue.length, 2)}
+        disabled={busy}
+        spellCheck={false}
+        onChange={(event) => setSecondValue(event.target.value)}
+        onKeyDown={keys}
+      />
+      <button
+        type="button"
+        className="join-button"
+        disabled={busy || !valid}
+        onClick={submit}
+      >
+        Save
+      </button>
+    </span>
+  )
+}
+
 interface Props {
   text: string
   /** Every word of the text, with its verdict; null if not known. */
@@ -415,6 +528,17 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /**
+   * The user corrected a word that goes on in the next line (the last word of a
+   * line and the first of the next one): what they become, without the hyphen.
+   * Without it (outside the correction view) there is no such button.
+   */
+  onContinueWord?: (
+    first: Word,
+    second: Word,
+    firstAfter: string,
+    secondAfter: string,
+  ) => void
   /**
    * The best replacements for a misspelled word, closest first: shown as buttons
    * when the word is edited. Without it there are none.
@@ -480,6 +604,7 @@ export default function PageText({
   onReject,
   onCorrectWord,
   onLegalSpelling,
+  onContinueWord,
   onSuggestSpelling,
   onCreateEntity,
   onAddToken,
@@ -603,6 +728,9 @@ export default function PageText({
     among: Word[] | null
   } | null>(null)
   const editedWord = editing && editing.among === words ? editing.word : null
+  // The editor of a word that goes on in the next line, instead of the one word's
+  const [continued, setContinued] = useState<Word | null>(null)
+  const continuing = continued !== null && continued === editedWord
 
   const shown = (entities ?? []).filter(
     (entity) => decisions[entityKey(entity)]?.kind !== 'rejected',
@@ -645,6 +773,20 @@ export default function PageText({
         setEditing(null)
         onJoinLines?.(pair)
       }
+      if (continuing && next && onContinueWord) {
+        return (
+          <ContinuedEditor
+            key={key}
+            first={word}
+            second={next}
+            busy={busy}
+            onSubmit={(firstAfter, secondAfter) =>
+              onContinueWord(word, next, firstAfter, secondAfter)
+            }
+            onCancel={() => setEditing(null)}
+          />
+        )
+      }
       return (
         <WordEditor
           key={key}
@@ -679,6 +821,15 @@ export default function PageText({
           }
           nextLineKind={next ? (lineGap(word, next) ?? undefined) : undefined}
           onLegal={() => onLegalSpelling(word)}
+          onContinued={
+            onContinueWord &&
+            next &&
+            lineGap(word, next) === 'break' &&
+            isWord(word) &&
+            isWord(next)
+              ? () => setContinued(word)
+              : undefined
+          }
           onSuggest={onSuggestSpelling}
           onCancel={() => setEditing(null)}
         />

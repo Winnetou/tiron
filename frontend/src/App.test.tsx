@@ -417,6 +417,21 @@ function fakeBackend(options: Options = {}) {
       pages.set(number, updated)
       return reply(true, 200, updated)
     }
+    const continuing = url.match(/\/pages\/(\d+)\/continued-words$/)
+    if (continuing) {
+      const number = Number(continuing[1])
+      const page = pageFor(number)
+      if (page instanceof Error) return failure(404, page)
+      const current = pages.get(number) ?? page
+      const updated = {
+        ...current,
+        content: current.content
+          .replace(body.second.before, body.second.after)
+          .replace(body.first.before, body.first.after),
+      }
+      pages.set(number, updated)
+      return reply(true, 200, updated)
+    }
     const tagging = url.match(/\/pages\/(\d+)\/entities$/)
     const correcting = url.match(/\/pages\/(\d+)\/corrections$/)
     const sectioning = url.match(/\/pages\/(\d+)\/sections$/)
@@ -9054,5 +9069,84 @@ describe('suggestions for a misspelled word', () => {
     expect(suggestionButtons()).toEqual([])
     expect(screen.getByRole('textbox', { name: /^Correct / })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('a word that goes on in the next line', () => {
+  const TEXT = 'Ala wszechsiia\niowymi ludzi.\nKoniec'
+  const continuedCalls = () => calls.filter((c) => c.url.endsWith('/continued-words'))
+  const button = () => screen.queryByRole('button', { name: /Continued on next line/ })
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text, ['wszechsiia', 'iowymi']),
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+  }
+  const edit = (word: string) =>
+    userEvent.click(screen.getByText(word, { selector: '.word' }))
+
+  it('is offered for the last word of a line only', async () => {
+    await open()
+
+    await edit('wszechsiia')
+    expect(button()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('Ala')
+    expect(button()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('iowymi') // followed by a space
+    expect(button()).toBeNull()
+  })
+
+  it('shows two fields with both parts, and sends nothing before Save', async () => {
+    await open()
+    await edit('wszechsiia')
+
+    await userEvent.click(button()!)
+
+    expect(screen.getByLabelText('First part')).toHaveValue('wszechsiia')
+    expect(screen.getByLabelText('Second part')).toHaveValue('iowymi')
+    expect(continuedCalls()).toHaveLength(0)
+  })
+
+  it('saves both parts at once, with one hyphen, and makes the whole word legal', async () => {
+    await open()
+    await edit('wszechsiia')
+    await userEvent.click(button()!)
+
+    await userEvent.clear(screen.getByLabelText('First part'))
+    await userEvent.type(screen.getByLabelText('First part'), 'wszechświa-')
+    await userEvent.clear(screen.getByLabelText('Second part'))
+    await userEvent.type(screen.getByLabelText('Second part'), 'towymi')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(continuedCalls()).toHaveLength(1))
+    expect(continuedCalls()[0].body).toEqual({
+      first: { start: 4, end: 14, before: 'wszechsiia', after: 'wszechświa-' },
+      second: { start: 15, end: 21, before: 'iowymi', after: 'towymi' },
+    })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('Ala wszechświa-\ntowymi ludzi.\nKoniec'),
+    )
+    expect(calls.filter((c) => c.url.endsWith('/corrections'))).toHaveLength(0)
+    expect(
+      calls.filter((c) => c.url.endsWith('/legal-spellings')).map((c) => c.body),
+    ).toEqual([{ spelling: 'wszechświatowymi' }])
+  })
+
+  it('cancels with Escape, and sends nothing', async () => {
+    await open()
+    await edit('wszechsiia')
+    await userEvent.click(button()!)
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(screen.queryByLabelText('First part')).toBeNull()
+    expect(continuedCalls()).toHaveLength(0)
   })
 })

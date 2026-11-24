@@ -540,6 +540,35 @@ correction:
   before are no longer valid: check the spelling again (the frontend does).
 - This replaces the earlier `POST /corrections` stub (which returned 501).
 
+### A word that goes on in the next line
+
+A word split over two lines needs both parts corrected before the correction makes
+sense (`wszechsiia` / `iowymi` is `wszechświa-` / `towymi`, not
+`wszechświaiowymi`), and the frontend cannot know whether the second part is to be
+corrected too. So the editor of the last word of a line has a **"Continued on next
+line -"** button: it opens two fields, the two parts, with a hyphen between them,
+and a "Save" button. Nothing is sent before Save. A hyphen typed at the end of the
+first part counts once.
+
+`POST /editions/{edition_id}/pages/{number}/continued-words` saves it:
+
+```json
+{"first": {"start": 9, "end": 19, "before": "wszechsiia", "after": "wszechświa-"},
+ "second": {"start": 20, "end": 26, "before": "iowymi", "after": "towymi"}}
+```
+
+- Only one line break may be between the words, and `first.after` ends with one
+  hyphen. `second.after` may be the same as `second.before`, if that part was right.
+- Both words are replaced in the XML and **one** correction is recorded for the
+  whole word, without the hyphen: `wszechsiiaiowymi` -> `wszechświatowymi` (none if
+  that is the same), in one transaction. 409 if the page has changed, 422 if the
+  words are not on two lines or a part is not acceptable, 404 if the page is not
+  stored.
+- The frontend then makes the whole new word a legal spelling, if either part was
+  misspelled. A word split over pages is not handled.
+- "Legal spelling" on a part of a word that is already split by a hyphen at the
+  end of a line saves the whole word (the parts put together), not the part.
+
 ### The same mistake in the rest of the edition
 
 The OCR makes the same mistake again and again: it reads the old Polish "é" as "ć",

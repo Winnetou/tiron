@@ -114,6 +114,16 @@ interface Props {
   onCorrectWord: (word: Word, after: string) => void
   /** The user says the spelling of a misspelled word is legal in the edition. */
   onLegalSpelling: (word: Word) => void
+  /**
+   * The user corrected a word that goes on in the next line: the last word of a
+   * line and the first of the next one, and what they become.
+   */
+  onContinueWord: (
+    first: Word,
+    second: Word,
+    firstAfter: string,
+    secondAfter: string,
+  ) => void
   /** The user double-clicked a place of the text and typed a token for it. */
   onAddToken: (position: number, token: string) => void
   /** Join two neighbouring words that the OCR split: the space between goes. */
@@ -189,6 +199,7 @@ export default function PageViewer({
   onRejectEntity,
   onCorrectWord,
   onLegalSpelling,
+  onContinueWord,
   onMarkSection,
   onCreateEntity,
   onAddToken,
@@ -473,6 +484,7 @@ export default function PageViewer({
             onReject={onRejectEntity}
             onCorrectWord={onCorrectWord}
             onLegalSpelling={onLegalSpelling}
+            onContinueWord={view === 'correction' ? onContinueWord : undefined}
             // the closest replacements of a misspelled word, from the backend
             onSuggestSpelling={(word) =>
               getSpellingSuggestions(text, word, page.edition_id)

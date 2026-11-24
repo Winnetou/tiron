@@ -3728,3 +3728,96 @@ class TestTokenOccurrences:
         assert {"PageTokenOccurrences", "TokenOccurrence"} <= schema["components"][
             "schemas"
         ].keys()
+
+
+class TestCorrectContinuedWord:
+    TEXT = "Ala wszechsiia\niowymi ludźmi.\nKoniec."
+    XML = str(text_to_tei_xml(TEXT))
+    FIRST = (4, 14, "wszechsiia")
+    SECOND = (15, 21, "iowymi")
+
+    def body(self, first_after="wszechświa-", second_after="towymi"):
+        (a, b, c), (d, e, f) = self.FIRST, self.SECOND
+        return {
+            "first": {"start": a, "end": b, "before": c, "after": first_after},
+            "second": {"start": d, "end": e, "before": f, "after": second_after},
+        }
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        state = {
+            "page": Page(
+                edition_id=uuid4(),
+                number=4,
+                raw_ocr_content=self.TEXT,
+                xml_content_corrected=self.XML,
+            ),
+            "corrections": [],
+        }
+
+        def apply(edition_id, number, replace, corrections):
+            page = state["page"]
+            if (edition_id, number) != (page.edition_id, page.number):
+                return None
+            new_xml = replace(page.xml_content_corrected or "")
+            state["page"] = page.model_copy(update={"xml_content_corrected": new_xml})
+            state["corrections"].extend(corrections)
+            return state["page"]
+
+        monkeypatch.setattr(db, "apply_corrections", mock.Mock(side_effect=apply))
+        return state
+
+    def post(self, stored, body, number=4):
+        url = f"/editions/{stored['page'].edition_id}/pages/{number}/continued-words"
+        return client.post(url, json=body)
+
+    def test_replaces_both_words_and_records_one_correction(self, stored):
+        response = self.post(stored, self.body())
+
+        assert response.status_code == 200
+        text = tei_xml_to_text(stored["page"].xml_content_corrected)
+        assert text == "Ala wszechświa-\ntowymi ludźmi.\nKoniec."
+        assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświatowymi")]
+
+    def test_a_second_part_that_was_right_stays_as_it_is(self, stored):
+        body = self.body(second_after="iowymi")
+
+        assert self.post(stored, body).status_code == 200
+        text = tei_xml_to_text(stored["page"].xml_content_corrected)
+        assert text == "Ala wszechświa-\niowymi ludźmi.\nKoniec."
+        assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświaiowymi")]
+
+    def test_nothing_is_recorded_when_the_word_does_not_change(self, stored):
+        body = self.body(first_after="wszechsiia-", second_after="iowymi")
+
+        assert self.post(stored, body).status_code == 200
+        assert stored["corrections"] == []
+
+    def test_the_words_must_be_on_two_lines(self, stored):
+        body = self.body()
+        body["second"] |= {"start": 20, "end": 26, "before": "ludźmi"}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 422
+        assert stored["page"].xml_content_corrected == self.XML
+
+    def test_the_page_has_changed(self, stored):
+        body = self.body()
+        body["second"]["before"] = "xxxxxx"
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 409
+        assert stored["page"].xml_content_corrected == self.XML
+        assert stored["corrections"] == []
+
+    def test_page_not_stored(self, stored):
+        assert self.post(stored, self.body(), number=9).status_code == 404
+
+    @pytest.mark.parametrize("first_after", ["wszechświa", "-", "wszechświa--", "a b-"])
+    def test_the_first_word_ends_with_one_hyphen(self, stored, first_after):
+        response = self.post(stored, self.body(first_after=first_after))
+
+        assert response.status_code == 422
+        assert stored["corrections"] == []

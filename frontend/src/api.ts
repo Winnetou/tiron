@@ -726,6 +726,43 @@ export function correctWord(
 }
 
 /**
+ * Calls POST /editions/{editionId}/pages/{number}/continued-words: the backend
+ * corrects a word that goes on in the next line as one word. `first` is the last
+ * word of a line, which becomes `firstAfter` and the hyphen of the split (one
+ * hyphen, whether or not it is in `firstAfter`), and `second` is the first word
+ * of the next line, which becomes `secondAfter`. One correction is recorded: the
+ * two words as they were, joined, to the corrected ones, joined (no hyphen). The
+ * updated page is returned.
+ */
+export function correctContinuedWord(
+  editionId: string,
+  number: number,
+  first: Word,
+  second: Word,
+  firstAfter: string,
+  secondAfter: string,
+): Promise<Page> {
+  return request<Page>(`${pageUrl(editionId, number)}/continued-words`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      first: {
+        start: first.start,
+        end: first.end,
+        before: first.text,
+        after: `${firstAfter.replace(/-+$/, '')}-`,
+      },
+      second: {
+        start: second.start,
+        end: second.end,
+        before: second.text,
+        after: secondAfter,
+      },
+    }),
+  })
+}
+
+/**
  * Calls POST /editions/{editionId}/pages/{number}/sections: the backend marks
  * the selected text as a section of the page (a header, a footer, the page
  * number or the table of contents) in the XML of the page, saves it, and returns
