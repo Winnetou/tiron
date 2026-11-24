@@ -269,6 +269,24 @@ class TestEditionMetadata:
         assert client.get("/editions/not-a-uuid/metadata").status_code == 422
 
 
+class TestHealth:
+    def test_ok_when_the_database_answers(self, monkeypatch):
+        monkeypatch.setattr(db, "is_reachable", mock.Mock(return_value=True))
+
+        response = client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "database": "ok"}
+
+    def test_503_when_the_database_cannot_be_reached(self, monkeypatch):
+        monkeypatch.setattr(db, "is_reachable", mock.Mock(return_value=False))
+
+        response = client.get("/health")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "The database is not reachable"
+
+
 class TestListEditions:
     @pytest.fixture
     def collection(self, monkeypatch):
