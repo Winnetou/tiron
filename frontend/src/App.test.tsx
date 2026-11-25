@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -3192,6 +3193,34 @@ describe('applying a correction to the entire edition', () => {
       expect(offer()).toBeNull()
     })
 
+    describe('a change that is too small', () => {
+      it('is no reason for an offer when a single character is replaced', async () => {
+        await open()
+
+        await correct('a', 'o')
+
+        await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+        expect(offer()).toBeNull()
+      })
+
+      it('is no reason for an offer when a word is replaced with a single character', async () => {
+        await open()
+
+        await correct('jćj', 'j')
+
+        await waitFor(() => expect(correctionCalls()).toHaveLength(1))
+        expect(offer()).toBeNull()
+      })
+
+      it('is an offer when one character of a longer word is changed', async () => {
+        await open()
+
+        await correct('jćj', 'jéj')
+
+        expect(await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })).toBeInTheDocument()
+      })
+    })
+
     it('is not there when the correction fails', async () => {
       await open({ correct: () => new Error('The page has changed') })
 
@@ -3199,6 +3228,57 @@ describe('applying a correction to the entire edition', () => {
 
       expect(await screen.findByRole('alert')).toHaveTextContent('The page has changed')
       expect(offer()).toBeNull()
+    })
+
+    describe('when nobody answers', () => {
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      const openFake = async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true })
+        await open()
+        await correct()
+        await screen.findByRole('dialog', { name: 'Apply the correction to the entire edition' })
+      }
+      const wait = (seconds: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(seconds * 1000)
+        })
+
+      it('goes away by itself after 15 seconds', async () => {
+        await openFake()
+
+        await wait(14)
+        expect(offer()).not.toBeNull()
+        await wait(2)
+
+        expect(offer()).toBeNull()
+        expect(similarCalls()).toHaveLength(0)
+      })
+
+      it('stays for good once it was clicked in', async () => {
+        await openFake()
+
+        await wait(5)
+        await userEvent.click(within(offer()!).getByText(/You corrected/))
+        await wait(60)
+
+        expect(offer()).not.toBeNull()
+      })
+
+      it('a new correction is a new offer, with 15 seconds of its own', async () => {
+        await openFake()
+        await wait(10)
+
+        await correct('tćj', 'téj')
+        await waitFor(() => expect(within(offer()!).getByText('téj')).toBeInTheDocument())
+        await wait(10)
+
+        expect(offer()).not.toBeNull()
+        await wait(6)
+        expect(offer()).toBeNull()
+      })
     })
 
     it('"Nein Danke" closes it, and nothing is asked of the backend', async () => {

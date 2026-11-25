@@ -1343,14 +1343,17 @@ page is shown), a small box comes up at the bottom right: "You corrected `jćj` 
 `jéj`", with two buttons: **Apply it to the entire edition** and **Nein Danke**.
 It does not come up for a removed word (an empty field), for a word left as it
 was, for a correction that failed, or for a spelling of more than 100 characters,
-and not when the correction only adds a hyphen to the last word of a line
+nor when the string that was replaced, or the one that replaces it, is a single
+character (`l` to `I`, `,` to `.`) or only signs, with no letter or digit (`—` to `-`):
+those are everywhere, and mostly right as they are; and not when the correction only adds a hyphen to the last word of a line
 (`abso` to `abso-`, the sign that the word goes on in the next line, which is
 nothing the rest of the edition has to be told); the last word of the page ends a
 line too. A hyphen added in the middle of a line, or together with another change,
 is a correction like any other. Nor is that hyphen made a legal spelling of the
 edition, as the new spelling of a misspelled word is otherwise (see "Legal
 spellings"): `abso-` is not a spelling. A new correction replaces the box, and so does
-leaving for the editions. Nothing is
+leaving for the editions. If nobody clicks in the box, it goes away by itself after
+15 seconds (`OFFER_SECONDS`); once it was clicked in, it stays until it is answered. Nothing is
 asked of the backend until the user answers; "Nein Danke" (or Escape) closes the
 box.
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   getSimilarMisspellings,
   type PageMatches,
@@ -20,13 +20,22 @@ interface OfferProps {
   onDismiss: () => void
 }
 
+/** How long the offer stays if the user does not touch it. */
+export const OFFER_SECONDS = 15
+
 /**
  * The small box that comes up after a word was corrected: shall the same
  * correction be applied to the entire edition? "Apply it to the entire edition"
  * opens the list of the places (`SimilarMisspellings`); "Nein Danke" closes the
- * box.
+ * box. If nobody clicks in it (or puts the keyboard in it), it goes away by itself
+ * after `OFFER_SECONDS`; once it was clicked, it stays until it is answered. A new
+ * correction is a new offer, with a new time.
  */
 export function ApplyOffer({ correction, onApply, onDismiss }: OfferProps) {
+  // the correction that the user has touched the offer of: for that one it stays
+  const [touched, setTouched] = useState<EditionCorrection | null>(null)
+  const stays = touched === correction
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') onDismiss()
@@ -35,11 +44,25 @@ export function ApplyOffer({ correction, onApply, onDismiss }: OfferProps) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onDismiss])
 
+  // (the latest way to dismiss, so that a new function on a render does not start
+  // the time again)
+  const dismiss = useRef(onDismiss)
+  useEffect(() => {
+    dismiss.current = onDismiss
+  })
+  useEffect(() => {
+    if (stays) return
+    const timer = setTimeout(() => dismiss.current(), OFFER_SECONDS * 1000)
+    return () => clearTimeout(timer)
+  }, [correction, stays])
+
   return (
     <div
       role="dialog"
       aria-label="Apply the correction to the entire edition"
       className="offer-box"
+      onClick={() => setTouched(correction)}
+      onFocus={() => setTouched(correction)}
     >
       <p>
         You corrected <strong>{correction.incorrect}</strong> to{' '}
