@@ -137,6 +137,19 @@ function withMarked(found: Entity[] | null, marked: Entity[]): Entity[] | null {
 }
 
 /**
+ * Is the correction too small to be offered to the entire edition? It is when the
+ * string that was replaced, or the one that replaces it, is a single character
+ * ("l" to "I", "," to "."), or is made of signs only, with no letter or digit
+ * ("…" to ".", "—" to "-"): the same few characters are everywhere, so the places
+ * would be countless and mostly right as they are.
+ */
+function tooSmallForEdition(incorrect: string, corrected: string): boolean {
+  const small = (text: string) =>
+    Array.from(text).length === 1 || !/[\p{L}\p{N}]/u.test(text)
+  return small(incorrect) || small(corrected)
+}
+
+/**
  * Does the correction only put a hyphen after the last word of a line? That is
  * how a line continuation is marked ("abso" to "abso-", with "lutely" on the next
  * line): the word is not wrong anywhere else, so it is not offered to the entire
@@ -606,11 +619,13 @@ export default function App() {
       setStatus({ kind: 'done', ...(await withText(corrected)) })
       // A word that became another one may be wrong in other places too (the
       // backend takes the spellings of 1 to 100 characters). Not so for a hyphen
-      // that marks the word as continued on the next line.
+      // that marks the word as continued on the next line, nor for a single
+      // character or a sign.
       if (
         after !== '' &&
         after !== word.text &&
         !continued &&
+        !tooSmallForEdition(word.text, after) &&
         word.text.length <= 100 &&
         after.length <= 100
       ) {
