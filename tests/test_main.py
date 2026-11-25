@@ -3642,6 +3642,164 @@ class TestSpellingChunkMatches:
         ].keys()
 
 
+class TestBulkSpellingCheck:
+    def url(self, edition_id=None):
+        return f"/editions/{edition_id or uuid4()}/bulk-spelling-check"
+
+    @pytest.fixture(autouse=True)
+    def dictionary(self, monkeypatch):
+        known = {"ala", "ma", "kota"}
+        checker = mock.Mock(**{"lookup.side_effect": lambda w: w.lower() in known})
+        monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+
+    def stored(self, monkeypatch, pages, legal=()):
+        edition_id = uuid4()
+        monkeypatch.setattr(
+            db,
+            "get_edition",
+            mock.Mock(return_value=Edition(id=edition_id, work_id=uuid4())),
+        )
+        rows = [
+            {"number": number, "xml_content_corrected": xml}
+            for number, xml in pages.items()
+        ]
+
+        def execute(query, params=()):
+            result = mock.Mock()
+            result.fetchall.return_value = (
+                [{"spelling": word} for word in legal]
+                if "legal_spellings" in query
+                else rows
+            )
+            return result
+
+        monkeypatch.setattr(db, "conn", mock.Mock(execute=execute))
+        return edition_id
+
+    @staticmethod
+    def page(*lines):
+        return str(text_to_tei_xml("\n".join(lines)))
+
+    def test_frequent_flagged_words_in_families_the_most_common_first(
+        self, monkeypatch
+    ):
+        edition_id = self.stored(
+            monkeypatch,
+            {
+                0: self.page(
+                    "ala Policya Policya ma",
+                    "ala Konwencyi Konwencya ma",
+                    "ala Konwencya Konwencyi ma",
+                ),
+                1: self.page(
+                    "ala Konwencya Konwencyi ma",
+                    "ala Konwencya Konwencyi ma",
+                    "ala Policya Policya ma",
+                ),
+            },
+        )
+
+        response = client.get(self.url(edition_id))
+
+        assert response.status_code == 200
+        families = response.json()
+        assert [(f["stem"], f["count"]) for f in families] == [
+            ("konwency", 8),
+            ("policya", 4),
+        ]
+        # (equally common: in the order of the first place)
+        assert [(g["text"], g["count"]) for g in families[0]["spellings"]] == [
+            ("Konwencyi", 4),
+            ("Konwencya", 4),
+        ]
+        text = (
+            "ala Policya Policya ma\n"
+            "ala Konwencyi Konwencya ma\n"
+            "ala Konwencya Konwencyi ma"
+        )
+        first = families[0]["spellings"][0]["occurrences"][0]
+        assert text[first["start"] : first["end"]] == "Konwencyi"
+        assert (first["page_number"], first["before"], first["after"]) == (
+            0,
+            "ala",
+            "Konwencya",
+        )
+
+    def test_three_times_is_not_enough(self, monkeypatch):
+        edition_id = self.stored(
+            monkeypatch, {0: self.page("ala Policya Policya Policya ma")}
+        )
+
+        assert client.get(self.url(edition_id)).json() == []
+
+    def test_the_ends_of_lines_are_not_counted(self, monkeypatch):
+        edition_id = self.stored(
+            monkeypatch,
+            {0: self.page(*["Policya ala Policya"] * 5)},
+        )
+
+        assert client.get(self.url(edition_id)).json() == []
+
+    def test_a_legal_spelling_is_not_listed(self, monkeypatch):
+        edition_id = self.stored(
+            monkeypatch,
+            {0: self.page(*["ala Policya ma"] * 5)},
+            legal=["Policya"],
+        )
+
+        assert client.get(self.url(edition_id)).json() == []
+
+    def test_pages_without_readable_xml_are_left_out(self, monkeypatch):
+        edition_id = self.stored(
+            monkeypatch,
+            {
+                0: self.page(*["ala Policya ma"] * 4),
+                1: None,
+                2: "<not tei/>",
+            },
+        )
+
+        (family,) = client.get(self.url(edition_id)).json()
+
+        assert family["count"] == 4
+
+    def test_only_a_few_places_are_given_but_all_are_counted(self, monkeypatch):
+        edition_id = self.stored(monkeypatch, {0: self.page(*["ala Policya ma"] * 9)})
+
+        (family,) = client.get(self.url(edition_id)).json()
+        (spelling_group,) = family["spellings"]
+
+        assert spelling_group["count"] == 9
+        assert len(spelling_group["occurrences"]) == 5
+
+    def test_edition_not_stored(self, monkeypatch):
+        monkeypatch.setattr(db, "get_edition", mock.Mock(return_value=None))
+
+        response = client.get(self.url())
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Edition not found"
+
+    def test_invalid_edition_id(self):
+        assert client.get("/editions/nope/bulk-spelling-check").status_code == 422
+
+    def test_dictionary_unavailable_is_503(self, monkeypatch):
+        edition_id = self.stored(monkeypatch, {0: self.page("ala ma kota")})
+
+        def unavailable():
+            raise SpellcheckUnavailable("no dictionary")
+
+        monkeypatch.setattr(spelling, "get_checker", unavailable)
+
+        assert client.get(self.url(edition_id)).status_code == 503
+
+    def test_is_in_the_openapi_schema(self):
+        schema = client.get("/openapi.json").json()
+
+        assert "get" in schema["paths"]["/editions/{edition_id}/bulk-spelling-check"]
+        assert "SpellingFamily" in schema["components"]["schemas"]
+
+
 class TestTokenOccurrences:
     def url(self, edition_id=None):
         return f"/editions/{edition_id or uuid4()}/token-occurrences"

@@ -1025,6 +1025,38 @@ changes nothing.
   dictionary is not available. The substring is in `app/text_tools/spelling_chunks.py`, the
   search is `Database.get_chunk_matches`.
 
+### Bulk spelling check of the edition
+
+The spellings of the print that repeat (`Konwencya`) are flagged again and again, and one
+that is flagged once is probably an OCR mistake. `GET /editions/{edition_id}/bulk-spelling-check`
+(no other parameter) checks **all the pages** and lists the flagged spellings that are in the
+edition often, so that a person accepts them as legal spellings at once. It changes nothing.
+
+- **What is checked**: as `POST /spellcheck` judges (a word split over two lines is one word;
+  the legal spellings of the edition count as correct), except that **the first and the last
+  word of every line are left out**, so those of every page too: a word that the end of a line
+  cuts is flagged for nothing. Signs do not count as words (`— Ala ma kota.` has `Ala` first
+  and `kota` last). The words in other languages are not checked.
+- **What is listed**: a spelling is listed only if it is in the edition **more than three
+  times** (`MORE_THAN` in `app/text_tools/bulk_spelling.py`; counted over the words that are
+  looked at). It has the case it has: `Konwencya` and `konwencya` are two.
+- **Families**: spellings that are one word with different endings are grouped: they begin
+  with the same letters, at least four (whatever the case), and have at most four letters
+  after them (`Konwencya`, `Konwencyi` and `Konwencyami` are one family, `Konstytucya` is
+  another). A word joins the first family whose most common word it fits.
+- **The response**: a list of families, the most common first (all their spellings
+  together): `{"stem": "konwency", "count": 11, "spellings": [...]}`; the `spellings` of a
+  family, the most common first, are the items of `spelling-chunk-matches` (`text`, `count`,
+  the first five `occurrences` with `page_number`, `start`, `end`, `before`, `after`).
+- 404 if the edition is not stored, 503 if the dictionary is not available. The search is
+  `Database.get_bulk_spelling_check`.
+
+In the frontend it is **Bulk spelling check** in the cog wheel of the correction view. The box
+asks the backend when it opens (there is nothing to type) and works like the box that accepts
+spellings by their substring: the families with their spellings, each with its count and
+places in their context, a check box to take it out of **Accept all**, **Accept** (the request
+of the "legal spelling" button), **Include all** and **Include none**.
+
 ### The same named entity in all its forms
 
 A Polish name is not always in the nominative. A surname that a person confirmed as
@@ -1523,6 +1555,7 @@ the cog wheel disabled.
 | View | Tool | |
 |---|---|---|
 | Correction | **Find missing hyphens** | puts back the hyphens the OCR dropped at line ends (below) |
+| Correction | **Bulk spelling check** | checks the spelling of the whole edition and accepts, as legal spellings, the flagged ones that are there more than three times, in families (above) |
 | Correction | **Apply spelling rule to the edition** | accepts, as legal spellings, the flagged words of the whole edition that have a substring in common, such as `cy` with the endings `a`, `i`, `ami` (above) |
 | Correction | **Replace a token in the edition** | finds every place of a token as it is wrong, such as `tern`, and replaces it with another, such as `tem`, place by place or all at once (above) |
 | Correction | **Find OCR rubbish in the edition** | finds the lines of the whole edition that are not text, to remove them (above) |

@@ -45,6 +45,7 @@ from app.persistence.ontology import (
     RubbishLine,
     SimilarEntities,
     SimilarPageNumbers,
+    SpellingFamily,
     SpellingGroup,
     SpellingOccurrence,
     TokenMatch,
@@ -52,6 +53,11 @@ from app.persistence.ontology import (
     Work,
 )
 from app.persistence.passwords import DUMMY_HASH, hash_password, verify_password
+from app.text_tools.bulk_spelling import (
+    MORE_THAN,
+    find_inner_flagged_words,
+    group_into_families,
+)
 from app.text_tools.hyphens import find_missing_hyphens
 from app.text_tools.inflection import find_forms, forms_of_phrase
 from app.text_tools.misspellings import cluster_fix, tokens_with_cluster
@@ -704,6 +710,66 @@ class Database:
         return [
             SpellingGroup(text=word, count=counts[word], occurrences=places[word])
             for word in sorted(counts, key=lambda w: (-counts[w], order[w]))
+        ]
+
+    def get_bulk_spelling_check(self, edition_id: UUID) -> list[SpellingFamily]:
+        """The spellings of the whole edition that the spell check flags and that are
+        there more than `MORE_THAN` times (see `app/text_tools/bulk_spelling.py`), so
+        that they can be accepted as legal spellings of the edition. The first and
+        the last word of every line are not looked at. A spelling is listed once,
+        with how many times it is in the edition and its first places
+        (`_OCCURRENCES_SHOWN`), in the order of the pages, and the spellings that are
+        one word with different endings are a family. The families, and the
+        spellings in a family, are the most common first. The spellings that are
+        legal in the edition count as correct, so one that is accepted already is not
+        listed. The text is that of the corrected content, as the user sees it; a page
+        without XML, or with XML that cannot be read, is left out.
+
+        Raises SpellcheckUnavailable if the dictionary cannot be loaded.
+        """
+        rows = self.conn.execute(
+            "SELECT number, xml_content_corrected FROM pages"
+            " WHERE edition_id = %s ORDER BY number",
+            (edition_id,),
+        ).fetchall()
+        legal = self.get_legal_spellings(edition_id)
+        places: dict[str, list[SpellingOccurrence]] = {}
+        counts: dict[str, int] = {}
+        for row in rows:
+            xml = row["xml_content_corrected"]
+            if not xml:
+                continue
+            try:
+                text = tei_xml_to_text(xml)
+                foreign = foreign_language_ranges(xml)
+            except InvalidTei:
+                continue
+            for match in find_inner_flagged_words(text, legal, foreign):
+                counts[match.text] = counts.get(match.text, 0) + 1
+                shown = places.setdefault(match.text, [])
+                if len(shown) < _OCCURRENCES_SHOWN:
+                    shown.append(
+                        SpellingOccurrence(
+                            page_number=row["number"],
+                            start=match.start,
+                            end=match.end,
+                            before=match.before,
+                            after=match.after,
+                        )
+                    )
+        frequent = {word: n for word, n in counts.items() if n > MORE_THAN}
+        return [
+            SpellingFamily(
+                stem=family.stem,
+                count=family.count,
+                spellings=[
+                    SpellingGroup(
+                        text=word, count=counts[word], occurrences=places[word]
+                    )
+                    for word in family.spellings
+                ],
+            )
+            for family in group_into_families(frequent)
         ]
 
     def get_similar_entities(

@@ -16,6 +16,7 @@ import type {
   PageRubbish,
   PageTokenOccurrences,
   SectionSpan,
+  SpellingFamily,
   SpellingGroup,
   SimilarEntities,
   SimilarPageNumbers,
@@ -155,6 +156,8 @@ interface Options {
   occurrences?: (token: string) => PageTokenOccurrences[] | Error
   /** Answer of GET .../spelling-chunk-matches; defaults to none. */
   chunkMatches?: (query: { core: string; endings: string[] }) => SpellingGroup[] | Error
+  /** Answer of GET .../bulk-spelling-check; defaults to none. */
+  bulkSpelling?: () => SpellingFamily[] | Error
   /** Answer of GET .../similar-entities; defaults to no form and no place. */
   similarEntities?: (query: { text: string; label: string }) => SimilarEntities | Error
   /** Answer of GET .../rubbish-lines; defaults to none. */
@@ -361,6 +364,10 @@ function fakeBackend(options: Options = {}) {
       const asked = { core: query.get('core') ?? '', endings: query.getAll('ending') }
       const answer = options.chunkMatches ? options.chunkMatches(asked) : []
       return answer instanceof Error ? failure(422, answer) : reply(true, 200, answer)
+    }
+    if (url.endsWith('/bulk-spelling-check')) {
+      const answer = options.bulkSpelling ? options.bulkSpelling() : []
+      return answer instanceof Error ? failure(503, answer) : reply(true, 200, answer)
     }
     if (url.includes('/similar-entities?')) {
       const query = Object.fromEntries(new URLSearchParams(url.split('?')[1]))
@@ -6254,6 +6261,7 @@ describe('page view', () => {
       expect(names()).toEqual([
         'Find missing hyphens',
         'Apply spelling rule to the edition',
+        'Bulk spelling check',
         'Replace a token in the edition',
         'Find OCR rubbish in the edition',
       ])
@@ -9278,5 +9286,177 @@ describe('a word that goes on in the next line', () => {
 
     expect(screen.queryByLabelText('First part')).toBeNull()
     expect(continuedCalls()).toHaveLength(0)
+  })
+})
+
+describe('the bulk spelling check', () => {
+  const TEXT = 'Ala ma Konwencya i Policya.'
+  const place = (page: number, start: number, before: string, after: string) => ({
+    page_number: page,
+    start,
+    end: start + 9,
+    before,
+    after,
+  })
+  const FAMILIES: SpellingFamily[] = [
+    {
+      stem: 'konwency',
+      count: 11,
+      spellings: [
+        {
+          text: 'Konwencya',
+          count: 7,
+          occurrences: [place(1, 7, 'ma', 'i'), place(3, 0, '', ',')],
+        },
+        { text: 'Konwencyi', count: 4, occurrences: [place(2, 4, 'w', 'tu')] },
+      ],
+    },
+    {
+      stem: 'policya',
+      count: 4,
+      spellings: [{ text: 'Policya', count: 4, occurrences: [place(5, 1, 'a', 'b')] }],
+    },
+  ]
+  const review = () => screen.queryByRole('dialog', { name: 'Bulk spelling check' })
+  const bulkCalls = () => calls.filter((c) => c.url.endsWith('/bulk-spelling-check'))
+  const legalCalls = () => calls.filter((c) => c.url.endsWith('/legal-spellings'))
+  const acceptOne = (text: string) =>
+    screen.getByRole('button', { name: `Accept ${text} as a legal spelling` })
+  const include = (text: string) =>
+    screen.getByRole('checkbox', { name: `Include ${text} in Accept all` })
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      bulkSpelling: () => FAMILIES,
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Bulk spelling check' }))
+  }
+
+  it('is in the cog wheel of the correction view, and asks the backend at once', async () => {
+    await open()
+
+    expect(review()).toBeInTheDocument()
+    await screen.findByText(/3 spellings, 15 places/)
+    expect(bulkCalls()).toHaveLength(1)
+    expect(bulkCalls()[0].method).toBe('GET')
+    expect(bulkCalls()[0].url).toBe(`/editions/${UUID}/bulk-spelling-check`)
+  })
+
+  it('is not in the structure view', async () => {
+    await openPage()
+    await screen.findByRole('img')
+    await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+
+    expect(screen.queryByRole('button', { name: 'Bulk spelling check' })).toBeNull()
+  })
+
+  it('shows the families, each with its stem and its spellings, in the order given', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+
+    const families = within(review()!).getAllByRole('region')
+    expect(families.map((f) => f.getAttribute('aria-label'))).toEqual([
+      'Spellings like konwency',
+      'Spellings like policya',
+    ])
+    expect(
+      within(families[0])
+        .getAllByRole('checkbox')
+        .map((c) => c.getAttribute('aria-label')),
+    ).toEqual(['Include Konwencya in Accept all', 'Include Konwencyi in Accept all'])
+    expect(families[0]).toHaveTextContent('×11')
+  })
+
+  it('shows how many times a spelling is there, and its places in their context', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+
+    const row = acceptOne('Konwencya').closest('li')!
+    expect(row).toHaveTextContent('×7')
+    expect(row).toHaveTextContent('ma Konwencya i (page 1)')
+    expect(row).toHaveTextContent('and 5 more')
+  })
+
+  it('accepts a spelling as a legal spelling of the edition', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+
+    await userEvent.click(acceptOne('Konwencyi'))
+
+    await waitFor(() => expect(legalCalls()).toHaveLength(1))
+    expect(legalCalls()[0].url).toBe(`/editions/${UUID}/legal-spellings`)
+    expect(legalCalls()[0].body).toEqual({ spelling: 'Konwencyi' })
+    expect(await screen.findByText('✓ Accepted')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Accept Konwencyi as a legal spelling' })).toBeNull()
+  })
+
+  it('accepts all, except the ones taken out', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+    await userEvent.click(include('Policya'))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all (2)' }))
+
+    await waitFor(() => expect(legalCalls()).toHaveLength(2))
+    expect(legalCalls().map((c) => (c.body as { spelling: string }).spelling)).toEqual([
+      'Konwencya',
+      'Konwencyi',
+    ])
+    expect(await screen.findByText(/2 accepted/)).toBeInTheDocument()
+  })
+
+  it('includes all or none with one button', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Include none' }))
+    expect(screen.getByRole('button', { name: 'Accept all (0)' })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Include all' }))
+    expect(screen.getByRole('button', { name: 'Accept all (3)' })).toBeEnabled()
+  })
+
+  it('shows that a spelling could not be accepted, and goes on', async () => {
+    await open({
+      legal: (body) => (body.spelling === 'Konwencyi' ? new Error('Edition not found') : undefined),
+    })
+    await screen.findByText(/3 spellings/)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all (3)' }))
+
+    await screen.findByText(/2 accepted; 1 failed/)
+    expect(screen.getByText('Edition not found', { selector: '.review-error' })).toBeInTheDocument()
+  })
+
+  it('says so when nothing is flagged often enough', async () => {
+    await open({ bulkSpelling: () => [] })
+
+    expect(await screen.findByText('No flagged spelling is in the edition often enough.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Accept all/ })).toBeNull()
+  })
+
+  it('shows the error when the check fails', async () => {
+    await open({ bulkSpelling: () => new Error('no dictionary') })
+
+    expect(await within(review()!).findByRole('alert')).toHaveTextContent('no dictionary')
+  })
+
+  it('closes with Close and with Escape', async () => {
+    await open()
+    await screen.findByText(/3 spellings/)
+
+    await userEvent.click(within(review()!).getByRole('button', { name: 'Close' }))
+    expect(review()).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Bulk spelling check' }))
+    expect(review()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(review()).toBeNull()
   })
 })

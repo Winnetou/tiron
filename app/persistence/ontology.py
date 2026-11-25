@@ -138,6 +138,16 @@ class SpellingGroup(BaseModel):
     occurrences: list[SpellingOccurrence]
 
 
+class SpellingFamily(BaseModel):
+    """Flagged spellings that are one word with different endings ("Konwencya",
+    "Konwencyi"): the letters they all begin with (`stem`), how many times they are in
+    the edition together (`count`), and the `spellings`, the most common first."""
+
+    stem: str
+    count: int = Field(ge=1)
+    spellings: list[SpellingGroup]
+
+
 class EntityForm(BaseModel):
     """A form of a named entity in the cases: `text`, and the `cases` it can be in
     ("gen.sg", "dat.pl", ...; "any" if the word has no case: a name that does not
