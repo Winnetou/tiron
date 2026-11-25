@@ -775,9 +775,13 @@ describe('the page address', () => {
   })
 
   it('links to the main page when the edition itself is not known', async () => {
-    await openPage({ metadata: new Error('Edition not found') }, 19999)
+    await openPage(
+      { page: () => new Error('Edition not found'), metadata: new Error('Edition not found') },
+      0,
+    )
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Page not found')
+    // not "Page not found": it is the edition that is missing
+    expect(await screen.findByRole('alert')).toHaveTextContent('Edition not found')
     expect(screen.queryByRole('button', { name: 'Back to the edition' })).toBeNull()
     expect(await clickWayBack('Back to the list of editions')).toBe('/')
   })

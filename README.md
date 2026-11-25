@@ -1781,5 +1781,6 @@ Polona fails (a new edition may be: it is saved before its page is fetched).
 
 | Situation | Response |
 |---|---|
-| Polona has no such edition or page (out of range, no scans, HTTP 404) | 404 `Page not found` |
+| Polona has no such edition (its metadata is HTTP 404) | 404 `Edition not found` |
+| Polona has no such page of a known edition (out of range, no scans, HTTP 404) | 404 `Page not found` |
 | Polona is unreachable, times out, returns an HTTP error, or sends an invalid response | 502 |

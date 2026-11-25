@@ -63,18 +63,24 @@ export default function EditionList() {
         ))}
       </ul>
       <div className="editions-pages review-styled">
-        <button type="button" disabled={number <= 1} onClick={() => show(number - 1)}>
-          Previous
+        <button
+          type="button"
+          aria-label="Previous"
+          disabled={number <= 1}
+          onClick={() => show(number - 1)}
+        >
+          &laquo;
         </button>
         <span>
           Page {number} of {Math.max(pages ?? 1, 1)}
         </span>
         <button
           type="button"
+          aria-label="Next"
           disabled={number >= (pages ?? 1)}
           onClick={() => show(number + 1)}
         >
-          Next
+          &raquo;
         </button>
       </div>
       <p className="art-credit">

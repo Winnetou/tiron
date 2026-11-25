@@ -170,7 +170,7 @@ export default function Sidebar({
   recognizing,
 }: Props) {
   return (
-    <aside className="sidebar" aria-label="Tools">
+    <aside className="sidebar review-styled" aria-label="Tools">
       {TOOLS.map(({ label, icon }) => {
         const isNer = label === NER_LABEL
         const target = label === STRUCTURE_LABEL ? 'structure' : 'correction'
