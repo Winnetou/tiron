@@ -406,7 +406,7 @@ export default function PageViewer({
         // (scroll events do not bubble: the capture phase sees the text box's)
         onScrollCapture={followText}
       >
-        <div className="edition-line">
+        <div className="edition-line review-styled">
           {metadata && (
             <span
               className="edition-line-text"
@@ -425,7 +425,7 @@ export default function PageViewer({
             <EditIcon />
           </button>
         </div>
-        <nav className="page-nav">
+        <nav className="page-nav review-styled">
           <span className="page-nav-start">
             <button
               type="button"

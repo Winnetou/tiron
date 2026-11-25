@@ -1,5 +1,8 @@
 /* The beige page with the Dürer detail behind, of the main page. */
 :root {
+  /* the beige of the pages, and the charcoal of the borders of buttons and inputs */
+  --beige: #f6efdf;
+  --charcoal: #36454f;
   --durer-background:
     linear-gradient(rgba(246, 239, 223, 0.8), rgba(246, 239, 223, 0.8)),
     url('/durer-four-horsemen-detail.jpg') center / cover no-repeat fixed #f6efdf;
@@ -176,6 +179,12 @@ main.login-page {
   text-shadow: 0 0 4px #f6efdf;
 }
 
+/* the title is centered, in the type of the list below it */
+.editions h1 {
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .editions ul {
   margin: 0 0 1rem;
   padding: 0;
@@ -224,6 +233,12 @@ main.login-page {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+:where(button, input:not([type='checkbox'], [type='radio']), select, textarea) {
+  border: 1px solid var(--charcoal);
+  background: var(--beige);
+  color: #1a1a1a;
 }
 
 button {
@@ -290,8 +305,13 @@ button {
   gap: 0.75rem;
   padding: 1rem 1.5rem;
   border-radius: 0.5rem;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--beige);
   color: #555;
+}
+
+/* the page that is shown while an edition page is opened: beige, as the others */
+main.loading-page {
+  background: var(--beige);
 }
 
 /* The page of an edition that is opened: an animated skull while it loads. */
@@ -372,8 +392,8 @@ button {
   width: fit-content;
   margin-bottom: 0.5rem;
   padding: 0.25rem 0.5rem;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #ccc;
+  background: var(--beige);
+  border: 1px solid var(--charcoal);
   border-radius: 999px;
 }
 
@@ -449,6 +469,9 @@ button {
   font-size: 0.85rem;
   color: #fff;
   background: #333;
+  /* the yellowish shiny frame of the boxes that are written in */
+  border: 1px solid #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
   border-radius: 0.25rem;
   pointer-events: none;
   opacity: 0;
@@ -484,7 +507,7 @@ button {
   align-items: center;
   padding: 0.5rem;
   border-left: 1px solid #ccc;
-  background: #f7f7f7;
+  background: var(--beige);
 }
 
 .sidebar-button {
@@ -510,6 +533,9 @@ button {
   font-size: 0.85rem;
   color: #fff;
   background: #333;
+  /* the yellowish shiny frame of the boxes that are written in */
+  border: 1px solid #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
   border-radius: 0.25rem;
   pointer-events: none;
   opacity: 0;
@@ -543,8 +569,8 @@ button {
   gap: 0.25rem;
   min-width: 14rem;
   padding: 0.4rem;
-  background: #fff;
-  border: 1px solid #767676;
+  background: var(--beige);
+  border: 1px solid var(--charcoal);
   border-radius: 0.4rem;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
@@ -622,7 +648,7 @@ button {
   margin: 0 auto;
   box-sizing: border-box;
   padding: 0.5rem;
-  border: 1px solid #767676;
+  border: 1px solid var(--charcoal);
   border-radius: 0.25rem;
   /* the sheet of the text, so that it is read over the picture */
   background: rgba(255, 252, 244, 0.88);
@@ -682,7 +708,7 @@ button {
   z-index: 10;
   min-width: 11rem;
   padding: 0.5rem 0.75rem;
-  background: #fff;
+  background: var(--beige);
   border: 1px solid #999;
   border-radius: 0.9rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
@@ -766,9 +792,9 @@ button {
 .word-input {
   box-sizing: content-box;
   padding: 0 0.15em;
-  border: 1px solid #1a73e8;
+  border: 1px solid var(--charcoal);
   border-radius: 0.2rem;
-  background: #fff;
+  background: var(--beige);
   color: #1a1a1a;
   font: inherit;
   line-height: inherit;
@@ -803,7 +829,7 @@ button {
   width: max-content;
   max-width: min(22rem, 80vw);
   padding: 0.3rem;
-  background: #fff;
+  background: var(--beige);
   border: 1px solid #999;
   border-radius: 0.3rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
@@ -839,9 +865,9 @@ button {
 .styled-input {
   box-sizing: border-box;
   padding: 0.45rem 0.9rem;
-  border: 1px solid #b8b8b8;
+  border: 1px solid var(--charcoal);
   border-radius: 999px;
-  background: #fff;
+  background: var(--beige);
   color: #1a1a1a;
   font: inherit;
   outline: none;
@@ -868,7 +894,7 @@ button {
 .legal-button,
 .join-button {
   padding: 0.1rem 0.45rem;
-  border: 1px solid #1a73e8;
+  border: 1px solid var(--charcoal);
   border-radius: 0.2rem;
   background: #e8f0fe;
   color: #174ea6;
@@ -880,7 +906,7 @@ button {
 
 /* A replacement that the backend suggests: the one to click, so it stands out. */
 .suggestion-button {
-  border-color: #2e7d32;
+  border-color: var(--charcoal);
   background: #e6f4ea;
   color: #1b5e20;
   font-weight: 600;
@@ -925,7 +951,7 @@ button {
   max-width: 350px;
   gap: 0.4rem;
   padding: 0.5rem 0.6rem;
-  background: #fff;
+  background: var(--beige);
   border: 1px solid #999;
   border-radius: 0.9rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
@@ -987,7 +1013,7 @@ button {
   z-index: 20;
   max-width: 22rem;
   padding: 0.75rem 1rem;
-  background: #fff;
+  background: var(--beige);
   border: 1px solid #999;
   border-radius: 0.4rem;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
@@ -1020,7 +1046,7 @@ button {
   flex-direction: column;
   width: min(60rem, 92vw);
   height: 88vh;
-  background: #fff;
+  background: var(--beige);
   border-radius: 0.5rem;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   font-family: system-ui, sans-serif;
@@ -1079,9 +1105,9 @@ button {
   box-sizing: border-box;
   width: min(24rem, 100%);
   padding: 0.7rem 1.1rem;
-  border: 1px solid #b8b8b8;
+  border: 1px solid var(--charcoal);
   border-radius: 0.75rem;
-  background: #fff;
+  background: var(--beige);
   color: #1a1a1a;
   font: inherit;
   font-size: 1.05rem;
@@ -1114,7 +1140,7 @@ button {
 
 .review-set-button {
   padding: 0.45rem 1.1rem;
-  border: 1px solid #b8b8b8;
+  border: 1px solid var(--charcoal);
   border-radius: 999px;
   cursor: pointer;
   transition:
@@ -1153,8 +1179,8 @@ button {
   gap: 0.25rem;
   padding: 0.1rem 0.25rem 0.1rem 0.7rem;
   border-radius: 999px;
-  background: #fff;
-  border: 1px solid #c8c8c8;
+  background: var(--beige);
+  border: 1px solid var(--charcoal);
   font-family: ui-monospace, Menlo, monospace;
   user-select: none;
 }
@@ -1240,9 +1266,9 @@ button {
 :where(.review-styled) select {
   box-sizing: border-box;
   padding: 0.55rem 1rem;
-  border: 1px solid #b8b8b8;
+  border: 1px solid var(--charcoal);
   border-radius: 0.75rem;
-  background: #fff;
+  background: var(--beige);
   color: #1a1a1a;
   font: inherit;
   font-size: 1rem;
@@ -1380,7 +1406,7 @@ button {
   resize: vertical;
   border: 1px solid #767676;
   border-radius: 0.5rem;
-  background: #fff;
+  background: var(--beige);
   font-family: system-ui, sans-serif;
 }
 

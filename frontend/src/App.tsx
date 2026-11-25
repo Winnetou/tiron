@@ -908,7 +908,7 @@ export default function App() {
 
   if (status.kind === 'loading') {
     return (
-      <main>
+      <main className="loading-page">
         <PageLoading>Loading the page …</PageLoading>
       </main>
     )
