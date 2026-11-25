@@ -29,6 +29,14 @@ class PolonaError(Exception):
         self.not_found = not_found
 
 
+class EditionNotFoundError(PolonaError):
+    """polona.pl has no such edition (its metadata is missing): the page cannot
+    exist either. `not_found` is always True."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, not_found=True)
+
+
 logger = logging.getLogger(__name__)
 
 

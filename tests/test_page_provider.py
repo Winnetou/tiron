@@ -7,7 +7,7 @@ import pytest
 
 from app import page_provider
 from app.persistence.ontology import Edition, Page
-from app.polona.polona_connector import PolonaError
+from app.polona.polona_connector import EditionNotFoundError, PolonaError
 from app.text_tools.tei_xml import text_to_tei_xml
 
 PAGE = {"scan_uri": "https://polona.pl/scan", "raw_ocr_content": "Ala ma kota"}
@@ -74,6 +74,16 @@ class TestIdempotentFetchEdition:
         with pytest.raises(PolonaError):
             page_provider.idempotent_fetch_edition(uuid4(), db=db)
 
+        db.create_edition.assert_not_called()
+
+    def test_edition_polona_does_not_know_is_an_edition_not_found_error(self, polona):
+        polona.metadata.side_effect = PolonaError("gone", not_found=True)
+        db = database(None)
+
+        with pytest.raises(EditionNotFoundError) as raised:
+            page_provider.idempotent_fetch_edition(uuid4(), db=db)
+
+        assert raised.value.not_found is True
         db.create_edition.assert_not_called()
 
 

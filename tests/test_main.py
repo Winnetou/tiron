@@ -15,7 +15,7 @@ from app.auth import require_login
 from app.main import app, db
 from app.persistence.db import WorkExists
 from app.persistence.ontology import Edition, EditionMetadata, LegalSpelling, Page
-from app.polona.polona_connector import PolonaError
+from app.polona.polona_connector import EditionNotFoundError, PolonaError
 from app.text_tools.ner import NerModelUnavailable
 from app.text_tools.spelling import SpellcheckUnavailable
 from app.text_tools.tei_xml import (
@@ -108,6 +108,15 @@ def test_get_page_polona_errors(polona, error, expected_status):
     assert response.json()["detail"] == (
         "Page not found" if error.not_found else str(error)
     )
+
+
+def test_get_page_of_an_edition_polona_does_not_know(polona):
+    polona.side_effect = EditionNotFoundError("Not found on polona.pl")
+
+    response = client.get(f"/editions/{uuid4()}/pages/1")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Edition not found"
 
 
 @pytest.mark.parametrize(

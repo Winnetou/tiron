@@ -926,15 +926,17 @@ export default function App() {
           }
     return (
       <main className="error-page review-styled">
-        {/* the skeleton points its finger at the message */}
-        <img className="error-page-image" src="/vademecum.jpg" alt="" />
-        <div className="error-page-text">
-          <p role="alert" className="error-page-message">
-            {status.message}
-          </p>
-          <button type="button" onClick={() => window.location.assign(way.href)}>
-            {way.label}
-          </button>
+        <div className="error-page-stage">
+          {/* the skeleton, pointing to the left, is the background of the message */}
+          <img className="error-page-image" src="/vademecum.jpg" alt="" />
+          <div className="error-page-text">
+            <p role="alert" className="error-page-message">
+              {status.message}
+            </p>
+            <button type="button" onClick={() => window.location.assign(way.href)}>
+              {way.label}
+            </button>
+          </div>
         </div>
       </main>
     )

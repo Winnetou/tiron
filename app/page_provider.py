@@ -9,6 +9,8 @@ from app.celery_app import handle_new_edition_created
 from app.persistence.db import Database
 from app.persistence.ontology import Edition, Page, Work
 from app.polona.polona_connector import (
+    EditionNotFoundError,
+    PolonaError,
     fetch_edition_metadata,
     request_polona_edition_page,
 )
@@ -100,11 +102,17 @@ def idempotent_fetch_edition(edition_id: UUID, db: Database) -> Edition:
     (`Database.create_work` and `Database.create_edition`).
 
     Raises PolonaError, like fetch_edition_metadata, if the metadata cannot be
-    fetched. Nothing is saved in that case.
+    fetched (EditionNotFoundError, a PolonaError, if polona.pl has no such
+    edition). Nothing is saved in that case.
     """
     edition_instance = db.get_edition(edition_id)
     if edition_instance is None:
-        metadata = fetch_edition_metadata(edition_id)
+        try:
+            metadata = fetch_edition_metadata(edition_id)
+        except PolonaError as exc:
+            if exc.not_found:
+                raise EditionNotFoundError(str(exc)) from exc
+            raise
         work = Work(author=metadata["author"], title=metadata["title"])
         db.create_work(work)
         edition_instance = db.create_edition(

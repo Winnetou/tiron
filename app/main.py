@@ -40,7 +40,7 @@ from app.persistence.ontology import (
     SpellingGroup,
 )
 from app.persistence.schema_creator import ensure_schema
-from app.polona.polona_connector import PolonaError
+from app.polona.polona_connector import EditionNotFoundError, PolonaError
 from app.text_tools.ner import MODEL_NAME, NerModelUnavailable, find_entities, get_nlp
 from app.text_tools.spelling import (
     NotAWord,
@@ -286,7 +286,8 @@ def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView
        `raw_ocr_content`, and that text converted to TEI XML as
        `xml_content_corrected`, which the user then edits.
 
-    Polona failures are turned into HTTP errors: 404 if Polona has no such
+    Polona failures are turned into HTTP errors: 404 ("Edition not found") if
+    Polona has no such edition, 404 ("Page not found") if it has no such
     page, 502 if it could not be reached or answered unexpectedly. No page is
     saved in that case (the edition may be, if it was new).
 
@@ -299,6 +300,8 @@ def fetch_page(edition_id: UUID, number: Annotated[int, Path(ge=0)]) -> PageView
         logger.warning(
             "Polona failed for page %s of edition %s: %s", number, edition_id, exc
         )
+        if isinstance(exc, EditionNotFoundError):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found") from exc
         if exc.not_found:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found") from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc

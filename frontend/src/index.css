@@ -16,42 +16,45 @@ main {
   place-items: center;
 }
 
-/* The page of an error: the skeleton that points at the message, and the way back. */
+/* The page of an error: the skeleton, mirrored so that it points to the left as
+   "back" does, is the background, and the message and the way back are over its
+   empty left side. */
 main.error-page {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem 2rem;
   padding: 1rem;
   box-sizing: border-box;
 }
 
+.error-page-stage {
+  position: relative;
+  /* the picture is 1408 x 768: as large as the screen allows, in its proportions */
+  width: min(100%, 56rem, calc(92vh * 1408 / 768));
+  aspect-ratio: 1408 / 768;
+}
+
 .error-page-image {
-  max-width: min(100%, 56rem);
-  max-height: 92vh;
-  height: auto;
-  object-fit: contain;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(-1);
 }
 
 .error-page-text {
+  position: absolute;
+  left: 4%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 1.25rem;
-  max-width: 24rem;
 }
 
-/* on a wide screen the message goes into the empty right side of the picture, which
-   is white around the skeleton, so that the finger points at it */
-@media (min-width: 70rem) {
-  .error-page-text {
-    margin-left: -12rem;
-  }
-}
-
-/* the message is in the type of the titles of the editions on the main page */
-.error-page-message {
+/* the message is in the type of the titles of the editions on the main page, and
+   grey: not the red that other alerts have (hence the selector that is stronger than
+   the one of the alerts) */
+main.error-page .error-page-message {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1.5;
