@@ -61,6 +61,7 @@ from app.text_tools.tei_xml import (
     InvalidTei,
     TextChanged,
     foreign_language_ranges,
+    insert_line_at,
     insert_text_at,
     join_lines_at,
     join_text_range,
@@ -1263,14 +1264,21 @@ def add_token(
     updated page as a PageView.
 
     A page without any text (the OCR found nothing) takes the token as its first
-    line: the only position there is 0. The token always goes into an existing
-    line; to put it on a line of its own, split the line (`POST .../line-splits`).
+    line: the only position there is 0.
+
+    By default the token goes into an existing line. With `"new_line": true` it is
+    put on a line of its own, above the line that starts at `position` (0 for a new
+    first line of the page): the body is `{"position": 0, "text": "LIST SZÓSTY",
+    "new_line": true}`. The position must then be the start of a line (0, or after a
+    line break), else 422; the token and a line break are put before the first
+    character of that line.
     """
 
     def insert_in_xml(xml: str) -> str:
         if not xml:
             raise InvalidTei("The page has no TEI XML to add a token to")
-        return insert_text_at(xml, token.position, token.text)
+        insert = insert_line_at if token.new_line else insert_text_at
+        return insert(xml, token.position, token.text)
 
     try:
         page = db.apply_correction(

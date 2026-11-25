@@ -133,7 +133,7 @@ interface Options {
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
   marked?: (xml: string) => Entity[] | Error
   /** Answer of POST .../tokens; defaults to putting the token in the text. */
-  token?: (body: { position: number; text: string }, page: Page) => Partial<Page> | Error
+  token?: (body: { position: number; text: string; new_line?: boolean }, page: Page) => Partial<Page> | Error
   /** Answer of POST .../joins; defaults to removing the spaces from the text. */
   join?: (
     body: { start: number; end: number; text: string },
@@ -503,7 +503,9 @@ function fakeBackend(options: Options = {}) {
       const current = pages.get(number) ?? page
       const changes = options.token
         ? options.token(body, current)
-        : { content: insertToken(current.content, body.position, body.text) }
+        : body.new_line
+          ? { content: xmlOf(`${body.text}\n${textOf(current.content)}`) }
+          : { content: insertToken(current.content, body.position, body.text) }
       if (changes instanceof Error) return failure(422, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
@@ -5374,6 +5376,70 @@ describe('the page number on the other pages', () => {
       await waitFor(() => expect(screen.getAllByText('✓ Approved')).toHaveLength(2))
       expect(screen.queryByText(/^Approving /)).toBeNull()
     })
+  })
+})
+
+describe('adding a line above the first line', () => {
+  const TEXT = 'Ala ma kota\nnoc'
+  const button = () => screen.getByRole('button', { name: '+ Line above' })
+  const dialog = () => screen.queryByRole('dialog', { name: 'Add a line above the first line' })
+  const field = () => screen.getByRole('textbox', { name: 'Text of the new line' })
+  const tokenCalls = () => calls.filter((c) => c.url.endsWith('/tokens'))
+
+  async function open(extra: Options = {}) {
+    await openPage({ page: () => ({ content: xmlOf(TEXT) }), ...extra })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+
+  it('has a button above the text, which opens a field for the line', async () => {
+    await open()
+
+    await userEvent.click(button())
+
+    expect(dialog()).toBeInTheDocument()
+    expect(field()).toHaveFocus()
+  })
+
+  it('sends the line as a new line at position 0, and shows it above the others', async () => {
+    await open()
+    await userEvent.click(button())
+
+    await userEvent.type(field(), 'LIST SZÓSTY{Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({
+      position: 0,
+      text: 'LIST SZÓSTY',
+      new_line: true,
+    })
+    await waitFor(() =>
+      expect(pageText().textContent).toBe('LIST SZÓSTY\nAla ma kota\nnoc'),
+    )
+    expect(dialog()).toBeNull()
+  })
+
+  it('does not add an empty line', async () => {
+    await open()
+    await userEvent.click(button())
+
+    expect(within(dialog()!).getByRole('button', { name: 'Add' })).toBeDisabled()
+  })
+
+  it('shows the error when the backend refuses', async () => {
+    await open({ token: () => new Error('A line cannot start there') })
+    await userEvent.click(button())
+
+    await userEvent.type(field(), 'X{Enter}')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A line cannot start there')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('is not offered for a page without text, which has its own field', async () => {
+    await openPage({ page: () => ({ content: xmlOf('') }) })
+    await screen.findByRole('textbox', { name: 'Text to add to the empty page' })
+
+    expect(screen.queryByRole('button', { name: '+ Line above' })).toBeNull()
   })
 })
 

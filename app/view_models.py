@@ -329,6 +329,9 @@ class NewToken(BaseModel):
 
     position: int = Field(ge=0)
     text: str = Field(min_length=1, max_length=200)
+    # Put the text on a line of its own, above the line that starts at `position`
+    # (which must be the start of a line, as 0 is), instead of into that line.
+    new_line: bool = False
 
 
 class HyphenFix(BaseModel):

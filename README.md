@@ -635,9 +635,16 @@ the page's `xml_content_corrected`, in one transaction with the page locked. No
 Correction is recorded: adding a token is not correcting a word. The raw OCR text is
 not touched. The response is the updated `PageView`.
 
-The token always goes into an existing line: it never makes a new one. To put a
-token on a line of its own, add it to a neighbouring line and split the line before
-it (see "Starting a new line", below). A page without any text (the OCR found
+By default the token goes into an existing line. With `"new_line": true` it is put on
+a line of its own instead, **above** the line that starts at `position`: `{"position":
+0, "text": "LIST SZÓSTY", "new_line": true}` makes a new first line of the page (the
+only way to get one, as there is no word before it to split a line at). The position
+must be the start of a line (0, or after a line break), else 422. The token and a
+line break (`<lb/>`) go before the first character of that line, in the same block,
+and outside the markup that the line starts with (a `<persName>`). The frontend has a
+**"+ Line above"** button over the text box (correction view): it opens a field, and
+the text typed is sent with `position` 0. A page
+ without any text (the OCR found
 nothing, which happens) takes the token as its first line: the only position there
 is 0, and the token goes into the first `<p>` of the page (which is made, with the
 `<body>`, if the XML has none).

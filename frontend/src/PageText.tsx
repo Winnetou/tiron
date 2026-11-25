@@ -36,6 +36,8 @@ interface TokenPending {
   forText: string
   left: number
   placement: { top: number } | { bottom: number }
+  /** The token is a line of its own, above the line that starts at `position`. */
+  newLine?: boolean
 }
 
 /** The dialog of a selection: where it is, in the box, and for which text. */
@@ -557,7 +559,7 @@ interface Props {
    * points). Without it (outside the correction view) a double click does
    * nothing.
    */
-  onAddToken?: (position: number, token: string) => void
+  onAddToken?: (position: number, token: string, newLine?: boolean) => void
   /**
    * The user chose to join a word with its neighbour, two words that the OCR
    * split: the space between them goes. Without it (outside the correction
@@ -685,11 +687,18 @@ export default function PageText({
     setToken('')
   }
 
+  /** The button above the text: the dialog to add a line above the first one. */
+  function addLineAbove() {
+    setPending(null)
+    setTokenAt({ position: 0, forText: text, left: 0, placement: { top: 0 }, newLine: true })
+    setToken('')
+  }
+
   function add() {
     // several words are fine: a run of spaces is one
     const typed = token.trim().replace(/\s+/g, ' ')
     if (!addingAt || !onAddToken || typed === '') return
-    onAddToken(addingAt.position, typed)
+    onAddToken(addingAt.position, typed, addingAt.newLine)
     clear()
   }
 
@@ -942,24 +951,37 @@ export default function PageText({
           </button>
         </form>
       ) : (
-        <p className="structure-hint">
-          {onCreateEntity
-            ? 'Select some text to mark it as a named entity the recognition missed.'
-            : 'Double-click a place in the text to add text that the OCR missed.'}
-        </p>
+        <div className="hint-row">
+          <p className="structure-hint">
+            {onCreateEntity
+              ? 'Select some text to mark it as a named entity the recognition missed.'
+              : 'Double-click a place in the text to add text that the OCR missed.'}
+          </p>
+          {onAddToken && !onCreateEntity && text.trim() !== '' && (
+            <button
+              type="button"
+              className="add-line-button"
+              title="Add a line of text above the first line of the page"
+              disabled={busy}
+              onClick={addLineAbove}
+            >
+              + Line above
+            </button>
+          )}
+        </div>
       )}
       {pre}
       {addingAt && (
         <div
           role="dialog"
-          aria-label="Add a text token"
+          aria-label={addingAt.newLine ? 'Add a line above the first line' : 'Add a text token'}
           className={`structure-popup review-styled ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
           style={{ left: addingAt.left, ...addingAt.placement }}
         >
           <input
-            aria-label="Text to add"
+            aria-label={addingAt.newLine ? 'Text of the new line' : 'Text to add'}
             className="styled-input"
-            placeholder="Text"
+            placeholder={addingAt.newLine ? 'Text of the new line' : 'Text'}
             size={20}
             maxLength={200}
             autoFocus

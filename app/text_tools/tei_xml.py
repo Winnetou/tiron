@@ -700,6 +700,73 @@ def _insert_into_empty_page(root: TagNode, token: str, xml: str) -> str:
     return _serialise(root, xml)
 
 
+def _checked_token(token: str) -> str:
+    """The token to insert, with a run of spaces made one (the extracted text has
+    a run as one space). Raises CannotInsert if it is not acceptable."""
+    if not token or token != token.strip():
+        raise CannotInsert("The token must not be empty or start or end with a space")
+    if _CONTROL_CHARACTERS.search(token) or any(
+        c.isspace() and c != " " for c in token
+    ):
+        raise CannotInsert(
+            "The token must be on one line, without control characters or "
+            "spaces other than the plain space"
+        )
+    return re.sub(" +", " ", token)
+
+
+def insert_line_at(xml: str, position: int, token: str) -> str:
+    """Put `token` on a line of its own, above the line that starts at `position`
+    of the text of a TEI document, and return the changed XML.
+
+    `position` is an offset into what tei_xml_to_text returns for the same XML,
+    and must be the start of a line with text: 0, or the place after a line break.
+    The token (it may be several words, see `insert_text_at`) and a line break
+    (<lb/>) go before the first character of the line, into the same block
+    (<p>, <head>, ...) and the same markup around it (a new line above a <persName>
+    stays outside it, as the token is put before its text). The other lines do not
+    change. A document without any text (an empty page) takes the token as its
+    first line, as `insert_text_at` does.
+
+    Raises InvalidTei if the XML is not TEI and CannotInsert if the token is not
+    acceptable or the position is not the start of a line with text.
+    """
+    token = _checked_token(token)
+    root = _parse_tei(xml)
+    text_element = _text_element(root)
+    extracted, sources = _extract(text_element)
+    if not extracted:
+        return _insert_into_empty_page(root, token, xml)
+    if (
+        not 0 <= position < len(extracted)
+        or (position > 0 and extracted[position - 1] != "\n")
+        or extracted[position].isspace()
+        or sources[position] is None
+    ):
+        raise CannotInsert(f"A line cannot start at {position}: it is not a line start")
+    node, index = sources[position]  # type: ignore[misc]
+    left, right = node.content[:index], node.content[index:]
+    line_break = TagNode("lb", namespace=TEI_NAMESPACE)
+    if left:
+        # (white space of the XML before the line, which the text does not have)
+        node.content = left + token
+        node.add_following_siblings(line_break)
+        line_break.add_following_siblings(right)
+    else:
+        # not inside the markup that the line starts with (<persName>): before it
+        anchor: Any = node
+        while (
+            anchor.parent is not None
+            and anchor.parent is not text_element
+            and anchor.parent.local_name not in _BLOCK_ELEMENTS
+            and anchor.fetch_preceding_sibling() is None
+        ):
+            anchor = anchor.parent
+        anchor.add_preceding_siblings(line_break)
+        line_break.add_preceding_siblings(token)
+    return _serialise(root, xml)
+
+
 def insert_text_at(xml: str, position: int, token: str) -> str:
     """Insert `token`, a piece of text that the OCR missed, at `position` of the
     text of a TEI document, and return the changed XML.
@@ -723,16 +790,7 @@ def insert_text_at(xml: str, position: int, token: str) -> str:
     A document without any text (an empty page) takes the token as its first
     line: there is no other place for it (position 0 is the only one).
     """
-    if not token or token != token.strip():
-        raise CannotInsert("The token must not be empty or start or end with a space")
-    if _CONTROL_CHARACTERS.search(token) or any(
-        c.isspace() and c != " " for c in token
-    ):
-        raise CannotInsert(
-            "The token must be on one line, without control characters or "
-            "spaces other than the plain space"
-        )
-    token = re.sub(" +", " ", token)  # the extracted text has a run as one space
+    token = _checked_token(token)
     root = _parse_tei(xml)
     extracted, sources = _extract(_text_element(root))
     if not 0 <= position <= len(extracted):

@@ -16,6 +16,7 @@ from app.text_tools.tei_xml import (
     InvalidTei,
     TextChanged,
     foreign_language_ranges,
+    insert_line_at,
     insert_text_at,
     join_lines_at,
     join_text_range,
@@ -1520,6 +1521,60 @@ def test_random_sections_keep_the_text_and_a_valid_structure(seed):
         if section != "toc":
             assert tei_xml_to_text(result) == extracted  # the text is the same
         xml = result
+
+
+class TestInsertLineAt:
+    TEXT = "Ala ma kota\nnoc"
+
+    def insert(self, position, token="XX", text=TEXT):
+        return tei_xml_to_text(insert_line_at(generated(text), position, token))
+
+    def test_puts_a_new_first_line_above_the_page(self):
+        assert self.insert(0) == "XX\nAla ma kota\nnoc"
+
+    def test_puts_a_line_above_any_line(self):
+        assert self.insert(12) == "Ala ma kota\nXX\nnoc"
+
+    def test_the_token_may_be_several_words(self):
+        assert self.insert(0, "LIST  SZÓSTY") == "LIST SZÓSTY\nAla ma kota\nnoc"
+
+    def test_the_other_lines_do_not_change(self):
+        text = self.insert(0).split("\n", 1)[1]
+
+        assert text == self.TEXT
+
+    def test_a_line_break_is_put_in_the_xml_in_the_same_paragraph(self):
+        result = insert_line_at(generated(self.TEXT), 0, "XX")
+
+        assert "<p>XX<lb/>Ala ma kota<lb/>noc</p>" in result
+
+    def test_a_new_line_above_a_paragraph_stays_in_that_paragraph(self):
+        result = insert_line_at(generated("Head\n\nPara\nline"), 6, "XX")
+
+        assert "<p>Head</p><p>XX<lb/>Para<lb/>line</p>" in result
+
+    def test_the_markup_that_the_line_starts_with_stays_below_the_token(self):
+        xml = tag_text_range(
+            generated("Jan Kowalski tu"), 0, 12, "persName", "Jan Kowalski"
+        )
+
+        result = insert_line_at(xml, 0, "X")
+
+        assert "<p>X<lb/><persName>Jan Kowalski</persName> tu</p>" in result
+        assert tei_xml_to_text(result) == "X\nJan Kowalski tu"
+
+    @pytest.mark.parametrize("position", [1, 3, 11, 15, 99, -1])
+    def test_a_place_that_is_not_the_start_of_a_line_is_refused(self, position):
+        with pytest.raises(CannotInsert):
+            insert_line_at(generated(self.TEXT), position, "XX")
+
+    @pytest.mark.parametrize("token", ["", " a", "a ", "a\nb"])
+    def test_a_token_that_is_not_acceptable_is_refused(self, token):
+        with pytest.raises(CannotInsert):
+            insert_line_at(generated(self.TEXT), 0, token)
+
+    def test_an_empty_page_takes_it_as_its_first_line(self):
+        assert tei_xml_to_text(insert_line_at(generated(""), 0, "XX")) == "XX"
 
 
 class TestInsertTextAt:
