@@ -592,9 +592,14 @@ function openMainPage(options?: Options, search = '') {
 
 const pageText = () => screen.getByRole('region', { name: 'Page text' })
 const calledUrls = () => calls.map((c) => `${c.method} ${c.url}`)
-/** The calls, without the asks for suggestions that the editor of a misspelled word makes. */
+/**
+ * The calls, without the asks for suggestions that the editor of a misspelled word
+ * makes, and without the read of the metadata for the line above the page number: it
+ * is made when the page opens, and when it arrives (before or after the calls looked
+ * at) is a matter of timing.
+ */
 const withoutSuggestions = () =>
-  calls.filter((c) => !c.url.endsWith('/spellcheck/suggestions'))
+  calls.filter((c) => !c.url.endsWith('/spellcheck/suggestions') && !c.url.endsWith('/metadata'))
 
 /** Click the button of the error page and say where it goes (the page is not left). */
 async function clickWayBack(name: string): Promise<string> {
