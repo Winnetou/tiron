@@ -133,7 +133,7 @@ interface Options {
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
   marked?: (xml: string) => Entity[] | Error
   /** Answer of POST .../tokens; defaults to putting the token in the text. */
-  token?: (body: { position: number; text: string }, page: Page) => Partial<Page> | Error
+  token?: (body: { position: number; text: string; new_line?: boolean }, page: Page) => Partial<Page> | Error
   /** Answer of POST .../joins; defaults to removing the spaces from the text. */
   join?: (
     body: { start: number; end: number; text: string },
@@ -503,7 +503,9 @@ function fakeBackend(options: Options = {}) {
       const current = pages.get(number) ?? page
       const changes = options.token
         ? options.token(body, current)
-        : { content: insertToken(current.content, body.position, body.text) }
+        : body.new_line
+          ? { content: xmlOf(`${body.text}\n${textOf(current.content)}`) }
+          : { content: insertToken(current.content, body.position, body.text) }
       if (changes instanceof Error) return failure(422, changes)
       const updated = { ...current, ...changes }
       pages.set(number, updated)
@@ -5374,6 +5376,125 @@ describe('the page number on the other pages', () => {
       await waitFor(() => expect(screen.getAllByText('✓ Approved')).toHaveLength(2))
       expect(screen.queryByText(/^Approving /)).toBeNull()
     })
+  })
+})
+
+describe('adding a line above a line', () => {
+  const TEXT = 'Ala ma kota\nnoc\n\nostatnia linia'
+  const button = () => screen.queryByRole('button', { name: /Add line above/ })
+  const dialog = () => screen.queryByRole('dialog', { name: 'Add a line above' })
+  const field = () => screen.getByRole('textbox', { name: 'Text of the new line' })
+  const tokenCalls = () => calls.filter((c) => c.url.endsWith('/tokens'))
+  const edit = (word: string) =>
+    userEvent.click(screen.getByText(word, { selector: '.word' }))
+
+  async function open(extra: Options = {}) {
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text),
+      ...extra,
+    })
+    await waitFor(() => expect(pageText().textContent).toBe(TEXT))
+  }
+
+  it('is offered for the first word of a line, and for a line of one word', async () => {
+    await open()
+
+    await edit('Ala')
+    expect(button()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('noc') // the only word of its line
+    expect(button()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('ostatnia') // after an empty line
+    expect(button()).toBeInTheDocument()
+  })
+
+  it('is not offered for the other words of a line', async () => {
+    await open()
+
+    await edit('ma')
+    expect(button()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('kota')
+    expect(button()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('linia')
+    expect(button()).toBeNull()
+  })
+
+  it('opens a field for the line, next to the word', async () => {
+    await open()
+    await edit('noc')
+
+    await userEvent.click(button()!)
+
+    expect(dialog()).toBeInTheDocument()
+    expect(field()).toHaveFocus()
+    expect(screen.queryByRole('textbox', { name: /Correct/ })).toBeNull()
+  })
+
+  it('sends the line as a new line above the line that starts at the word', async () => {
+    await open({ token: () => new Error('stop') })
+    await edit('noc')
+    await userEvent.click(button()!)
+
+    await userEvent.type(field(), 'LIST SZÓSTY{Enter}')
+
+    await waitFor(() => expect(tokenCalls()).toHaveLength(1))
+    expect(tokenCalls()[0].body).toEqual({
+      position: 12,
+      text: 'LIST SZÓSTY',
+      new_line: true,
+    })
+  })
+
+  it('shows the new line above the first line of the page', async () => {
+    await open()
+    await edit('Ala')
+    await userEvent.click(button()!)
+
+    await userEvent.type(field(), 'LIST{Enter}')
+
+    await waitFor(() =>
+      expect(pageText().textContent).toBe(`LIST\n${TEXT}`),
+    )
+    expect(tokenCalls()[0].body).toEqual({ position: 0, text: 'LIST', new_line: true })
+    expect(dialog()).toBeNull()
+  })
+
+  it('does not add an empty line', async () => {
+    await open()
+    await edit('Ala')
+    await userEvent.click(button()!)
+
+    expect(within(dialog()!).getByRole('button', { name: 'Add' })).toBeDisabled()
+  })
+
+  it('shows the error when the backend refuses', async () => {
+    await open({ token: () => new Error('A line cannot start there') })
+    await edit('Ala')
+    await userEvent.click(button()!)
+
+    await userEvent.type(field(), 'X{Enter}')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A line cannot start there')
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('closes with Escape, and sends nothing', async () => {
+    await open()
+    await edit('Ala')
+    await userEvent.click(button()!)
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(dialog()).toBeNull()
+    expect(tokenCalls()).toHaveLength(0)
   })
 })
 

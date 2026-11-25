@@ -1397,6 +1397,25 @@ class TestAddToken:
             "Ala LIST SZÓSTY ma kota\nnoc"
         )
 
+    def test_puts_the_token_on_a_new_line_above_the_page(self, stored):
+        body = {"position": 0, "text": "LIST SZÓSTY", "new_line": True}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 200
+        assert tei_xml_to_text(response.json()["content"]) == (
+            "LIST SZÓSTY\nAla ma kota\nnoc"
+        )
+        assert stored["recorded"] == []
+
+    def test_a_new_line_can_only_start_at_the_start_of_a_line(self, stored):
+        body = {"position": 4, "text": "XX", "new_line": True}
+
+        response = self.post(stored, body)
+
+        assert response.status_code == 422
+        assert stored["page"].xml_content_corrected == self.XML
+
     def test_records_no_correction(self, stored):
         self.post(stored, {"position": 4, "text": "XX"})
 

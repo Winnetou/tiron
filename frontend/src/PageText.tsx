@@ -36,6 +36,8 @@ interface TokenPending {
   forText: string
   left: number
   placement: { top: number } | { bottom: number }
+  /** The token is a line of its own, above the line that starts at `position`. */
+  newLine?: boolean
 }
 
 /** The dialog of a selection: where it is, in the box, and for which text. */
@@ -185,6 +187,11 @@ interface WordEditorProps {
   /** The word goes on in the next line (only for the last word of a line). */
   onContinued?: () => void
   /**
+   * Add a new line above the line of the word (only for the first word of a line);
+   * it is given the place of the button, for the dialog to appear next to it.
+   */
+  onAddLineAbove?: (anchor: DOMRect) => void
+  /**
    * The best replacements for the word, closest first (the backend gives none for
    * a word at the start or the end of a line). Asked for a misspelled word only.
    */
@@ -224,6 +231,7 @@ function WordEditor({
   nextLineKind = 'break',
   onLegal,
   onContinued,
+  onAddLineAbove,
   onSuggest,
   onCancel,
 }: WordEditorProps) {
@@ -369,6 +377,21 @@ function WordEditor({
             onClick={onContinued}
           >
             Continued on next line -
+          </button>
+        )}
+        {onAddLineAbove && (
+          <button
+            type="button"
+            className="join-button"
+            title="Add a new line of text above this line"
+            disabled={busy}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              const anchor = event.currentTarget.getBoundingClientRect()
+              onAddLineAbove(anchor)
+            }}
+          >
+            ↑ Add line above
           </button>
         )}
         {onSplitLine && (
@@ -557,7 +580,7 @@ interface Props {
    * points). Without it (outside the correction view) a double click does
    * nothing.
    */
-  onAddToken?: (position: number, token: string) => void
+  onAddToken?: (position: number, token: string, newLine?: boolean) => void
   /**
    * The user chose to join a word with its neighbour, two words that the OCR
    * split: the space between them goes. Without it (outside the correction
@@ -685,11 +708,33 @@ export default function PageText({
     setToken('')
   }
 
+  /**
+   * The "Add line above" button of the first word of a line (`anchor` is where the
+   * button is): the dialog for the new line appears next to it. The new line is
+   * above the line that starts at `position`.
+   */
+  function addLineAbove(position: number, anchor: DOMRect) {
+    if (!wrap.current) return
+    const area = wrap.current.getBoundingClientRect()
+    const lower = anchor.bottom - area.top > area.height / 2
+    setPending(null)
+    setTokenAt({
+      position,
+      forText: text,
+      left: Math.max(0, Math.min(anchor.left - area.left, area.width - POPUP_WIDTH)),
+      placement: lower
+        ? { bottom: Math.max(0, area.bottom - anchor.top + 6) }
+        : { top: anchor.bottom - area.top + 6 },
+      newLine: true,
+    })
+    setToken('')
+  }
+
   function add() {
     // several words are fine: a run of spaces is one
     const typed = token.trim().replace(/\s+/g, ' ')
     if (!addingAt || !onAddToken || typed === '') return
-    onAddToken(addingAt.position, typed)
+    onAddToken(addingAt.position, typed, addingAt.newLine)
     clear()
   }
 
@@ -833,6 +878,14 @@ export default function PageText({
               ? () => setContinued(word)
               : undefined
           }
+          onAddLineAbove={
+            onAddToken && (!previous || lineGap(previous, word))
+              ? (anchor) => {
+                  setEditing(null)
+                  addLineAbove(word.start, anchor)
+                }
+              : undefined
+          }
           onSuggest={onSuggestSpelling}
           onCancel={() => setEditing(null)}
         />
@@ -952,14 +1005,14 @@ export default function PageText({
       {addingAt && (
         <div
           role="dialog"
-          aria-label="Add a text token"
+          aria-label={addingAt.newLine ? 'Add a line above' : 'Add a text token'}
           className={`structure-popup review-styled ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
           style={{ left: addingAt.left, ...addingAt.placement }}
         >
           <input
-            aria-label="Text to add"
+            aria-label={addingAt.newLine ? 'Text of the new line' : 'Text to add'}
             className="styled-input"
-            placeholder="Text"
+            placeholder={addingAt.newLine ? 'Text of the new line' : 'Text'}
             size={20}
             maxLength={200}
             autoFocus

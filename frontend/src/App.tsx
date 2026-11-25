@@ -787,8 +787,8 @@ export default function App() {
           onJoinLines={(words) =>
             run(joinLines(page.edition_id, page.number, words, text))
           }
-          onAddToken={(position, token) =>
-            run(addToken(page.edition_id, page.number, position, token))
+          onAddToken={(position, token, newLine) =>
+            run(addToken(page.edition_id, page.number, position, token, newLine))
           }
           onCreateEntity={(selection, label) =>
             createEntity(page, selection, label)

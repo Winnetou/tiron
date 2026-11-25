@@ -314,18 +314,22 @@ export async function addLegalSpelling(
  * Calls POST /editions/{editionId}/pages/{number}/tokens: the backend puts a text
  * token that the OCR missed at `position` of the page's text (between two
  * characters), in the XML, and returns the updated page. No correction is
- * recorded for it.
+ * recorded for it. With `newLine` the token is put on a line of its own, above
+ * the line that starts at `position`.
  */
 export function addToken(
   editionId: string,
   number: number,
   position: number,
   text: string,
+  newLine = false,
 ): Promise<Page> {
   return request<Page>(`${pageUrl(editionId, number)}/tokens`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ position, text }),
+    // with `new_line` the text is a line of its own, above the line that starts at
+    // `position` (0: above the first line of the page)
+    body: JSON.stringify({ position, text, ...(newLine ? { new_line: true } : {}) }),
   })
 }
 

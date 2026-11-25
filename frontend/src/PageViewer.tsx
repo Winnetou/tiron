@@ -125,7 +125,7 @@ interface Props {
     secondAfter: string,
   ) => void
   /** The user double-clicked a place of the text and typed a token for it. */
-  onAddToken: (position: number, token: string) => void
+  onAddToken: (position: number, token: string, newLine?: boolean) => void
   /** Join two neighbouring words that the OCR split: the space between goes. */
   onJoinWords: (words: Word[]) => void
   /** Start a new line between two neighbouring words of a line. */
