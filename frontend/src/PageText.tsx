@@ -187,6 +187,11 @@ interface WordEditorProps {
   /** The word goes on in the next line (only for the last word of a line). */
   onContinued?: () => void
   /**
+   * Add a new line above the line of the word (only for the first word of a line);
+   * it is given the place of the button, for the dialog to appear next to it.
+   */
+  onAddLineAbove?: (anchor: DOMRect) => void
+  /**
    * The best replacements for the word, closest first (the backend gives none for
    * a word at the start or the end of a line). Asked for a misspelled word only.
    */
@@ -226,6 +231,7 @@ function WordEditor({
   nextLineKind = 'break',
   onLegal,
   onContinued,
+  onAddLineAbove,
   onSuggest,
   onCancel,
 }: WordEditorProps) {
@@ -371,6 +377,21 @@ function WordEditor({
             onClick={onContinued}
           >
             Continued on next line -
+          </button>
+        )}
+        {onAddLineAbove && (
+          <button
+            type="button"
+            className="join-button"
+            title="Add a new line of text above this line"
+            disabled={busy}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              const anchor = event.currentTarget.getBoundingClientRect()
+              onAddLineAbove(anchor)
+            }}
+          >
+            ↑ Add line above
           </button>
         )}
         {onSplitLine && (
@@ -687,10 +708,25 @@ export default function PageText({
     setToken('')
   }
 
-  /** The button above the text: the dialog to add a line above the first one. */
-  function addLineAbove() {
+  /**
+   * The "Add line above" button of the first word of a line (`anchor` is where the
+   * button is): the dialog for the new line appears next to it. The new line is
+   * above the line that starts at `position`.
+   */
+  function addLineAbove(position: number, anchor: DOMRect) {
+    if (!wrap.current) return
+    const area = wrap.current.getBoundingClientRect()
+    const lower = anchor.bottom - area.top > area.height / 2
     setPending(null)
-    setTokenAt({ position: 0, forText: text, left: 0, placement: { top: 0 }, newLine: true })
+    setTokenAt({
+      position,
+      forText: text,
+      left: Math.max(0, Math.min(anchor.left - area.left, area.width - POPUP_WIDTH)),
+      placement: lower
+        ? { bottom: Math.max(0, area.bottom - anchor.top + 6) }
+        : { top: anchor.bottom - area.top + 6 },
+      newLine: true,
+    })
     setToken('')
   }
 
@@ -842,6 +878,14 @@ export default function PageText({
               ? () => setContinued(word)
               : undefined
           }
+          onAddLineAbove={
+            onAddToken && (!previous || lineGap(previous, word))
+              ? (anchor) => {
+                  setEditing(null)
+                  addLineAbove(word.start, anchor)
+                }
+              : undefined
+          }
           onSuggest={onSuggestSpelling}
           onCancel={() => setEditing(null)}
         />
@@ -951,30 +995,17 @@ export default function PageText({
           </button>
         </form>
       ) : (
-        <div className="hint-row">
-          <p className="structure-hint">
-            {onCreateEntity
-              ? 'Select some text to mark it as a named entity the recognition missed.'
-              : 'Double-click a place in the text to add text that the OCR missed.'}
-          </p>
-          {onAddToken && !onCreateEntity && text.trim() !== '' && (
-            <button
-              type="button"
-              className="add-line-button"
-              title="Add a line of text above the first line of the page"
-              disabled={busy}
-              onClick={addLineAbove}
-            >
-              + Line above
-            </button>
-          )}
-        </div>
+        <p className="structure-hint">
+          {onCreateEntity
+            ? 'Select some text to mark it as a named entity the recognition missed.'
+            : 'Double-click a place in the text to add text that the OCR missed.'}
+        </p>
       )}
       {pre}
       {addingAt && (
         <div
           role="dialog"
-          aria-label={addingAt.newLine ? 'Add a line above the first line' : 'Add a text token'}
+          aria-label={addingAt.newLine ? 'Add a line above' : 'Add a text token'}
           className={`structure-popup review-styled ${'bottom' in addingAt.placement ? 'above' : 'below'}`}
           style={{ left: addingAt.left, ...addingAt.placement }}
         >

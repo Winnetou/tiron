@@ -5379,55 +5379,106 @@ describe('the page number on the other pages', () => {
   })
 })
 
-describe('adding a line above the first line', () => {
-  const TEXT = 'Ala ma kota\nnoc'
-  const button = () => screen.getByRole('button', { name: '+ Line above' })
-  const dialog = () => screen.queryByRole('dialog', { name: 'Add a line above the first line' })
+describe('adding a line above a line', () => {
+  const TEXT = 'Ala ma kota\nnoc\n\nostatnia linia'
+  const button = () => screen.queryByRole('button', { name: /Add line above/ })
+  const dialog = () => screen.queryByRole('dialog', { name: 'Add a line above' })
   const field = () => screen.getByRole('textbox', { name: 'Text of the new line' })
   const tokenCalls = () => calls.filter((c) => c.url.endsWith('/tokens'))
+  const edit = (word: string) =>
+    userEvent.click(screen.getByText(word, { selector: '.word' }))
 
   async function open(extra: Options = {}) {
-    await openPage({ page: () => ({ content: xmlOf(TEXT) }), ...extra })
+    await openPage({
+      page: () => ({ content: xmlOf(TEXT) }),
+      spell: (text) => wordsOf(text),
+      ...extra,
+    })
     await waitFor(() => expect(pageText().textContent).toBe(TEXT))
   }
 
-  it('has a button above the text, which opens a field for the line', async () => {
+  it('is offered for the first word of a line, and for a line of one word', async () => {
     await open()
 
-    await userEvent.click(button())
+    await edit('Ala')
+    expect(button()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('noc') // the only word of its line
+    expect(button()).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('ostatnia') // after an empty line
+    expect(button()).toBeInTheDocument()
+  })
+
+  it('is not offered for the other words of a line', async () => {
+    await open()
+
+    await edit('ma')
+    expect(button()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('kota')
+    expect(button()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    await edit('linia')
+    expect(button()).toBeNull()
+  })
+
+  it('opens a field for the line, next to the word', async () => {
+    await open()
+    await edit('noc')
+
+    await userEvent.click(button()!)
 
     expect(dialog()).toBeInTheDocument()
     expect(field()).toHaveFocus()
+    expect(screen.queryByRole('textbox', { name: /Correct/ })).toBeNull()
   })
 
-  it('sends the line as a new line at position 0, and shows it above the others', async () => {
-    await open()
-    await userEvent.click(button())
+  it('sends the line as a new line above the line that starts at the word', async () => {
+    await open({ token: () => new Error('stop') })
+    await edit('noc')
+    await userEvent.click(button()!)
 
     await userEvent.type(field(), 'LIST SZÓSTY{Enter}')
 
     await waitFor(() => expect(tokenCalls()).toHaveLength(1))
     expect(tokenCalls()[0].body).toEqual({
-      position: 0,
+      position: 12,
       text: 'LIST SZÓSTY',
       new_line: true,
     })
+  })
+
+  it('shows the new line above the first line of the page', async () => {
+    await open()
+    await edit('Ala')
+    await userEvent.click(button()!)
+
+    await userEvent.type(field(), 'LIST{Enter}')
+
     await waitFor(() =>
-      expect(pageText().textContent).toBe('LIST SZÓSTY\nAla ma kota\nnoc'),
+      expect(pageText().textContent).toBe(`LIST\n${TEXT}`),
     )
+    expect(tokenCalls()[0].body).toEqual({ position: 0, text: 'LIST', new_line: true })
     expect(dialog()).toBeNull()
   })
 
   it('does not add an empty line', async () => {
     await open()
-    await userEvent.click(button())
+    await edit('Ala')
+    await userEvent.click(button()!)
 
     expect(within(dialog()!).getByRole('button', { name: 'Add' })).toBeDisabled()
   })
 
   it('shows the error when the backend refuses', async () => {
     await open({ token: () => new Error('A line cannot start there') })
-    await userEvent.click(button())
+    await edit('Ala')
+    await userEvent.click(button()!)
 
     await userEvent.type(field(), 'X{Enter}')
 
@@ -5435,11 +5486,15 @@ describe('adding a line above the first line', () => {
     expect(pageText().textContent).toBe(TEXT)
   })
 
-  it('is not offered for a page without text, which has its own field', async () => {
-    await openPage({ page: () => ({ content: xmlOf('') }) })
-    await screen.findByRole('textbox', { name: 'Text to add to the empty page' })
+  it('closes with Escape, and sends nothing', async () => {
+    await open()
+    await edit('Ala')
+    await userEvent.click(button()!)
 
-    expect(screen.queryByRole('button', { name: '+ Line above' })).toBeNull()
+    await userEvent.keyboard('{Escape}')
+
+    expect(dialog()).toBeNull()
+    expect(tokenCalls()).toHaveLength(0)
   })
 })
 

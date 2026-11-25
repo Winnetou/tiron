@@ -905,19 +905,6 @@ button {
   color: #555;
 }
 
-.hint-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.add-line-button {
-  flex: none;
-  margin-bottom: 0.4rem;
-  font-size: 0.85rem;
-}
-
 .structure-box {
   cursor: text;
 }
