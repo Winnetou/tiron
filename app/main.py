@@ -37,6 +37,7 @@ from app.persistence.ontology import (
     PageTokenOccurrences,
     SimilarEntities,
     SimilarPageNumbers,
+    SpellingFamily,
     SpellingGroup,
 )
 from app.persistence.schema_creator import ensure_schema
@@ -883,6 +884,61 @@ def get_spelling_chunk_matches(
         len(found),
         edition_id,
         ", ".join(substrings),
+    )
+    return found
+
+
+@app.get(
+    "/editions/{edition_id}/bulk-spelling-check", response_model=list[SpellingFamily]
+)
+def get_bulk_spelling_check(edition_id: UUID) -> list[SpellingFamily]:
+    """List the spellings of the whole edition that the spell check flags and that
+    are there often, so that they can be accepted as legal spellings (`POST
+    .../legal-spellings`), all at once. Nothing is corrected: old print has spellings
+    that repeat ("Konwencya"), and the dictionary is a modern one. One flagged once is
+    likely an OCR mistake, one flagged again and again is a spelling of the print.
+
+    Every page is checked in the way that `POST /spellcheck` does (a word split over
+    two lines is judged as one word, and the legal spellings of the edition count as
+    correct, so a word that is accepted already is not listed), except that **the
+    first and the last word of every line are left out**, so the first and the last
+    of every page too: a word that the end of a line cuts is flagged for nothing.
+    Signs do not count, `— Ala ma kota.` has `Ala` first and `kota` last. A spelling
+    is listed only if it is in the edition **more than three times** (those words
+    that are looked at), and with the case it has: "Konwencya" and "konwencya" are
+    two.
+
+    The response is a list of families, the ones that are in the edition most often
+    (all their spellings together) first: `{"stem": "konwency", "count": 11,
+    "spellings": [{"text": "Konwencya", "count": 7, "occurrences": [{"page_number":
+    8, "start": 383, "end": 392, "before": "w", "after": "z"}]}, ...]}`. A family is
+    spellings that are one word with different endings: they begin with the same
+    letters, at least four whatever the case, and have at most four letters after
+    them ("Konwencya", "Konwencyi" and "Konwencyami" are one, "Konstytucya" is
+    another). `stem` is the letters they all begin with, in lower case. The
+    `spellings` of a family are the most common first, and are like the items of
+    `GET .../spelling-chunk-matches`: `occurrences` are the first places of the
+    spelling (at most five, in the order of the pages), `count` is how many there
+    are in all, and `start` and `end` are offsets in the text of the page that
+    `POST /tei/text` gives (counted in code points), so text[start:end] is the
+    spelling. `before` and `after` are its context, as they are written. The
+    pages are searched in their corrected content, as the user sees them; one
+    whose XML cannot be read is left out. Nothing is changed, and Polona is not
+    called.
+
+    404 if the edition is not stored. 503 if the dictionary is not available.
+    """
+    if db.get_edition(edition_id) is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    try:
+        found = db.get_bulk_spelling_check(edition_id)
+    except SpellcheckUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    logger.info(
+        "%s families of frequent flagged spellings in edition %s",
+        len(found),
+        edition_id,
     )
     return found
 

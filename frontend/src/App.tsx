@@ -33,6 +33,7 @@ import {
 import EditionList from './EditionList'
 import LoginPage from './LoginPage'
 import EditionMetadataPanel from './EditionMetadataPanel'
+import { BulkSpellingReview } from './EditionWideBulkSpelling'
 import { PageLoading } from './Loading'
 import {
   SimilarEntitiesReview,
@@ -213,6 +214,8 @@ export default function App() {
   // The page whose line ends are looked at for the hyphens that the OCR dropped.
   const [findingHyphens, setFindingHyphens] = useState<HyphenPage | null>(null)
   // The edition whose flagged spellings the user wants to accept by their substring.
+  // The edition whose spelling is checked in bulk.
+  const [checkingBulk, setCheckingBulk] = useState<{ editionId: string } | null>(null)
   const [acceptingChunk, setAcceptingChunk] = useState<{ editionId: string } | null>(
     null,
   )
@@ -330,6 +333,7 @@ export default function App() {
     setFindingRubbish(null)
     setFindingEntities(null)
     setAcceptingChunk(null)
+    setCheckingBulk(null)
     setReplacingToken(null)
     setStatus({ kind: 'idle' })
   }
@@ -804,6 +808,7 @@ export default function App() {
           }
           onReplaceToken={() => setReplacingToken({ editionId: page.edition_id })}
           onApplyRule={() => setAcceptingChunk({ editionId: page.edition_id })}
+          onBulkSpellingCheck={() => setCheckingBulk({ editionId: page.edition_id })}
           onFindEntities={(examples) =>
             setFindingEntities({ editionId: page.edition_id, examples })
           }
@@ -861,6 +866,13 @@ export default function App() {
               acceptSpelling(acceptingChunk.editionId, spelling)
             }
             onClose={() => setAcceptingChunk(null)}
+          />
+        )}
+        {checkingBulk && (
+          <BulkSpellingReview
+            editionId={checkingBulk.editionId}
+            onAccept={(spelling) => acceptSpelling(checkingBulk.editionId, spelling)}
+            onClose={() => setCheckingBulk(null)}
           />
         )}
         {findingEntities && (

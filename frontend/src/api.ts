@@ -513,6 +513,27 @@ export function getSpellingChunkMatches(
   )
 }
 
+/** Flagged spellings that are one word with different endings (SpellingFamily). */
+export interface SpellingFamily {
+  /** The letters they all begin with, in lower case. */
+  stem: string
+  /** How many times they are in the edition together. */
+  count: number
+  /** The spellings, the most common first. */
+  spellings: SpellingGroup[]
+}
+
+/**
+ * Calls GET /editions/{editionId}/bulk-spelling-check: the backend checks the
+ * spelling of the whole edition (leaving out the first and the last word of each
+ * line) and answers with the flagged spellings that are there more than three times,
+ * in families of one word with different endings, the most common first. Nothing is
+ * changed.
+ */
+export function getBulkSpellingCheck(editionId: string): Promise<SpellingFamily[]> {
+  return request<SpellingFamily[]>(`/editions/${editionId}/bulk-spelling-check`)
+}
+
 /** A form of a named entity in the cases (EntityForm). */
 export interface EntityForm {
   text: string

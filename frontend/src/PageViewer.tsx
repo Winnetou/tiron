@@ -144,6 +144,11 @@ interface Props {
    */
   onApplyRule: () => void
   /**
+   * Check the spelling of the whole edition at once and accept, as legal spellings,
+   * the flagged ones that are there often.
+   */
+  onBulkSpellingCheck: () => void
+  /**
    * Look for a named entity that was confirmed on this page, in all its forms in
    * the cases, in the whole edition: `examples` are the confirmed entities.
    */
@@ -211,6 +216,7 @@ export default function PageViewer({
   onFindRubbish,
   onFindEntities,
   onApplyRule,
+  onBulkSpellingCheck,
   onReplaceToken,
   highlight,
   dock,
@@ -299,6 +305,13 @@ export default function PageViewer({
             disabled: busy,
             title:
               'Give a substring of letters, such as cy with the endings a, i, ami, and accept the flagged words of the whole edition that have it as legal spellings',
+          },
+          {
+            label: 'Bulk spelling check',
+            onSelect: onBulkSpellingCheck,
+            disabled: busy,
+            title:
+              'Check the spelling of the whole edition and accept as legal spellings the flagged ones that are there more than three times, grouped by their stem',
           },
           {
             label: 'Replace a token in the edition',

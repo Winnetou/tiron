@@ -1480,3 +1480,10 @@ main.loading-page {
   font-size: 0.8rem;
   color: #777;
 }
+
+/* a family of spellings in the box of the bulk spelling check: its stem, then its words */
+.review-family-title {
+  margin: 1rem 0 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1rem;
+}
