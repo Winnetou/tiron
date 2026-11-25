@@ -927,8 +927,8 @@ export default function App() {
     return (
       <main className="error-page review-styled">
         <div className="error-page-stage">
-          {/* the skeleton, pointing to the left, is the background of the message */}
-          <img className="error-page-image" src="/vademecum.jpg" alt="" />
+          {/* the skeleton, waving and pointing to the left, is the background of the message */}
+          <img className="error-page-image" src="/skeleton-wave.gif" alt="" />
           <div className="error-page-text">
             <p role="alert" className="error-page-message">
               {status.message}

@@ -1145,7 +1145,7 @@ edition is not known either (the backend has no metadata for it), the link is "B
 to the editions", to the main page. The same goes for an address whose edition is not
 a uuid at all (`/editions/abc/pages/0`): the error is shown, not the main page.
 The error page is a skeleton pointing its finger at the message
-(`frontend/public/vademecum.jpg`), with the message in the type of the edition titles
+(the animated `frontend/public/skeleton-wave.gif`), with the message in the type of the edition titles
 on the main page and the way back as a button.
 
 On a page, a round **house** button ("Back to the list of editions", at the left of the
