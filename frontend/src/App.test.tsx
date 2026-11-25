@@ -802,7 +802,7 @@ describe('the page address', () => {
     const page = message.closest('main')!
     expect(page).toHaveClass('error-page')
     expect(page).toHaveClass('review-styled') // the look of the buttons
-    expect(page.querySelector('img')).toHaveAttribute('src', '/vademecum.jpg')
+    expect(page.querySelector('img')).toHaveAttribute('src', '/skeleton-wave.gif')
     expect(message).toHaveClass('error-page-message')
   })
 

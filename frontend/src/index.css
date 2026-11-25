@@ -19,9 +19,9 @@ main {
   place-items: center;
 }
 
-/* The page of an error: the skeleton, mirrored so that it points to the left as
-   "back" does, is the background, and the message and the way back are over its
-   empty left side. */
+/* The page of an error: the skeleton (a gif, waving, that points to the left as "back"
+   does) is the background, and the message and the way back are over its empty left
+   side. */
 main.error-page {
   padding: 1rem;
   box-sizing: border-box;
@@ -29,9 +29,9 @@ main.error-page {
 
 .error-page-stage {
   position: relative;
-  /* the picture is 1408 x 768: as large as the screen allows, in its proportions */
-  width: min(100%, 56rem, calc(92vh * 1408 / 768));
-  aspect-ratio: 1408 / 768;
+  /* the picture is square: as large as the screen allows */
+  width: min(100%, 40rem, 92vh);
+  aspect-ratio: 1;
 }
 
 .error-page-image {
@@ -39,15 +39,15 @@ main.error-page {
   inset: 0;
   width: 100%;
   height: 100%;
-  transform: scaleX(-1);
 }
 
+/* below the arm, and left of the legs of the skeleton */
 .error-page-text {
   position: absolute;
-  left: 4%;
-  top: 50%;
+  left: 3%;
+  top: 55%;
   transform: translateY(-50%);
-  width: 38%;
+  width: 50%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
