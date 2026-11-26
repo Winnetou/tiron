@@ -9540,3 +9540,218 @@ describe('the bulk spelling check', () => {
     expect(review()).toBeNull()
   })
 })
+
+describe('removing the line of a selection', () => {
+  const TEXT = 'Ala ma kota\n$ *>• x\nnoc'
+  const LINE = '$ *>• x'
+  const dialog = () => screen.queryByRole('dialog', { name: 'Remove the line' })
+  const removeButton = () => within(dialog()!).getByRole('button', { name: 'Remove line' })
+  const removalCalls = () => calls.filter((c) => c.url.endsWith('/line-removals'))
+
+  async function open(extra: Options = {}, text = TEXT) {
+    await openPage({ page: () => ({ content: xmlOf(text) }), ...extra })
+    await waitFor(() => expect(pageText().textContent).toBe(text))
+  }
+
+  /** The text node and the offset in it of the `at`th character of the page text. */
+  function pointAt(at: number): [Text, number] {
+    const walker = document.createTreeWalker(pageText(), NodeFilter.SHOW_TEXT)
+    let seen = 0
+    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+      if (at <= seen + node.data.length) return [node, at - seen]
+      seen += node.data.length
+    }
+    throw new Error(`no character ${at}`)
+  }
+
+  /** Select the characters `from` to `to` of the text, as the user does with the mouse. */
+  function selectRange(from: number, to: number) {
+    const range = document.createRange()
+    range.setStart(...pointAt(from))
+    range.setEnd(...pointAt(to))
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.mouseUp(pageText())
+  }
+  const selectText = (selected: string, text = TEXT) =>
+    selectRange(text.indexOf(selected), text.indexOf(selected) + selected.length)
+
+  afterEach(() => window.getSelection()?.removeAllRanges())
+
+  it('asks about the whole line when a part of it is selected', async () => {
+    await open()
+
+    selectText('*>•')
+
+    expect(dialog()).toBeInTheDocument()
+    expect(within(dialog()!).getByText('Remove this whole line?')).toBeInTheDocument()
+    expect(within(dialog()!).getByText(LINE)).toBeInTheDocument()
+    expect(dialog()).toHaveClass('review-styled')
+  })
+
+  it('shows nothing until text is selected', async () => {
+    await open()
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('sends nothing until it is confirmed', async () => {
+    await open()
+
+    selectText('*>•')
+
+    expect(removalCalls()).toHaveLength(0)
+  })
+
+  it('sends the whole line, and shows the page without it', async () => {
+    await open()
+    selectText('*>•')
+
+    await userEvent.click(removeButton())
+
+    await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    expect(removalCalls()[0].method).toBe('POST')
+    expect(removalCalls()[0].url).toBe(`/editions/${UUID}/pages/0/line-removals`)
+    expect(removalCalls()[0].body).toEqual({ start: 12, end: 19, text: LINE })
+    await waitFor(() => expect(pageText().textContent).toBe('Ala ma kota\nnoc'))
+    expect(dialog()).toBeNull()
+  })
+
+  it('removes the first and the last line of the text too', async () => {
+    await open()
+
+    selectText('kota')
+    await userEvent.click(removeButton())
+    await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    expect(removalCalls()[0].body).toEqual({ start: 0, end: 11, text: 'Ala ma kota' })
+  })
+
+  it('a selection of the whole line is the same as a part of it', async () => {
+    await open()
+
+    selectRange(12, 19)
+    await userEvent.click(removeButton())
+
+    await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    expect(removalCalls()[0].body).toEqual({ start: 12, end: 19, text: LINE })
+  })
+
+  it('leaves out the spaces around the line', async () => {
+    await open({}, ' $ x \nnoc')
+
+    selectText('$', ' $ x \nnoc')
+    await userEvent.click(removeButton())
+
+    await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    expect(removalCalls()[0].body).toEqual({ start: 1, end: 4, text: '$ x' })
+  })
+
+  it('counts in code points, as the backend does, after emoji', async () => {
+    const text = '😀 Ala\n$ x'
+    await open({}, text)
+
+    selectText('$ x', text)
+    await userEvent.click(removeButton())
+
+    await waitFor(() => expect(removalCalls()).toHaveLength(1))
+    expect(removalCalls()[0].body).toEqual({ start: 6, end: 9, text: '$ x' })
+  })
+
+  it('Cancel closes the dialog and sends nothing', async () => {
+    await open()
+    selectText('*>•')
+
+    await userEvent.click(within(dialog()!).getByRole('button', { name: 'Cancel' }))
+
+    expect(dialog()).toBeNull()
+    expect(removalCalls()).toHaveLength(0)
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('Escape closes the dialog and sends nothing', async () => {
+    await open()
+    selectText('*>•')
+
+    await userEvent.keyboard('{Escape}')
+
+    expect(dialog()).toBeNull()
+    expect(removalCalls()).toHaveLength(0)
+  })
+
+  it('selecting nothing after a selection closes the dialog', async () => {
+    await open()
+    selectText('*>•')
+
+    window.getSelection()!.removeAllRanges()
+    fireEvent.mouseUp(pageText())
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('a selection in more than one line is not offered for removal', async () => {
+    await open()
+
+    selectText('kota\n$ *')
+
+    expect(dialog()).toBeInTheDocument()
+    expect(within(dialog()!).getByText(/in one line only/)).toBeInTheDocument()
+    expect(within(dialog()!).queryByRole('button', { name: 'Remove line' })).toBeNull()
+    expect(removalCalls()).toHaveLength(0)
+  })
+
+  it('a drag over a word does not open the editor of the word', async () => {
+    await open({ spell: (text) => wordsOf(text, ['kota']) })
+
+    selectText('kota')
+    // (the click that ends a drag: the selection is still there)
+    fireEvent.click(within(pageText()).getByText('kota'))
+
+    expect(screen.queryByRole('textbox', { name: 'Correct "kota"' })).toBeNull()
+    expect(dialog()).toBeInTheDocument()
+  })
+
+  it('a plain click on a word still opens its editor', async () => {
+    await open({ spell: (text) => wordsOf(text, ['kota']) })
+
+    await userEvent.click(within(pageText()).getByText('kota'))
+
+    expect(screen.getByRole('textbox', { name: 'Correct "kota"' })).toBeInTheDocument()
+    expect(dialog()).toBeNull()
+  })
+
+  it('shows why the backend refused, and the line stays', async () => {
+    await open({ removeLine: () => new Error('The line has markup in it') })
+    selectText('*>•')
+
+    await userEvent.click(removeButton())
+
+    expect(await screen.findByText(/The line has markup in it/)).toBeInTheDocument()
+    expect(pageText().textContent).toBe(TEXT)
+  })
+
+  it('is for the correction view only: in the structure view a selection is for a section', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Structure' }))
+
+    selectText('*>•')
+
+    expect(dialog()).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Mark the selected text' })).toBeInTheDocument()
+  })
+
+  it('is for the correction view only: in the Text view there is no dialog', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: 'Text' }))
+
+    selectText('*>•')
+
+    expect(dialog()).toBeNull()
+  })
+
+  it('tells about it in the hint of the correction view', async () => {
+    await open()
+
+    expect(screen.getByText(/Select some text in a line to remove the line/)).toBeInTheDocument()
+  })
+})

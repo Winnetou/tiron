@@ -126,6 +126,8 @@ interface Props {
   ) => void
   /** The user double-clicked a place of the text and typed a token for it. */
   onAddToken: (position: number, token: string, newLine?: boolean) => void
+  /** Remove a whole line of the text (OCR rubbish), after the user confirmed it. */
+  onRemoveLine: (line: TextSelection) => void
   /** Join two neighbouring words that the OCR split: the space between goes. */
   onJoinWords: (words: Word[]) => void
   /** Start a new line between two neighbouring words of a line. */
@@ -208,6 +210,7 @@ export default function PageViewer({
   onMarkSection,
   onCreateEntity,
   onAddToken,
+  onRemoveLine,
   onJoinWords,
   onSplitLine,
   onJoinLines,
@@ -506,6 +509,8 @@ export default function PageViewer({
             onCreateEntity={view === 'ner' ? onCreateEntity : undefined}
             // in the correction view a double click adds a token the OCR missed
             onAddToken={view === 'correction' ? onAddToken : undefined}
+            // ... and a selection in a line offers to remove the line
+            onRemoveLine={view === 'correction' ? onRemoveLine : undefined}
             // a page without text (not one whose XML could not be read) has
             // nothing to double-click: it gets a field for its first text
             emptyPage={text === '' && !textError}

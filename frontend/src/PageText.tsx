@@ -26,6 +26,14 @@ const NOT_NER = 'Not NER'
 const isWord = (word: Word) =>
   /^[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*$/u.test(word.text)
 
+/** The line without the spaces at its ends (the offsets follow). */
+function trimmed(line: TextSelection): TextSelection {
+  const lead = line.text.length - line.text.trimStart().length
+  const text = line.text.trim()
+  const start = line.start + [...line.text.slice(0, lead)].length
+  return { start, end: start + [...text].length, text }
+}
+
 /** About how wide the dialog of a new entity is, to keep it inside the box. */
 const POPUP_WIDTH = 300
 
@@ -47,6 +55,18 @@ interface Pending {
   forText: string
   left: number
   /** Below the selection, or above it for one in the lower half of the box. */
+  placement: { top: number } | { bottom: number }
+}
+
+/**
+ * The dialog that asks to remove a line: where it is, in the box, and for which
+ * text. It is for the line that the selection is in.
+ */
+interface RemovalPending {
+  /** The whole line, trimmed; null if the selection is in more than one line. */
+  line: TextSelection | null
+  forText: string
+  left: number
   placement: { top: number } | { bottom: number }
 }
 
@@ -582,6 +602,12 @@ interface Props {
    */
   onAddToken?: (position: number, token: string, newLine?: boolean) => void
   /**
+   * The user selected some text in one line and confirmed that the whole line is
+   * to be removed (OCR rubbish). Without it (outside the correction view) a
+   * selection does not offer to remove anything.
+   */
+  onRemoveLine?: (line: TextSelection) => void
+  /**
    * The user chose to join a word with its neighbour, two words that the OCR
    * split: the space between them goes. Without it (outside the correction
    * view) the words cannot be joined.
@@ -632,6 +658,7 @@ export default function PageText({
   onSuggestSpelling,
   onCreateEntity,
   onAddToken,
+  onRemoveLine,
   onJoinWords,
   onSplitLine,
   onJoinLines,
@@ -660,15 +687,20 @@ export default function PageText({
     setFirstText('')
   }
 
+  // The dialog that asks to remove the line of a selection
+  const [removal, setRemoval] = useState<RemovalPending | null>(null)
+  const removing = removal && removal.forText === text ? removal : null
+
   function clear() {
     setPending(null)
     setLabel('')
     setTokenAt(null)
     setToken('')
+    setRemoval(null)
   }
 
   // Escape closes the dialogs wherever the keyboard focus is.
-  const open = active !== null || addingAt !== null
+  const open = active !== null || addingAt !== null || removing !== null
   useEffect(() => {
     if (!open) return
     function onKeyDown(event: KeyboardEvent) {
@@ -761,6 +793,56 @@ export default function PageText({
         : { top: rect.bottom - area.top + 6 },
     })
     setLabel('')
+  }
+
+  /**
+   * Called when a selection may have been made in the correction view: the dialog
+   * asks whether the whole line it is in is to be removed. A selection that is in
+   * more than one line cannot be removed; the dialog says so.
+   */
+  function readLine(event: MouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>) {
+    // typing in the editor of a word is not selecting text of the page
+    if ((event.target as Element).closest('input, select, textarea')) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return clear()
+    }
+    const range = selection.getRangeAt(0)
+    const found = box.current && selectionInText(box.current, range, text)
+    if (!found || !wrap.current) return clear()
+
+    // the whole line, from the line break before it to the one after it
+    const points = Array.from(text)
+    let lineStart = found.start
+    while (lineStart > 0 && points[lineStart - 1] !== '\n') lineStart--
+    let lineEnd = found.end
+    while (lineEnd < points.length && points[lineEnd] !== '\n') lineEnd++
+    const whole = points.slice(lineStart, lineEnd).join('')
+    const line = found.text.includes('\n')
+      ? null
+      : { start: lineStart, end: lineEnd, text: whole }
+
+    // jsdom (the tests) has no layout: then the dialog is at the corner
+    const rect = range.getBoundingClientRect?.() ?? new DOMRect()
+    const area = wrap.current.getBoundingClientRect()
+    const lower = rect.bottom - area.top > area.height / 2
+    setPending(null)
+    setTokenAt(null)
+    setRemoval({
+      line: line && line.text.trim() !== '' ? trimmed(line) : null,
+      forText: text,
+      left: Math.max(0, Math.min(rect.right - area.left, area.width - POPUP_WIDTH)),
+      placement: lower
+        ? { bottom: Math.max(0, area.bottom - rect.top + 6) }
+        : { top: rect.bottom - area.top + 6 },
+    })
+  }
+
+  function removeSelectedLine() {
+    if (!removing?.line || !onRemoveLine) return
+    onRemoveLine(removing.line)
+    clear()
+    window.getSelection()?.removeAllRanges()
   }
 
   function create() {
@@ -891,7 +973,11 @@ export default function PageText({
         />
       )
     }
-    const edit = () => setEditing({ word, among: words })
+    const edit = () => {
+      // dragging over a word selects it (to remove its line): that is no click
+      if (onRemoveLine && !window.getSelection()?.isCollapsed) return
+      setEditing({ word, among: words })
+    }
     return (
       <span
         key={key}
@@ -957,14 +1043,14 @@ export default function PageText({
       role="region"
       aria-label="Page text"
       tabIndex={0}
-      onMouseUp={onCreateEntity ? read : undefined}
-      onKeyUp={onCreateEntity ? read : undefined}
+      onMouseUp={onCreateEntity ? read : onRemoveLine ? readLine : undefined}
+      onKeyUp={onCreateEntity ? read : onRemoveLine ? readLine : undefined}
       onDoubleClick={onAddToken ? doubleClicked : undefined}
     >
       {items}
     </pre>
   )
-  if (!onCreateEntity && !onAddToken) return pre
+  if (!onCreateEntity && !onAddToken && !onRemoveLine) return pre
 
   return (
     <div className="structure-wrap" ref={wrap}>
@@ -998,7 +1084,8 @@ export default function PageText({
         <p className="structure-hint">
           {onCreateEntity
             ? 'Select some text to mark it as a named entity the recognition missed.'
-            : 'Double-click a place in the text to add text that the OCR missed.'}
+            : 'Double-click a place in the text to add text that the OCR missed.' +
+              (onRemoveLine ? ' Select some text in a line to remove the line.' : '')}
         </p>
       )}
       {pre}
@@ -1030,6 +1117,31 @@ export default function PageText({
           >
             Add
           </button>
+        </div>
+      )}
+      {removing && (
+        <div
+          role="dialog"
+          aria-label="Remove the line"
+          className={`structure-popup review-styled ${'bottom' in removing.placement ? 'above' : 'below'}`}
+          style={{ left: removing.left, ...removing.placement }}
+        >
+          {removing.line ? (
+            <>
+              <span className="removal-question">Remove this whole line?</span>
+              <q className="removal-line">{removing.line.text}</q>
+              <button type="button" onClick={removeSelectedLine} disabled={busy}>
+                Remove line
+              </button>
+              <button type="button" onClick={clear}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <span className="removal-question">
+              Select text in one line only: a line is removed at a time.
+            </span>
+          )}
         </div>
       )}
       {active && (

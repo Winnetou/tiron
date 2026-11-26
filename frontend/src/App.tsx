@@ -806,6 +806,13 @@ export default function App() {
           onJoinLines={(words) =>
             run(joinLines(page.edition_id, page.number, words, text))
           }
+          onRemoveLine={(line) =>
+            run(
+              removeLine(page.edition_id, page.number, line).then(
+                (removed) => removed.page,
+              ),
+            )
+          }
           onAddToken={(position, token, newLine) =>
             run(addToken(page.edition_id, page.number, position, token, newLine))
           }
