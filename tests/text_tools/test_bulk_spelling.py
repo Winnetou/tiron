@@ -2,9 +2,11 @@ import pytest
 
 from app.text_tools import spelling
 from app.text_tools.bulk_spelling import (
+    MORE_THAN,
     Family,
     find_inner_flagged_words,
     group_into_families,
+    only_frequent_words_looked_up,
     same_family,
 )
 
@@ -12,8 +14,10 @@ from app.text_tools.bulk_spelling import (
 class FakeChecker:
     def __init__(self, *known):
         self.known = {word.lower() for word in known}
+        self.lookups = []
 
     def lookup(self, word):
+        self.lookups.append(word)
         return word.lower() in self.known
 
 
@@ -21,6 +25,7 @@ class FakeChecker:
 def dictionary(monkeypatch):
     checker = FakeChecker("ala", "ma", "kot", "i", "w")
     monkeypatch.setattr(spelling, "get_checker", lambda: checker)
+    return checker
 
 
 def flagged(text, legal=()):
@@ -60,6 +65,111 @@ class TestFindInnerFlaggedWords:
         assert text[match.start : match.end] == "Konwencya"
         assert match.before == "ma"
         assert match.after == "i"
+
+
+class TestVerdictSharedByTheTexts:
+    PAGES = [
+        "ala Konwencya ma kot i Policya ala",
+        "ala Konwencya ma Policya kot Tendencya ala",
+        "ala ma Konwencya kot ala",
+    ]
+
+    def test_every_distinct_word_is_looked_up_once_for_all_the_pages(self, dictionary):
+        verdict = spelling.word_verdict()
+
+        for page in self.PAGES:
+            find_inner_flagged_words(page, verdict=verdict)
+
+        assert sorted(dictionary.lookups) == sorted(set(dictionary.lookups))
+
+    def test_each_page_has_its_own_lookups_without_it(self, dictionary):
+        for page in self.PAGES:
+            find_inner_flagged_words(page)
+
+        assert dictionary.lookups.count("Konwencya") == 3
+
+    def test_the_answers_are_the_same_with_it_or_without(self):
+        verdict = spelling.word_verdict({"Policya"})
+
+        for page in self.PAGES:
+            assert [
+                m.text for m in find_inner_flagged_words(page, {"Policya"}, (), verdict)
+            ] == flagged(page, {"Policya"})
+
+    def test_check_words_takes_it_too(self, dictionary):
+        verdict = spelling.word_verdict()
+
+        spelling.check_words("ala Konwencya", verdict=verdict)
+        spelling.check_words("kot Konwencya", verdict=verdict)
+
+        assert dictionary.lookups.count("Konwencya") == 1
+
+
+class TestOnlyFrequentWordsLookedUp:
+    # "Konwencya" is inside a line 4 times, "Policya" 2 times (and 2 more at the
+    # edge of a line, which do not count), "Tendencya" once
+    PAGES = [
+        "ala Konwencya ma Policya kot\nPolicya ala Konwencya ma",
+        "ala Konwencya ma Policya kot\nala Tendencya Konwencya ma Policya",
+    ]
+
+    def pages(self, ignore=()):
+        return [(page, ignore) for page in self.PAGES]
+
+    def counted(self, verdict):
+        found = {}
+        for page in self.PAGES:
+            for match in find_inner_flagged_words(page, verdict=verdict):
+                found[match.text] = found.get(match.text, 0) + 1
+        return found
+
+    def test_only_the_words_that_can_be_offered_are_looked_up(self, dictionary):
+        verdict = only_frequent_words_looked_up(self.pages(), spelling.word_verdict())
+
+        self.counted(verdict)
+
+        assert {w for w in dictionary.lookups if w[0].isupper()} == {"Konwencya"}
+
+    def test_every_word_that_is_offered_is_still_found_as_often(self):
+        plain = self.counted(spelling.word_verdict())
+        fast = self.counted(
+            only_frequent_words_looked_up(self.pages(), spelling.word_verdict())
+        )
+
+        assert {w: n for w, n in plain.items() if n > MORE_THAN} == {
+            w: n for w, n in fast.items() if n > MORE_THAN
+        }
+        assert plain["Konwencya"] == fast["Konwencya"] == 4
+
+    def test_the_first_and_the_last_word_of_a_line_do_not_count(self, dictionary):
+        # "Policya" is there 4 times, but 2 of them at the edge of a line: 2 count
+        # (not more than 3), so it is not looked up
+        verdict = only_frequent_words_looked_up(self.pages(), spelling.word_verdict())
+
+        self.counted(verdict)
+
+        assert "Policya" not in dictionary.lookups
+
+    def test_words_in_an_ignored_stretch_do_not_count(self, dictionary):
+        text = "ala Konwencya Konwencya Konwencya Konwencya ala"
+        ignore = [(14, 23)]  # the second one
+
+        # 4 inside the line, 3 without the ignored one: not more than 3, so not
+        # looked up (it would be flagged if it was)
+        verdict = only_frequent_words_looked_up(
+            [(text, ignore)], spelling.word_verdict()
+        )
+        assert verdict("Konwencya") is True
+        # two such pages: 6 > 3, so it is looked up, and flagged
+        verdict = only_frequent_words_looked_up(
+            [(text, ignore), (text, ignore)], spelling.word_verdict()
+        )
+        assert verdict("Konwencya") is False
+
+    def test_nothing(self):
+        verdict = only_frequent_words_looked_up([], spelling.word_verdict())
+
+        assert verdict("Konwencya") is True
 
 
 class TestSameFamily:

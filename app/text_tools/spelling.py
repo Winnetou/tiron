@@ -145,6 +145,7 @@ def check_words(
     text: str,
     legal: Collection[str] = (),
     ignore: Collection[tuple[int, int]] = (),
+    verdict: Callable[[str], bool] | None = None,
 ) -> list[Word]:
     """Every word of `text`, in order, and whether it is spelled correctly.
 
@@ -178,9 +179,15 @@ def check_words(
     checked, they are reported as correct. (The dictionary is Polish; what is in
     another language is not misspelt for it.)
 
+    `verdict` is a function from `word_verdict(legal)`. Without it one is made for
+    this text. To check many texts with the same `legal` (the pages of an edition)
+    make it once and pass it to all of them: each distinct word is then looked up
+    in the dictionary once, not once for each text.
+
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """
-    verdict = word_verdict(legal)
+    if verdict is None:
+        verdict = word_verdict(legal)
 
     tokens = tokenize(text)
     split = _split_words(text, tokens)

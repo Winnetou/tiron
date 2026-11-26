@@ -15,7 +15,8 @@ sees "Konwencyi" and "Konwencyami" next to it: words that begin with the same le
 and differ only by what is left of them are the same noun with other endings.
 """
 
-from collections.abc import Collection
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 
 from app.text_tools.spelling import _WORD, check_words, tokenize
@@ -43,19 +44,60 @@ def _on_edge_of_line(text: str, start: int, end: int) -> bool:
     )
 
 
+def _inner_words(text: str, ignore: Collection[tuple[int, int]]) -> Iterator[str]:
+    """The words of `text` that `find_inner_flagged_words` may report: not the first
+    or the last of a line, not in a stretch of `ignore`."""
+    for token in tokenize(text):
+        word = token.group()
+        if not _WORD.fullmatch(word):
+            continue
+        if any(a <= token.start() and token.end() <= b for a, b in ignore):
+            continue
+        if not _on_edge_of_line(text, token.start(), token.end()):
+            yield word
+
+
+def only_frequent_words_looked_up(
+    texts: Iterable[tuple[str, Collection[tuple[int, int]]]],
+    verdict: Callable[[str], bool],
+) -> Callable[[str], bool]:
+    """A `verdict` (see `word_verdict`) for the pages `texts` (each is the text of
+    a page, and its `ignore`) that does not look up the words that cannot be offered.
+
+    A spelling is offered only if it is flagged more than `MORE_THAN` times in the
+    edition, and it cannot be flagged more often than it is there. So a word that is
+    in the pages (where it could be reported) no more than that many times is said
+    to be correct, and the dictionary, which is far slower than counting, is asked
+    about the others only. What `find_inner_flagged_words` finds, and so what is
+    offered, is the same; but the words it finds that are rare are not found.
+    """
+    counts = Counter(
+        word for text, ignore in texts for word in _inner_words(text, ignore)
+    )
+    frequent = {word for word, n in counts.items() if n > MORE_THAN}
+
+    def filtered(word: str) -> bool:
+        return word not in frequent or verdict(word)
+
+    return filtered
+
+
 def find_inner_flagged_words(
     text: str,
     legal: Collection[str] = (),
     ignore: Collection[tuple[int, int]] = (),
+    verdict: Callable[[str], bool] | None = None,
 ) -> list[ChunkMatch]:
     """The words of `text` that the spell check flags (see `check_words`: a word
     split over two lines is judged as one word, the legal spellings count as
     correct, the words in the stretches `ignore` are not checked), in order, except
-    the first and the last word of each line.
+    the first and the last word of each line. `verdict` is the function of
+    `word_verdict(legal)` that is shared by the texts of an edition (see
+    `check_words`).
 
     Raises SpellcheckUnavailable if the dictionary cannot be loaded.
     """
-    words = check_words(text, legal, ignore)
+    words = check_words(text, legal, ignore, verdict)
     tokens = tokenize(text)  # (the same tokens, in the same order, as the words)
     found = []
     for index, word in enumerate(words):
