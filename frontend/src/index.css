@@ -904,6 +904,38 @@ main.loading-page {
   cursor: pointer;
 }
 
+/* The mini cog wheel at the bottom right of the buttons of a word: it shows and hides
+   the less used ones. Round, with the yellowish glow of the other round buttons. */
+.more-actions-button {
+  display: grid;
+  place-items: center;
+  align-self: flex-end;
+  margin-left: auto;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 1px solid var(--charcoal);
+  border-radius: 50%;
+  background: var(--beige);
+  color: var(--charcoal);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+.more-actions-button:hover:not(:disabled),
+.more-actions-button:focus-visible,
+.more-actions-button[aria-expanded='true'] {
+  border-color: #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
+}
+
+.more-actions-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* A replacement that the backend suggests: the one to click, so it stands out. */
 .suggestion-button {
   border-color: var(--charcoal);
