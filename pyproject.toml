@@ -11,6 +11,7 @@ dependencies = [
     "phunspell>=0.1.6",
     "psycopg[binary]>=3.3.9",
     "pydantic>=2.14.4",
+    "pyenchant>=3.3.0",
     "spacy>=3.8.18",
     "uvicorn>=0.54.0",
 ]

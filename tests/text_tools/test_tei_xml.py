@@ -28,6 +28,7 @@ from app.text_tools.tei_xml import (
     tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
+    text_and_foreign_language_ranges,
     text_to_tei_xml,
 )
 
@@ -1230,6 +1231,39 @@ class TestForeignLanguageRanges:
         xml = generated("Ala ma kota").replace("<p>Ala", "<p><quote>Ala</quote>")
 
         assert foreign_language_ranges(xml) == []
+
+
+class TestTextAndForeignLanguageRanges:
+    def test_both_from_one_reading(self):
+        xml = mark(
+            generated("Ala ma kota. Mens sana tu."), "Mens sana", "quote", lang="la"
+        )
+
+        assert text_and_foreign_language_ranges(xml) == (
+            "Ala ma kota. Mens sana tu.",
+            [(13, 22)],
+        )
+
+    @pytest.mark.parametrize(
+        "xml",
+        [
+            generated("Ala ma kota"),
+            generated("Ala\nma\n\nkota"),
+            mark(
+                generated("Ala ma kota. Mens sana tu."), "Mens sana", "quote", lang="la"
+            ),
+            generated("Ala ma kota").replace("<p>Ala", "<p><quote>Ala</quote>"),
+        ],
+    )
+    def test_the_same_as_the_two_functions(self, xml):
+        assert text_and_foreign_language_ranges(xml) == (
+            tei_xml_to_text(xml),
+            foreign_language_ranges(xml),
+        )
+
+    def test_xml_that_is_not_tei_is_refused(self):
+        with pytest.raises(InvalidTei):
+            text_and_foreign_language_ranges("<x/>")
 
 
 class TestMarkSectionToc:

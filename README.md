@@ -10,7 +10,9 @@ another, to run the backend alone in a container and the frontend on the host.)
 `.github/workflows/tests.yml` runs on every pull request to `main` (and on every
 push to it):
 
-- **Backend tests**: `uv sync --locked`, `ruff check`, `ruff format --check`, and
+- **Backend tests**: `uv sync --locked`, `apt-get install libenchant-2-2 hunspell-pl`
+  (the C Hunspell and the Polish dictionary, so that the native spell check is tested
+  too), `ruff check`, `ruff format --check`, and
   `pytest` with a PostgreSQL 17 service, so the tests of the database layer run
   too (they empty the tables of that throwaway database, so never set
   `INTEGRATION_DB=1` against a database that has data).
@@ -427,8 +429,8 @@ Kowalski</ref>`. TEI wants the text of a `<cit>` in a `<quote>`, so it becomes
 ### Spell check
 
 `POST /spellcheck` with `{"text": "..."}` checks the spelling of a text, with
-[phunspell](https://pypi.org/project/phunspell/) and its Polish Hunspell
-dictionary (`pl_PL`), and returns **every word** of the text, in order:
+Hunspell and its Polish dictionary (`pl_PL`), and returns **every word** of the text,
+in order:
 
 ```json
 {"words": [
@@ -469,12 +471,26 @@ frontend sends the edition with every check.
 - A word with digits in it is not checked and counts as correct. A hyphenated
   word is correct if it is in the dictionary, or if all its parts are. Capital
   letters do not matter.
-- There are no suggestions: phunspell takes about 2.6 s to suggest for one
-  word, which is too slow to do for all the wrong words of a page. (A page of
-  about 200 words is checked in about 0.3 s.)
+- There are no suggestions here: they are asked for one word at a time (see
+  "Suggesting the spelling of a word"). A page of about 200 words is checked in
+  about 0.3 s.
 - The dictionary is loaded when the backend starts, like the spaCy model. If it
   is not available the backend still starts, logs a warning, and the endpoint
   answers 503. The text can have up to 100,000 characters (422 if longer).
+
+**Which Hunspell.** Hunspell, the C library, is used through
+[pyenchant](https://pypi.org/project/pyenchant/) (`NativeChecker` in
+`app/text_tools/spelling.py`) if `libenchant` and the Debian package `hunspell-pl` are
+installed, as they are in the Docker image (`Dockerfile`) and on the GitHub runners. If
+they are not (a Mac without `brew install enchant`, say), the backend falls back to
+[phunspell](https://pypi.org/project/phunspell/), Hunspell in pure Python with the same
+dictionary files: it gives the same answers, but is some fifty times slower, so a
+suggestion takes 3 to 10 s instead of 0.2 s and loading takes 19 s instead of 0.3 s. The
+log says which one is used at start-up (`Spell check: native Hunspell` at `INFO`, or a
+warning for the slow one). `NATIVE_HUNSPELL=0` makes the backend use the slow one even
+if the fast one is there. The tests of the real dictionary (`TestWithTheRealDictionary`)
+run with both and are skipped for the native one where it is not installed; the other
+tests use fakes and need neither (`tests/conftest.py` sets `NATIVE_HUNSPELL=0`).
 
 ### Suggesting the spelling of a word
 
@@ -1050,6 +1066,11 @@ edition often, so that a person accepts them as legal spellings at once. It chan
   the first five `occurrences` with `page_number`, `start`, `end`, `before`, `after`).
 - 404 if the edition is not stored, 503 if the dictionary is not available. The search is
   `Database.get_bulk_spelling_check`.
+- **How long it takes**: about 1 s for an edition of 480 pages (880,000 characters of XML)
+  with native Hunspell (see "Which Hunspell"), and about 5 s with the pure Python one. It is
+  kept short by looking each word up in the dictionary at most once, and only the words that
+  are there more than `MORE_THAN` times (the others cannot be offered), and by reading and
+  tokenizing each page once (`text_and_foreign_language_ranges`, `only_frequent_words_looked_up`).
 
 In the frontend it is **Bulk spelling check** in the cog wheel of the correction view. The box
 asks the backend when it opens (there is nothing to type) and works like the box that accepts

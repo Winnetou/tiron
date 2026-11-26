@@ -114,7 +114,7 @@ class TestOnlyFrequentWordsLookedUp:
     ]
 
     def pages(self, ignore=()):
-        return [(page, ignore) for page in self.PAGES]
+        return [(page, ignore, spelling.tokenize(page)) for page in self.PAGES]
 
     def counted(self, verdict):
         found = {}
@@ -156,20 +156,47 @@ class TestOnlyFrequentWordsLookedUp:
 
         # 4 inside the line, 3 without the ignored one: not more than 3, so not
         # looked up (it would be flagged if it was)
-        verdict = only_frequent_words_looked_up(
-            [(text, ignore)], spelling.word_verdict()
-        )
+        page = (text, ignore, spelling.tokenize(text))
+        verdict = only_frequent_words_looked_up([page], spelling.word_verdict())
         assert verdict("Konwencya") is True
         # two such pages: 6 > 3, so it is looked up, and flagged
-        verdict = only_frequent_words_looked_up(
-            [(text, ignore), (text, ignore)], spelling.word_verdict()
-        )
+        verdict = only_frequent_words_looked_up([page, page], spelling.word_verdict())
         assert verdict("Konwencya") is False
 
     def test_nothing(self):
         verdict = only_frequent_words_looked_up([], spelling.word_verdict())
 
         assert verdict("Konwencya") is True
+
+
+class TestTokensGivenByTheCaller:
+    TEXT = "ala Konwencya ma Policya kot i Konwencya w kot"
+
+    def test_the_same_words_as_when_it_tokenizes_itself(self):
+        tokens = spelling.tokenize(self.TEXT)
+
+        given = find_inner_flagged_words(self.TEXT, tokens=tokens)
+
+        assert given == find_inner_flagged_words(self.TEXT)
+        assert [m.text for m in given] == ["Konwencya", "Policya", "Konwencya"]
+
+    def test_the_text_is_not_tokenized_again(self, monkeypatch):
+        tokens = spelling.tokenize(self.TEXT)
+
+        def never(text):
+            raise AssertionError("tokenized again")
+
+        monkeypatch.setattr(spelling, "tokenize", never)
+        monkeypatch.setattr("app.text_tools.bulk_spelling.tokenize", never)
+
+        assert find_inner_flagged_words(self.TEXT, tokens=tokens)
+
+    def test_check_words_takes_them_too(self):
+        tokens = spelling.tokenize(self.TEXT)
+
+        assert spelling.check_words(self.TEXT, tokens=tokens) == spelling.check_words(
+            self.TEXT
+        )
 
 
 class TestSameFamily:

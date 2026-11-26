@@ -1,11 +1,15 @@
+import logging
+import sys
 import threading
 import time
+import types
 
 import phunspell
 import pytest
 
 from app.text_tools import spelling
 from app.text_tools.spelling import (
+    NativeChecker,
     NotAWord,
     SpellcheckUnavailable,
     check_words,
@@ -486,13 +490,158 @@ class TestGetChecker:
         assert spelling._checker is None
 
 
-@pytest.fixture(scope="module")
-def real_dictionary():
-    return phunspell.Phunspell("pl_PL")  # ~2 s: once for all these tests
+class FakeEnchantDict:
+    def __init__(self, known=(), suggestions=None):
+        self.known = set(known)
+        self.suggestions = suggestions or {}
+
+    def check(self, word):
+        return word in self.known
+
+    def suggest(self, word):
+        return self.suggestions.get(word, [])
+
+
+class FakeEnchantError(Exception):
+    pass
+
+
+def fake_enchant(dictionary=None, exists=True, fails=False):
+    """The `enchant` module, with the Polish dictionary `dictionary`."""
+
+    def load(language):
+        if fails:
+            raise FakeEnchantError("cannot load")
+        return dictionary
+
+    return types.SimpleNamespace(
+        dict_exists=lambda language: exists,
+        Dict=load,
+        errors=types.SimpleNamespace(Error=FakeEnchantError),
+    )
+
+
+class TestNativeChecker:
+    """Hunspell the C library, through enchant (here a fake one): used when it is
+    there, and the pure Python dictionary when it is not."""
+
+    @pytest.fixture(autouse=True)
+    def native_on(self, monkeypatch):
+        monkeypatch.setenv("NATIVE_HUNSPELL", "1")
+        self.loaded = []
+        monkeypatch.setattr(
+            spelling.phunspell,
+            "Phunspell",
+            lambda language: self.loaded.append(language) or "pure Python",
+        )
+
+    def test_used_when_it_is_there(self, monkeypatch):
+        dictionary = FakeEnchantDict({"kota"}, {"kótka": ["kotka"]})
+        monkeypatch.setitem(sys.modules, "enchant", fake_enchant(dictionary))
+
+        checker = get_checker()
+
+        assert isinstance(checker, NativeChecker)
+        assert checker.lookup("kota") is True
+        assert checker.lookup("kótka") is False
+        assert checker.suggest("kótka") == ["kotka"]
+        assert self.loaded == []  # the slow one is not even loaded
+
+    def test_it_is_loaded_once(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "enchant", fake_enchant(FakeEnchantDict()))
+
+        assert get_checker() is get_checker()
+
+    def test_the_pure_python_one_without_libenchant(self, monkeypatch, caplog):
+        monkeypatch.setitem(sys.modules, "enchant", None)  # cannot import
+
+        with caplog.at_level(logging.WARNING, logger=spelling.logger.name):
+            assert get_checker() == "pure Python"
+
+        assert self.loaded == ["pl_PL"]
+        assert "Native Hunspell is not available" in caplog.text
+        assert "pure Python" in caplog.text
+
+    def test_the_pure_python_one_without_the_polish_dictionary(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setitem(sys.modules, "enchant", fake_enchant(exists=False))
+
+        with caplog.at_level(logging.WARNING, logger=spelling.logger.name):
+            assert get_checker() == "pure Python"
+
+        assert "has no pl_PL dictionary" in caplog.text
+
+    def test_the_pure_python_one_if_enchant_cannot_load_it(self, monkeypatch, caplog):
+        monkeypatch.setitem(sys.modules, "enchant", fake_enchant(fails=True))
+
+        with caplog.at_level(logging.WARNING, logger=spelling.logger.name):
+            assert get_checker() == "pure Python"
+
+        assert "could not load pl_PL" in caplog.text
+
+    @pytest.mark.parametrize("value", ["0", "false", "No", " 0 "])
+    def test_it_can_be_switched_off(self, monkeypatch, value):
+        monkeypatch.setitem(sys.modules, "enchant", fake_enchant(FakeEnchantDict()))
+        monkeypatch.setenv("NATIVE_HUNSPELL", value)
+
+        assert get_checker() == "pure Python"
+
+    def test_a_missing_pure_python_dictionary_is_still_reported(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "enchant", None)
+
+        def missing(language):
+            raise phunspell.phunspell.PhunspellError("dictionary not found")
+
+        monkeypatch.setattr(spelling.phunspell, "Phunspell", missing)
+
+        with pytest.raises(SpellcheckUnavailable, match="pl_PL"):
+            get_checker()
+
+    def test_one_call_at_a_time(self):
+        """Hunspell is not thread safe."""
+        running = []
+        overlaps = []
+
+        class Slow(FakeEnchantDict):
+            def check(self, word):
+                running.append(word)
+                if len(running) > 1:
+                    overlaps.append(word)
+                time.sleep(0.01)
+                running.pop()
+                return True
+
+        checker = NativeChecker(Slow())
+        threads = [
+            threading.Thread(target=checker.lookup, args=(f"w{i}",)) for i in range(8)
+        ]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert overlaps == []
+
+
+@pytest.fixture(scope="module", params=["pure Python", "native"])
+def real_dictionary(request):
+    """The real Polish dictionary, in both implementations of Hunspell. The native
+    one is left out (skipped) where libenchant and hunspell-pl are not installed."""
+    if request.param == "pure Python":
+        return phunspell.Phunspell("pl_PL")  # ~19 s: once for all these tests
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("NATIVE_HUNSPELL", "1")
+        native = spelling._native_checker()
+    if native is None:
+        pytest.skip("libenchant and hunspell-pl are not installed")
+    return native
 
 
 class TestWithTheRealDictionary:
-    """The Polish dictionary that comes with phunspell."""
+    """The Polish dictionary (Hunspell's pl_PL), with each implementation of
+    Hunspell: the answers must be the same."""
 
     @pytest.fixture(autouse=True)
     def use_the_real_dictionary(self, monkeypatch, real_dictionary):
@@ -544,6 +693,22 @@ class TestWithTheRealDictionary:
 
         assert time.perf_counter() - start < 3
         assert len(result) == 40 * 8
+
+    @pytest.mark.parametrize(
+        ("word", "expected"),
+        [
+            ("Kolonizacyja", "Kolonizacja"),
+            ("Magdeburgskiego", "Magdeburskiego"),
+            ("Zwycięztwo", "Zwycięstwo"),
+        ],
+    )
+    def test_the_replacement_of_a_word_of_old_print_is_among_the_three(
+        self, word, expected
+    ):
+        text = f"Ala ma {word} tu"
+        start = text.index(word)
+
+        assert expected in suggest_spelling(text, start, start + len(word))
 
 
 def suggest(text, word, occurrence=0, legal=()):

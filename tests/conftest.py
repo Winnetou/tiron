@@ -15,6 +15,9 @@ os.environ.setdefault("POSTGRES_USER", "test")
 os.environ.setdefault("POSTGRES_PASSWORD", "test")
 # production (the default) does not start without it
 os.environ.setdefault("SESSION_SECRET", "a-secret-for-the-tests")
+# The unit tests of the spell check load the pure Python dictionary (or fakes), whatever
+# is installed; the tests of the native one switch it on (see test_spelling.py)
+os.environ["NATIVE_HUNSPELL"] = "0"
 
 mock.patch("psycopg.connect").start()
 

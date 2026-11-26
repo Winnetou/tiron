@@ -1224,10 +1224,11 @@ SECTIONS: dict[str, tuple[str, dict[str, str]]] = {
 }
 
 
-def foreign_language_ranges(xml: str) -> list[tuple[int, int]]:
-    """The stretches of the text (as tei_xml_to_text gives it) that are quotations
-    in another language than Polish, `<quote xml:lang="la">`: `start` and `end`,
-    in code points, in the order of the document (outer ones first).
+def text_and_foreign_language_ranges(xml: str) -> tuple[str, list[tuple[int, int]]]:
+    """The text of a TEI document (as tei_xml_to_text gives it) and the stretches of
+    it that are quotations in another language than Polish, `<quote xml:lang="la">`
+    (as foreign_language_ranges gives them), from one reading of the XML: for the
+    code that needs both, which would otherwise parse the document twice.
 
     Raises InvalidTei if the XML is not a TEI document (see _parse_tei)."""
 
@@ -1235,8 +1236,17 @@ def foreign_language_ranges(xml: str) -> list[tuple[int, int]]:
         lang = _attributes(node).get(_LANG) if node.local_name == "quote" else None
         return lang is not None and lang.lower().split("-")[0] != "pl"
 
-    _, found = _marked_elements(_text_element(_parse_tei(xml)), foreign)
-    return [(start, end) for _, start, end in found]
+    text, found = _marked_elements(_text_element(_parse_tei(xml)), foreign)
+    return text, [(start, end) for _, start, end in found]
+
+
+def foreign_language_ranges(xml: str) -> list[tuple[int, int]]:
+    """The stretches of the text (as tei_xml_to_text gives it) that are quotations
+    in another language than Polish, `<quote xml:lang="la">`: `start` and `end`,
+    in code points, in the order of the document (outer ones first).
+
+    Raises InvalidTei if the XML is not a TEI document (see _parse_tei)."""
+    return text_and_foreign_language_ranges(xml)[1]
 
 
 def _blocks_around(node: TextNode, text_element: TagNode) -> TagNode | None:

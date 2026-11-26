@@ -54,6 +54,10 @@ jobs:
       # The Python version is the one in .python-version; the dependencies are
       # exactly those of uv.lock (it fails if the lock is out of date).
       - run: uv sync --locked
+      # Hunspell, the C library, and the Polish dictionary: the spell check uses
+      # them if they are there, and its tests run against both that and the pure
+      # Python fallback.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libenchant-2-2 hunspell-pl
       - run: uv run ruff check app tests
       - run: uv run ruff format --check app tests
       - run: uv run pytest

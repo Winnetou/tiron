@@ -1,7 +1,11 @@
 FROM python:3.15-slim
 
+# libenchant and the Polish Hunspell dictionary: the spell check uses Hunspell, the C
+# library, through pyenchant (some fifty times faster than the pure Python one that
+# it falls back on without them: see app/text_tools/spelling.py)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
+        libenchant-2-2 hunspell-pl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/0.7.22/install.sh | sh
