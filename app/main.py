@@ -29,9 +29,11 @@ from app.auth import (
 )
 from app.persistence.db import Database, WorkExists
 from app.persistence.ontology import (
+    Edition,
     EditionMetadata,
     LegalSpelling,
     MissingHyphen,
+    Page,
     PageMatches,
     PageRubbish,
     PageTokenOccurrences,
@@ -111,6 +113,26 @@ from app.view_models import (
 db = Database()
 
 logger = logging.getLogger(__name__)
+
+
+def get_edition_or_404(edition_id: UUID) -> Edition:
+    """The stored edition, or the response 404 "Edition not found" (like Django's
+    `get_object_or_404`). It is for the endpoints that work on the pages of an
+    edition that is already in the database: they never fetch it from Polona."""
+    edition = db.get_edition(edition_id)
+    if edition is None:
+        logger.warning("Edition %s is not stored", edition_id)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    return edition
+
+
+def get_page_or_404(edition_id: UUID, number: int) -> Page:
+    """The stored page `number` of the edition, or the response 404 "Page not
+    found" (see `get_edition_or_404`)."""
+    page = db.get_page_by_number(edition_id, number)
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    return page
 
 
 @asynccontextmanager
@@ -358,9 +380,7 @@ def tag_entity(
     (for example it spans paragraphs, or starts inside other markup). Returns
     the updated page as a PageView.
     """
-    page = db.get_page_by_number(edition_id, number)
-    if page is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    page = get_page_or_404(edition_id, number)
     if not page.xml_content_corrected:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -441,9 +461,7 @@ def mark_page_section(
     the section cannot be marked in it, with the reason. Returns the updated page
     as a PageView.
     """
-    page = db.get_page_by_number(edition_id, number)
-    if page is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Page not found")
+    page = get_page_or_404(edition_id, number)
     if not page.xml_content_corrected:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -701,9 +719,7 @@ def get_similar_misspellings(
     404 if the edition is not stored. 422 if a spelling is empty or longer than
     100 characters, or the two are the same. 503 if the dictionary is not available.
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         found = db.get_similar_misspellings(
             edition_id, incorrect_spelling, corrected_spelling
@@ -808,9 +824,7 @@ def get_token_occurrences(
     characters, has spaces at its ends or inside, or is more than one token (with the
     reason).
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         found = db.get_token_occurrences(edition_id, token)
     except InvalidToken as exc:
@@ -868,9 +882,7 @@ def get_spelling_chunk_matches(
     endings or more than ten, or a part is too long or is not letters (with the
     reason). 503 if the dictionary is not available.
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         substrings = chunk_substrings(core, ending or [])
     except InvalidChunk as exc:
@@ -928,9 +940,7 @@ def get_bulk_spelling_check(edition_id: UUID) -> list[SpellingFamily]:
 
     404 if the edition is not stored. 503 if the dictionary is not available.
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         found = db.get_bulk_spelling_check(edition_id)
     except SpellcheckUnavailable as exc:
@@ -984,9 +994,7 @@ def get_similar_entities(
     letters, or is more than five words) or `label` is not an entity label. 503 if
     the NER model is not available.
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         found = db.get_similar_entities(edition_id, text, label)
     except ValueError as exc:
@@ -1031,9 +1039,7 @@ def get_rubbish_lines(edition_id: UUID) -> list[PageRubbish]:
 
     404 if the edition is not stored, 503 if the dictionary is not available.
     """
-    if db.get_edition(edition_id) is None:
-        logger.warning("Edition %s is not stored", edition_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     try:
         found = db.get_rubbish_lines(edition_id)
     except SpellcheckUnavailable as exc:
@@ -1622,8 +1628,7 @@ def add_legal_spelling(
     opened. 422 if the spelling is empty, longer than 100 characters, or has
     spaces, line breaks or control characters in it.
     """
-    if db.get_edition(edition_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Edition not found")
+    get_edition_or_404(edition_id)
     legal = LegalSpelling(edition_id=edition_id, spelling=new.spelling)
     try:
         added = db.add_legal_spelling(legal)
