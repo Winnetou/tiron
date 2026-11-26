@@ -4100,6 +4100,25 @@ class TestCorrectContinuedWordOnNextPage:
         assert self.text(stored, 5) == "towymi ludzi.\nKoniec"
         assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświatowymi")]
 
+    def test_a_page_that_ends_with_the_hyphen_already(self, stored):
+        # "wszechsiia-": the hyphen is part of what is replaced, not of the correction
+        stored["pages"][4] = stored["pages"][4].model_copy(
+            update={"xml_content_corrected": str(text_to_tei_xml("Ala ma wszechsiia-"))}
+        )
+        first = {
+            "start": 7,
+            "end": 18,
+            "before": "wszechsiia-",
+            "after": "wszechświa-",
+        }
+
+        response = self.post(stored, first=first)
+
+        assert response.status_code == 200
+        assert self.text(stored, 4) == "Ala ma wszechświa-"
+        assert self.text(stored, 5) == "towymi ludzi.\nKoniec"
+        assert stored["corrections"] == [("wszechsiiaiowymi", "wszechświatowymi")]
+
     def test_a_second_part_that_was_right_is_left_alone(self, stored):
         response = self.post(stored, second=self.SECOND | {"after": "iowymi"})
 

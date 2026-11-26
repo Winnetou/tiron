@@ -465,7 +465,7 @@ function ContinuedEditor({
   onSubmit,
   onCancel,
 }: ContinuedEditorProps) {
-  const [firstValue, setFirstValue] = useState(first.text)
+  const [firstValue, setFirstValue] = useState(first.text.replace(/-+$/, ''))
   const [secondValue, setSecondValue] = useState(second.text)
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -839,25 +839,35 @@ export default function PageText({
         onJoinLines?.(pair)
       }
       // the last word of the page, with the first word of the next page
+      // (nothing but hyphens and white space may be after it: a page that ends
+      // "wszechświa-" has the hyphen already, and it is part of what is replaced)
+      const pageEnd = /^(-*)\s*$/.exec(codePoints.slice(word.end).join(''))
       const endsPage =
-        !next &&
+        !!pageEnd &&
         nextPageWord &&
         onContinueOnNextPage &&
         isWord(word) &&
-        isWord(nextPageWord) &&
-        codePoints.slice(word.end).join('').trim() === ''
+        isWord(nextPageWord)
+      const lastWord: Word =
+        pageEnd && pageEnd[1]
+          ? {
+              ...word,
+              text: word.text + pageEnd[1],
+              end: word.end + pageEnd[1].length,
+            }
+          : word
       const continuable = next && onContinueWord && lineGap(word, next) === 'break'
       if (continuing && (continuable || endsPage)) {
         return (
           <ContinuedEditor
             key={key}
-            first={word}
+            first={continuable ? word : lastWord}
             second={continuable ? next : nextPageWord!}
             busy={busy}
             onSubmit={(firstAfter, secondAfter) =>
               continuable
                 ? onContinueWord!(word, next!, firstAfter, secondAfter)
-                : onContinueOnNextPage!(word, firstAfter, secondAfter)
+                : onContinueOnNextPage!(lastWord, firstAfter, secondAfter)
             }
             onCancel={() => setEditing(null)}
           />

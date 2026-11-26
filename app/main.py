@@ -1335,7 +1335,11 @@ def correct_word_continued_on_next_page(
     page `number` as a PageView.
     """
     first, second = word.first, word.second
-    recorded = (first.before + second.before, first.after[:-1] + second.after)
+    # (`first.before` has the hyphen if the page ended with it already)
+    recorded = (
+        first.before.rstrip("-") + second.before,
+        first.after[:-1] + second.after,
+    )
 
     def change_first(xml: str) -> str:
         if not xml:

@@ -592,7 +592,10 @@ changes the next page, with the normal `corrections` request). "Hide" removes it
   `.../continued-words` (the offsets of `second` are those of the next page's text):
   both pages change, **one** correction is recorded for the whole word (for page
   `n`, without the hyphen), in one transaction (`Database.apply_correction_over_pages`,
-  both rows locked). 404 if there is no next page, 409 if the text changed, 422 if
+  both rows locked). If the page already ends with the hyphen (`wszechświa-`), the button is
+  there too: the frontend sends the word *with* the hyphen as `first` (`before`
+  `wszechświa-`), so it is replaced by `first.after`, and the correction is recorded without
+  it. 404 if there is no next page, 409 if the text changed, 422 if
   the words are not at the end of the page and the start of the next one.
 
 ### The same mistake in the rest of the edition

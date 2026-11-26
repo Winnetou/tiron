@@ -9647,6 +9647,28 @@ describe('a word that goes on in the next page', () => {
     })
   })
 
+  it('offers "Continued on next line" for the last word of a page that already ends with a hyphen', async () => {
+    await open(['Ala wszechświa-', 'towem ludzi.\nKoniec'], ['wszechświa', 'towem'])
+    await showLine()
+
+    await userEvent.click(within(pageText()).getByText('wszechświa', { selector: '.word' }))
+    await userEvent.click(screen.getByRole('button', { name: /Continued on next line/ }))
+
+    // the hyphen is not in the field: it is put back on saving
+    expect(screen.getByLabelText('First part')).toHaveValue('wszechświa')
+    await userEvent.clear(screen.getByLabelText('Second part'))
+    await userEvent.type(screen.getByLabelText('Second part'), 'towymi')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const url = `/editions/${UUID}/pages/0/continued-words-on-next-page`
+    await waitFor(() => expect(calls.some((c) => c.url === url)).toBe(true))
+    // the hyphen that is there is part of the range that is replaced
+    expect(calls.find((c) => c.url === url)!.body).toMatchObject({
+      first: { start: 4, end: 15, before: 'wszechświa-', after: 'wszechświa-' },
+      second: { start: 0, end: 5, before: 'towem', after: 'towymi' },
+    })
+  })
+
   it('hides the line again', async () => {
     await open()
     await showLine()
