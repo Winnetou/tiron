@@ -768,7 +768,8 @@ itself uses and that is not to be corrected. In the API, the code and these
 docs, "correct" and the `correct` flag of a word are the dictionary's verdict
 (a legal spelling only makes the verdict come out as correct), and "legal" is
 what a person decides for an edition. The decision is for an edition, not for
-the language.
+the language; it counts for the other editions of the same time too (see
+"Editions of the same time" below).
 
 They are kept in the table `legal_spellings`, with two columns: the
 `edition_id` (an edition that is stored) and the `spelling`. The two are unique
@@ -798,6 +799,22 @@ added). Nothing else is changed: this only records the spelling.
   reported as correct (`Database.get_legal_spellings` reads them). That is what
   keeps a word that was made legal from being red again on the next page of the
   edition, or after a reload. Nothing lists them yet.
+
+**Editions of the same time.** Print of one period spells alike, so a spelling that
+a person made legal in one edition is not flagged in another one of its time. Every
+place that asks for the legal spellings of an edition (`Database.get_legal_spellings`:
+the spell check, the suggestions, the bulk spelling check, the spelling chunks, the
+missing hyphens and the similar misspellings) gets those of the edition itself and of
+every edition **whose year is known and is at most 10 years before or after the year of
+this one** (`LEGAL_SPELLINGS_YEARS` in `app/persistence/db.py`; the limits are included:
+1880 and 1900 are near 1890, 1879 and 1901 are not). It is one SQL join of `editions`
+with itself and `legal_spellings`. An edition whose year is not known has only its own
+spellings, and an edition of an unknown year is nobody else's neighbour. What is stored
+does not change: `POST .../legal-spellings` still adds a spelling to one edition, and
+whether the edition "already had" it is about that edition alone. A spelling that is
+accepted in a neighbouring edition is therefore counted as correct here too, so it is
+not offered again by the bulk spelling check, and a legal "Jey" still does not make
+"jey" correct.
 
 ### The entities marked in a page
 

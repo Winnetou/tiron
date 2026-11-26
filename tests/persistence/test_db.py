@@ -180,7 +180,11 @@ def test_get_similar_misspellings_looks_at_the_text_of_each_page(monkeypatch):
             ],
         )
     ]
-    assert connect.return_value.execute.call_args.args[1] == (edition_id,)
+    # the last query is the one for the legal spellings (of the edition and its time)
+    assert connect.return_value.execute.call_args.args[1] == {
+        "edition_id": edition_id,
+        "years": 10,
+    }
 
 
 def test_get_similar_misspellings_refuses_the_same_spelling(monkeypatch):
