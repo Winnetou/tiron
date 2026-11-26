@@ -57,6 +57,7 @@ from app.text_tools.bulk_spelling import (
     MORE_THAN,
     find_inner_flagged_words,
     group_into_families,
+    only_frequent_words_looked_up,
 )
 from app.text_tools.hyphens import find_missing_hyphens
 from app.text_tools.inflection import find_forms, forms_of_phrase
@@ -733,24 +734,33 @@ class Database:
             (edition_id,),
         ).fetchall()
         legal = self.get_legal_spellings(edition_id)
-        places: dict[str, list[SpellingOccurrence]] = {}
-        counts: dict[str, int] = {}
+        pages: list[tuple[int, str, list[tuple[int, int]]]] = []
         for row in rows:
             xml = row["xml_content_corrected"]
             if not xml:
                 continue
             try:
-                text = tei_xml_to_text(xml)
-                foreign = foreign_language_ranges(xml)
+                pages.append(
+                    (row["number"], tei_xml_to_text(xml), foreign_language_ranges(xml))
+                )
             except InvalidTei:
                 continue
-            for match in find_inner_flagged_words(text, legal, foreign):
+        # One for all the pages: a word is looked up in the dictionary once, however
+        # many pages it is on, and not at all if it is too rare to be offered (the
+        # dictionary is by far the slowest part).
+        verdict = only_frequent_words_looked_up(
+            [(text, foreign) for _, text, foreign in pages], word_verdict(legal)
+        )
+        places: dict[str, list[SpellingOccurrence]] = {}
+        counts: dict[str, int] = {}
+        for number, text, foreign in pages:
+            for match in find_inner_flagged_words(text, legal, foreign, verdict):
                 counts[match.text] = counts.get(match.text, 0) + 1
                 shown = places.setdefault(match.text, [])
                 if len(shown) < _OCCURRENCES_SHOWN:
                     shown.append(
                         SpellingOccurrence(
-                            page_number=row["number"],
+                            page_number=number,
                             start=match.start,
                             end=match.end,
                             before=match.before,
