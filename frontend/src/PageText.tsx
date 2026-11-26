@@ -15,6 +15,7 @@ import {
   type Decision,
   type Entity,
 } from './entities'
+import CogIcon from './CogIcon'
 import { useFitFontSize } from './fitFont'
 import { caretAt, caretInText, selectionInText } from './selection'
 import { buildSegments, type Segment, type Word } from './segments'
@@ -237,6 +238,13 @@ interface WordEditorProps {
  * between: the paragraphs become one, with a line break). While a request is
  * running the field is disabled
  * and cannot be left.
+ *
+ * A misspelled word is the one that is clicked most, and it would have up to five
+ * buttons, so it has only the two that are used most ("Legal spelling" and
+ * "Continued on next line") and the replacements; the others (the joins, the new
+ * line, the line breaks) are behind a small cog wheel at the bottom right of the
+ * group, which shows them and hides them. A word that is spelled correctly has all
+ * of them at once, as it has fewer.
  */
 function WordEditor({
   word,
@@ -275,6 +283,18 @@ function WordEditor({
   // line. Near the edge of the box they are put on the other side instead.
   const actions = useRef<HTMLSpanElement>(null)
   const [placement, setPlacement] = useState({ right: false, above: false })
+  // The less used buttons of a misspelled word, behind the cog wheel
+  const [moreShown, setMoreShown] = useState(false)
+  const hasMore = !!(
+    onJoinPrevious ||
+    onJoinNext ||
+    onAddLineAbove ||
+    onSplitLine ||
+    onJoinPreviousLine ||
+    onJoinNextLine
+  )
+  const behindCog = !word.correct && hasMore
+  const moreVisible = !behindCog || moreShown
 
   useEffect(() => {
     input.current?.focus()
@@ -293,7 +313,22 @@ function WordEditor({
       // below the box: above the field, if there is room
       above: field.bottom + size.height > box.bottom && field.top - size.height >= box.top,
     })
-  }, [])
+  }, [moreVisible]) // (the group is bigger with the other buttons)
+
+  // "Continued on next line": the second of the two buttons that a misspelled word
+  // has on view, and in the middle of the others for a correct one
+  const continuedButton = onContinued && (
+    <button
+      type="button"
+      className="join-button"
+      title="The word goes on in the next line: correct both parts"
+      disabled={busy}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onContinued}
+    >
+      Continued on next line -
+    </button>
+  )
 
   function submit() {
     const after = value.trim()
@@ -363,99 +398,111 @@ function WordEditor({
             Legal spelling
           </button>
         )}
-        {onJoinPrevious && (
-          <button
-            type="button"
-            className="join-button"
-            title="Remove the space before the word"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onJoinPrevious}
-          >
-            ← Join with previous
-          </button>
+        {!word.correct && continuedButton}
+        {moreVisible && (
+          <>
+          {onJoinPrevious && (
+            <button
+              type="button"
+              className="join-button"
+              title="Remove the space before the word"
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onJoinPrevious}
+            >
+              ← Join with previous
+            </button>
+          )}
+          {onJoinNext && (
+            <button
+              type="button"
+              className="join-button"
+              title="Remove the space after the word"
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onJoinNext}
+            >
+              Join with next →
+            </button>
+          )}
+          {word.correct && continuedButton}
+          {onAddLineAbove && (
+            <button
+              type="button"
+              className="join-button"
+              title="Add a new line of text above this line"
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                const anchor = event.currentTarget.getBoundingClientRect()
+                onAddLineAbove(anchor)
+              }}
+            >
+              ↑ Add line above
+            </button>
+          )}
+          {onSplitLine && (
+            <button
+              type="button"
+              className="join-button"
+              title="Start a new line before the word"
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onSplitLine}
+            >
+              ↵ New line here
+            </button>
+          )}
+          {onJoinPreviousLine && (
+            <button
+              type="button"
+              className="join-button"
+              title={
+                previousLineKind === 'empty'
+                  ? 'Remove the empty line above the word'
+                  : 'Remove the line break before the word: the line joins the one above'
+              }
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onJoinPreviousLine}
+            >
+              ↑ Remove {lineGapName(previousLineKind)}
+            </button>
+          )}
+          {onJoinNextLine && (
+            <button
+              type="button"
+              className="join-button"
+              title={
+                nextLineKind === 'empty'
+                  ? 'Remove the empty line below the word'
+                  : 'Remove the line break after the word: the line below joins this one'
+              }
+              disabled={busy}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onJoinNextLine}
+            >
+              Remove {lineGapName(nextLineKind)} ↓
+            </button>
+          )}
+          </>
         )}
-        {onJoinNext && (
+        {behindCog && (
           <button
             type="button"
-            className="join-button"
-            title="Remove the space after the word"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onJoinNext}
-          >
-            Join with next →
-          </button>
-        )}
-        {onContinued && (
-          <button
-            type="button"
-            className="join-button"
-            title="The word goes on in the next line: correct both parts"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onContinued}
-          >
-            Continued on next line -
-          </button>
-        )}
-        {onAddLineAbove && (
-          <button
-            type="button"
-            className="join-button"
-            title="Add a new line of text above this line"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={(event) => {
-              const anchor = event.currentTarget.getBoundingClientRect()
-              onAddLineAbove(anchor)
-            }}
-          >
-            ↑ Add line above
-          </button>
-        )}
-        {onSplitLine && (
-          <button
-            type="button"
-            className="join-button"
-            title="Start a new line before the word"
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onSplitLine}
-          >
-            ↵ New line here
-          </button>
-        )}
-        {onJoinPreviousLine && (
-          <button
-            type="button"
-            className="join-button"
+            className="more-actions-button"
+            aria-label="More actions"
+            aria-expanded={moreShown}
             title={
-              previousLineKind === 'empty'
-                ? 'Remove the empty line above the word'
-                : 'Remove the line break before the word: the line joins the one above'
+              moreShown
+                ? 'Fewer actions'
+                : 'More actions: join the words, a new line, remove a line break'
             }
             disabled={busy}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={onJoinPreviousLine}
+            onClick={() => setMoreShown(!moreShown)}
           >
-            ↑ Remove {lineGapName(previousLineKind)}
-          </button>
-        )}
-        {onJoinNextLine && (
-          <button
-            type="button"
-            className="join-button"
-            title={
-              nextLineKind === 'empty'
-                ? 'Remove the empty line below the word'
-                : 'Remove the line break after the word: the line below joins this one'
-            }
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onJoinNextLine}
-          >
-            Remove {lineGapName(nextLineKind)} ↓
+            <CogIcon size={12} />
           </button>
         )}
       </span>

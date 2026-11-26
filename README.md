@@ -1398,6 +1398,18 @@ field instead of the left one, and near the bottom edge it goes above the field,
 when there is room there. The buttons keep the focus in the field (as before), so
 clicking one does not cancel the edit.
 
+**A misspelled word shows only two buttons, and a cog wheel for the rest.** A word in
+red is the one that is clicked most, and at the end of a line it could have five buttons,
+which is too many. So the group of a misspelled word has, on view, the replacements that
+the backend suggests, **Legal spelling** and **Continued on next line -** (the two that
+are used most), and a small round **cog wheel** (`aria-label="More actions"`) at the
+bottom right of the group. Clicking it shows the others, after those: "← Join with
+previous", "Join with next →", "↑ Add line above", "↵ New line here" and "Remove line
+break" / "Remove empty line"; clicking it again hides them. It does not close the editor
+or send anything, and the next word starts with the buttons hidden again. The cog wheel is
+not there when a word has no such button. A word that is **spelled correctly** has fewer
+buttons, so it has all of them at once, in the same order as before, and no cog wheel.
+
 **Applying a correction to the entire edition.** The OCR makes the same mistake
 again and again, so when a word was corrected (the backend has answered, and the
 page is shown), a small box comes up at the bottom right: "You corrected `jćj` to

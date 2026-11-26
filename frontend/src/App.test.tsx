@@ -2896,17 +2896,19 @@ describe('the buttons of the word editor', () => {
     await userEvent.click(screen.getByText('jey', { selector: '.word' }))
   }
 
-  it('are one group, with the buttons for the word', async () => {
+  it('are one group, with the buttons for the word (the less used ones behind the cog wheel)', async () => {
     await open()
 
     const buttons = within(group()).getAllByRole('button')
 
-    expect(buttons.map((b) => b.textContent)).toEqual([
+    expect(buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual([
       'Legal spelling',
-      '← Join with previous',
-      'Join with next →',
-      '↵ New line here',
+      'More actions',
     ])
+    await userEvent.click(within(group()).getByRole('button', { name: 'More actions' }))
+    expect(
+      within(group()).getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent),
+    ).toEqual(['Legal spelling', '← Join with previous', 'Join with next →', '↵ New line here', 'More actions'])
   })
 
   it('float over the text: the group is out of the line, under the field', async () => {
@@ -2935,6 +2937,7 @@ describe('the buttons of the word editor', () => {
     await open()
 
     await userEvent.keyboard('jej')
+    await userEvent.click(within(group()).getByRole('button', { name: 'More actions' }))
     await userEvent.click(within(group()).getByRole('button', { name: 'Join with next →' }))
 
     await waitFor(() => expect(calls.filter((c) => c.url.endsWith('/joins'))).toHaveLength(1))
@@ -9753,5 +9756,142 @@ describe('removing the line of a selection', () => {
     await open()
 
     expect(screen.getByText(/Select some text in a line to remove the line/)).toBeInTheDocument()
+  })
+})
+
+describe('the cog wheel of the buttons of a word', () => {
+  // `tey` is the last word of its line, and wrong: it has five buttons (one of them
+  // "Continued on next line")
+  const TEXT = 'Ala ma tey\nkota ala'
+  const group = (word: string) => screen.getByRole('group', { name: `Actions for "${word}"` })
+  const names = (word: string) =>
+    within(group(word))
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label') ?? b.textContent)
+  const cog = (word: string) => within(group(word)).queryByRole('button', { name: /actions$/ })
+
+  async function open(word: string, extra: Options = {}, text = TEXT, wrong = ['jey', 'tey']) {
+    await openPage({
+      page: () => ({ content: xmlOf(text) }),
+      spell: (t) => wordsOf(t, wrong),
+      ...extra,
+    })
+    await waitFor(() => expect(document.querySelectorAll('.word').length).toBeGreaterThan(0))
+    await userEvent.click(screen.getByText(word, { selector: '.word' }))
+  }
+
+  it('a wrong word has the two buttons that are used most, and the cog wheel', async () => {
+    await open('tey')
+
+    expect(names('tey')).toEqual(['Legal spelling', 'Continued on next line -', 'More actions'])
+  })
+
+  it('the cog wheel shows the others, after those two', async () => {
+    await open('tey')
+
+    await userEvent.click(cog('tey')!)
+
+    expect(names('tey')).toEqual([
+      'Legal spelling',
+      'Continued on next line -',
+      '← Join with previous',
+      '↵ New line here',
+      'Remove line break ↓',
+      'More actions',
+    ])
+  })
+
+  it('it is a toggle: a second click hides them again', async () => {
+    await open('tey')
+
+    await userEvent.click(cog('tey')!)
+    expect(cog('tey')).toHaveAttribute('aria-expanded', 'true')
+    expect(cog('tey')).toHaveAttribute('title', 'Fewer actions')
+    await userEvent.click(cog('tey')!)
+
+    expect(cog('tey')).toHaveAttribute('aria-expanded', 'false')
+    expect(names('tey')).toEqual(['Legal spelling', 'Continued on next line -', 'More actions'])
+  })
+
+  it('the cog wheel is the last of the buttons, at the bottom right', async () => {
+    await open('tey')
+
+    const last = within(group('tey')).getAllByRole('button').at(-1)!
+    expect(last).toBe(cog('tey'))
+    expect(getComputedStyle(last).alignSelf).toBe('flex-end')
+    expect(getComputedStyle(last).marginLeft).toBe('auto')
+    expect(last.querySelector('svg')).not.toBeNull() // the icon
+  })
+
+  it('the suggested replacements stay on view', async () => {
+    await open('tey', { suggest: () => ['tej'] })
+
+    await waitFor(() => expect(names('tey')).toContain('tej'))
+    expect(names('tey')).toEqual(['tej', 'Legal spelling', 'Continued on next line -', 'More actions'])
+  })
+
+  it('"Legal spelling" and "Continued on next line" work without opening it', async () => {
+    await open('tey')
+
+    await userEvent.click(within(group('tey')).getByRole('button', { name: 'Continued on next line -' }))
+
+    expect(screen.getByRole('group', { name: 'Word continued on the next line' })).toBeInTheDocument()
+  })
+
+  it('the buttons behind it work as they did', async () => {
+    await open('tey')
+    await userEvent.click(cog('tey')!)
+
+    await userEvent.click(within(group('tey')).getByRole('button', { name: '← Join with previous' }))
+
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith('/joins'))).toHaveLength(1))
+  })
+
+  it('opening it neither closes the editor nor sends anything', async () => {
+    await open('tey')
+    const before = calls.length
+
+    await userEvent.click(cog('tey')!)
+
+    expect(screen.getByRole('textbox', { name: 'Correct "tey"' })).toBeInTheDocument()
+    expect(calls).toHaveLength(before)
+  })
+
+  it('the next word starts with it closed', async () => {
+    await open('tey', {}, 'Ala jey tey ma\nkota ala')
+    await userEvent.click(cog('tey')!)
+    expect(names('tey')).toContain('← Join with previous')
+
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByText('jey', { selector: '.word' }))
+
+    expect(names('jey')).toEqual(['Legal spelling', 'More actions'])
+  })
+
+  it('a wrong word that is alone on its page has "Add line above" behind it', async () => {
+    await open('jey', {}, 'jey', ['jey'])
+
+    expect(names('jey')).toEqual(['Legal spelling', 'More actions'])
+    await userEvent.click(cog('jey')!)
+    expect(names('jey')).toEqual(['Legal spelling', '↑ Add line above', 'More actions'])
+  })
+
+  it('a word that is spelled correctly has all of its buttons, and no cog wheel', async () => {
+    await open('ma')
+
+    expect(names('ma')).toEqual(['← Join with previous', 'Join with next →', '↵ New line here'])
+    expect(cog('ma')).toBeNull()
+  })
+
+  it('a correct last word of a line keeps all of its buttons in the order they had', async () => {
+    await open('tey', {}, TEXT, [])
+
+    expect(names('tey')).toEqual([
+      '← Join with previous',
+      'Continued on next line -',
+      '↵ New line here',
+      'Remove line break ↓',
+    ])
+    expect(cog('tey')).toBeNull()
   })
 })
