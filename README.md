@@ -1262,6 +1262,19 @@ paragraphs (a page number alone on the first line, for example), the buttons say
 lines. They send the two words, with what is between them, to `POST .../line-joins`;
 the page is shown again with its new text, and the spelling is checked again.
 
+**Removing a line by selecting it.** In the correction view (and only there: in the
+structure and the NER views a selection means something else), selecting some text
+with the mouse or with Shift and the arrow keys opens a dialog "Remove this whole
+line?" that quotes the whole line the selection is in, even if only a word of it was
+selected. "Remove line" sends it to `POST .../line-removals` (see "The OCR rubbish"),
+with the offsets of the whole line, without the spaces at its ends; the page is shown
+again with its new text, and the spelling is checked again. Nothing is sent before the
+button is pressed; Cancel, Escape, or selecting nothing closes the dialog. A selection
+that is in more than one line is not removed: the dialog says to select in one line
+only. If the backend refuses (a line with markup in it, say) its reason is shown above
+the text and the line stays. A drag over a word does not open the word's editor; a
+plain click still does.
+
 A page that has no text at all (the OCR found nothing) has nothing to double-click.
 Instead of the hint, the correction view shows a field and an "Add text" button:
 the text typed there is sent as a token at position 0 (`POST .../tokens`) and

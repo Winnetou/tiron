@@ -621,7 +621,7 @@ export interface LineRemoved {
 export function removeLine(
   editionId: string,
   number: number,
-  line: RubbishLine,
+  line: Pick<RubbishLine, 'start' | 'end' | 'text'>,
 ): Promise<LineRemoved> {
   return request<LineRemoved>(`${pageUrl(editionId, number)}/line-removals`, {
     method: 'POST',

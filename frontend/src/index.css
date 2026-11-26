@@ -1487,3 +1487,13 @@ main.loading-page {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 1rem;
 }
+
+/* The dialog that asks to remove a line: the line is quoted in it. */
+.removal-line {
+  flex: 1 1 100%;
+  max-height: 6rem;
+  overflow: auto;
+  font-family: monospace;
+  quotes: none;
+  word-break: break-word;
+}
