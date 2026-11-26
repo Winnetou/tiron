@@ -22,6 +22,16 @@ A failing run only blocks a merge if the checks are required: in the repository'
 Settings, Branches, protect `main` and require the status checks **Backend tests**
 and **Frontend tests** (and that branches are up to date before merging).
 
+### Pre-commit hooks
+
+`.pre-commit-config.yaml` has the ruff hooks (they run when you commit) and **no push to
+main**: a push that updates `main` (`git push` from `main`, or `git push origin
+my-branch:main`) is refused with a message, because `main` gets changes through pull
+requests. Each clone needs `pre-commit install` and `pre-commit install --hook-type
+pre-push` once. `git push --no-verify` is the way around it, if it must be. It is a
+reminder on your machine, not protection: the real one is the branch protection of `main`
+on GitHub (see above).
+
 ### Dependabot
 
 `.github/dependabot.yml` makes Dependabot look for new versions once a week, on Monday,

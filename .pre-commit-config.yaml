@@ -1,3 +1,5 @@
+# The ruff hooks run when committing, as before; the check below is for pushing.
+default_stages: [pre-commit]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.6
@@ -5,3 +7,19 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  # Stops a push to main, from main or as `git push origin my-branch:main`: main only
+  # gets changes through a pull request. Needs `pre-commit install --hook-type pre-push`
+  # (once, in each clone). `git push --no-verify` is the way around it, if it must be.
+  - repo: local
+    hooks:
+      - id: no-push-to-main
+        name: no push to main
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+        entry: >-
+          sh -c 'if [ "$PRE_COMMIT_REMOTE_BRANCH" = "refs/heads/main" ]; then
+          echo "Refusing to push to main: open a pull request from a branch
+          (git push --no-verify to override)." >&2; exit 1; fi'
