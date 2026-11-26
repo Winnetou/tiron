@@ -219,6 +219,9 @@ UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
 # The most places that are given for a spelling (it is counted all the same).
 _OCCURRENCES_SHOWN = 5
+# The legal spellings of an edition count for the editions from up to this many years
+# before or after it (see `Database.get_legal_spellings`).
+LEGAL_SPELLINGS_YEARS = 10
 # The most words of a named entity that its forms are looked for.
 _MOST_WORDS = 5
 
@@ -1057,11 +1060,26 @@ class Database:
         return row is not None
 
     def get_legal_spellings(self, edition_id: UUID) -> set[str]:
-        """The spellings that are legal in an edition (none if it has none, or is
-        not stored)."""
+        """The spellings that are legal for an edition: those of the edition itself,
+        and those of every edition from the same time, whose year is known and is at
+        most `LEGAL_SPELLINGS_YEARS` (10) years before or after the year of this one.
+        Print of one period spells alike, so what a person accepted in one edition
+        is not to be flagged in another of its time: the check is against a bigger,
+        contemporary corpus.
+
+        An edition whose year is not known has only its own spellings, and no other
+        edition's year is known to be near its own. None if it has none, or is not
+        stored.
+        """
         rows = self.conn.execute(
-            "SELECT spelling FROM legal_spellings WHERE edition_id = %s",
-            (edition_id,),
+            "SELECT DISTINCT legal.spelling"
+            " FROM editions this"
+            " JOIN editions other"
+            "   ON other.id = this.id"
+            "   OR other.year BETWEEN this.year - %(years)s AND this.year + %(years)s"
+            " JOIN legal_spellings legal ON legal.edition_id = other.id"
+            " WHERE this.id = %(edition_id)s",
+            {"edition_id": edition_id, "years": LEGAL_SPELLINGS_YEARS},
         ).fetchall()
         return {row["spelling"] for row in rows}
 

@@ -558,12 +558,21 @@ class TestLegalSpellings:
 
         assert [c["column_name"] for c in columns] == ["edition_id", "spelling"]
 
-    def test_gets_the_spellings_of_an_edition(self, db, edition):
-        work = Work(author="Other")
+    def edition_of_year(self, db, year, author="Other"):
+        work = Work(author=author)
         db.create_work(work)
-        other = db.create_edition(Edition(work_id=work.id, year=1900))
-        for e, spelling in ((edition, "jey"), (edition, "tey"), (other, "raczey")):
-            db.add_legal_spelling(LegalSpelling(edition_id=e.id, spelling=spelling))
+        return db.create_edition(Edition(work_id=work.id, year=year))
+
+    def legalize(self, db, edition, *spellings):
+        for spelling in spellings:
+            db.add_legal_spelling(
+                LegalSpelling(edition_id=edition.id, spelling=spelling)
+            )
+
+    def test_gets_the_spellings_of_an_edition(self, db, edition):
+        other = self.edition_of_year(db, 1950)  # not from the same time
+        self.legalize(db, edition, "jey", "tey")
+        self.legalize(db, other, "raczey")
 
         assert db.get_legal_spellings(edition.id) == {"jey", "tey"}
         assert db.get_legal_spellings(other.id) == {"raczey"}
@@ -571,6 +580,70 @@ class TestLegalSpellings:
     def test_an_edition_without_spellings_or_not_stored_has_none(self, db, edition):
         assert db.get_legal_spellings(edition.id) == set()
         assert db.get_legal_spellings(uuid4()) == set()
+
+    def test_the_spellings_of_editions_from_the_same_time_count_too(self, db, edition):
+        earlier = self.edition_of_year(db, 1885)
+        later = self.edition_of_year(db, 1897)
+        self.legalize(db, edition, "jey")
+        self.legalize(db, earlier, "tey")
+        self.legalize(db, later, "raczey")
+
+        assert db.get_legal_spellings(edition.id) == {"jey", "tey", "raczey"}
+        # (the edition of 1890 is within 10 years of both, the two are 12 apart)
+        assert db.get_legal_spellings(earlier.id) == {"jey", "tey"}
+        assert db.get_legal_spellings(later.id) == {"jey", "raczey"}
+
+    def test_ten_years_either_way_are_included_and_no_more(self, db, edition):
+        near = [self.edition_of_year(db, 1880), self.edition_of_year(db, 1900)]
+        far = [self.edition_of_year(db, 1879), self.edition_of_year(db, 1901)]
+        for e, spelling in zip(near + far, ("n1", "n2", "f1", "f2"), strict=True):
+            self.legalize(db, e, spelling)
+
+        assert db.get_legal_spellings(edition.id) == {"n1", "n2"}  # 1890 +- 10
+
+    def test_the_window_is_the_constant(self):
+        from app.persistence.db import LEGAL_SPELLINGS_YEARS
+
+        assert LEGAL_SPELLINGS_YEARS == 10
+
+    def test_editions_of_an_unknown_year_are_not_included(self, db, edition):
+        work = Work(author="Other")
+        db.create_work(work)
+        unknown = db.create_edition(Edition(work_id=work.id, year=None))
+        self.legalize(db, edition, "jey")
+        self.legalize(db, unknown, "tey")
+
+        assert db.get_legal_spellings(edition.id) == {"jey"}
+
+    def test_an_edition_of_an_unknown_year_has_only_its_own(self, db, edition):
+        work = Work(author="Other")
+        db.create_work(work)
+        unknown = db.create_edition(Edition(work_id=work.id, year=None))
+        self.legalize(db, edition, "jey")
+        self.legalize(db, unknown, "tey")
+
+        assert db.get_legal_spellings(unknown.id) == {"tey"}
+
+    def test_a_spelling_that_is_legal_in_several_editions_is_there_once(
+        self, db, edition
+    ):
+        other = self.edition_of_year(db, 1892)
+        self.legalize(db, edition, "jey")
+        self.legalize(db, other, "jey")
+
+        assert db.get_legal_spellings(edition.id) == {"jey"}
+
+    def test_case_still_matters_across_editions(self, db, edition):
+        other = self.edition_of_year(db, 1892)
+        self.legalize(db, edition, "jey")
+        self.legalize(db, other, "Jey")
+
+        assert db.get_legal_spellings(edition.id) == {"jey", "Jey"}
+
+    def test_the_edition_itself_is_enough_with_nobody_else_near(self, db, edition):
+        self.legalize(db, edition, "jey")
+
+        assert db.get_legal_spellings(edition.id) == {"jey"}
 
     def test_the_schema_can_be_created_again(self, db, edition):
         db.add_legal_spelling(LegalSpelling(edition_id=edition.id, spelling="jey"))
