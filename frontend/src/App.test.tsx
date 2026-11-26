@@ -1230,12 +1230,12 @@ describe('named entity recognition', () => {
 
   it('leaves the Correction button as a stub', async () => {
     await openWithText('Jan Kowalski', [entity('Jan Kowalski', 0)])
-    const before = calls.length
+    const before = withoutSuggestions().length
 
     await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
     expect(nerCalls()).toHaveLength(0)
-    expect(calls).toHaveLength(before) // no request
+    expect(withoutSuggestions()).toHaveLength(before) // no request
     expect(pageText().textContent).toBe('Jan Kowalski')
   })
 })
@@ -2180,12 +2180,12 @@ describe('structure view', () => {
 
     it('only asks for the sections marked in the XML, which changes nothing', async () => {
       await open()
-      const before = calls.length
+      const before = withoutSuggestions().length
 
       await userEvent.click(structureButton())
 
-      await waitFor(() => expect(calls).toHaveLength(before + 1))
-      expect(calls.slice(before).map((c) => `${c.method} ${c.url}`)).toEqual([
+      await waitFor(() => expect(withoutSuggestions()).toHaveLength(before + 1))
+      expect(withoutSuggestions().slice(before).map((c) => `${c.method} ${c.url}`)).toEqual([
         'POST /tei/sections',
       ])
     })
@@ -2256,11 +2256,11 @@ describe('structure view', () => {
 
     it('selecting only sends nothing', async () => {
       await openStructure()
-      const before = calls.length
+      const before = withoutSuggestions().length
 
       select('84 KATEDRA')
 
-      expect(calls).toHaveLength(before)
+      expect(withoutSuggestions()).toHaveLength(before)
     })
 
     it('a new selection replaces the dialog, with nothing chosen yet', async () => {
@@ -6508,13 +6508,13 @@ describe('page view', () => {
 
     it('switch back and forth without any request', async () => {
       await openText()
-      const before = calls.length
+      const before = withoutSuggestions().length
 
       await userEvent.click(xmlButton())
       await userEvent.click(textButton())
       await userEvent.click(screen.getByRole('button', { name: 'Correction' }))
 
-      expect(calls).toHaveLength(before)
+      expect(withoutSuggestions()).toHaveLength(before)
       expect(pageText().querySelector('.word.misspelled')).not.toBeNull()
     })
 
