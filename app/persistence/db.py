@@ -15,6 +15,7 @@ Connection details are read from environment variables:
 
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
@@ -74,10 +75,10 @@ from app.text_tools.spelling import check_words, tokenize, word_verdict
 from app.text_tools.spelling_chunks import find_chunk_matches
 from app.text_tools.tei_xml import (
     InvalidTei,
-    foreign_language_ranges,
     tei_xml_entities,
     tei_xml_sections,
     tei_xml_to_text,
+    text_and_foreign_language_ranges,
 )
 from app.text_tools.token_occurrences import (
     check_token,
@@ -565,8 +566,9 @@ class Database:
             if not row["xml_content_corrected"]:
                 continue
             try:
-                text = tei_xml_to_text(row["xml_content_corrected"])
-                foreign = foreign_language_ranges(row["xml_content_corrected"])
+                text, foreign = text_and_foreign_language_ranges(
+                    row["xml_content_corrected"]
+                )
             except InvalidTei:
                 continue
             candidates = tokens_with_cluster(text, fix)
@@ -615,8 +617,7 @@ class Database:
             return None
         if not row["xml_content_corrected"]:
             return []
-        text = tei_xml_to_text(row["xml_content_corrected"])
-        foreign = foreign_language_ranges(row["xml_content_corrected"])
+        text, foreign = text_and_foreign_language_ranges(row["xml_content_corrected"])
         legal = self.get_legal_spellings(edition_id)
         return [
             MissingHyphen.model_validate(vars(found))
@@ -690,8 +691,7 @@ class Database:
             if not xml:
                 continue
             try:
-                text = tei_xml_to_text(xml)
-                foreign = foreign_language_ranges(xml)
+                text, foreign = text_and_foreign_language_ranges(xml)
             except InvalidTei:
                 continue
             for match in find_chunk_matches(text, substrings, legal, foreign):
@@ -734,27 +734,30 @@ class Database:
             (edition_id,),
         ).fetchall()
         legal = self.get_legal_spellings(edition_id)
-        pages: list[tuple[int, str, list[tuple[int, int]]]] = []
+        # each page is read and tokenized once, for the counting and for the check
+        pages: list[tuple[int, str, list[tuple[int, int]], list[re.Match[str]]]] = []
         for row in rows:
             xml = row["xml_content_corrected"]
             if not xml:
                 continue
             try:
-                pages.append(
-                    (row["number"], tei_xml_to_text(xml), foreign_language_ranges(xml))
-                )
+                text, foreign = text_and_foreign_language_ranges(xml)
             except InvalidTei:
                 continue
+            pages.append((row["number"], text, foreign, tokenize(text)))
         # One for all the pages: a word is looked up in the dictionary once, however
         # many pages it is on, and not at all if it is too rare to be offered (the
         # dictionary is by far the slowest part).
         verdict = only_frequent_words_looked_up(
-            [(text, foreign) for _, text, foreign in pages], word_verdict(legal)
+            [(text, foreign, tokens) for _, text, foreign, tokens in pages],
+            word_verdict(legal),
         )
         places: dict[str, list[SpellingOccurrence]] = {}
         counts: dict[str, int] = {}
-        for number, text, foreign in pages:
-            for match in find_inner_flagged_words(text, legal, foreign, verdict):
+        for number, text, foreign, tokens in pages:
+            for match in find_inner_flagged_words(
+                text, legal, foreign, verdict, tokens
+            ):
                 counts[match.text] = counts.get(match.text, 0) + 1
                 shown = places.setdefault(match.text, [])
                 if len(shown) < _OCCURRENCES_SHOWN:
