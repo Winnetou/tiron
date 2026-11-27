@@ -860,6 +860,91 @@ def test_list_collection_pages_the_ids_in_order(db):
     assert (page.total, page.page, page.size) == (5, 2, 2)
 
 
+class TestSearchCollection:
+    @pytest.fixture
+    def found(self, db):
+        """Searches the collection of a few editions, returns the (author, title)s."""
+        for author, title in [
+            ("Bolesław Prus", "Lalka"),
+            ("Bolesław Prus", "Faraon"),
+            ("Henryk Sienkiewicz", "Potop"),
+            ("Adam Mickiewicz", "Pan Tadeusz"),
+            ("Adam Mickiewicz", "100% polski_tytuł"),
+        ]:
+            work = db.create_work(Work(author=author, title=title))
+            edition = db.create_edition(Edition(work_id=work.id, year=1890))
+            db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (edition.id,))
+        # in the collection but not stored, and a work without a title
+        db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (uuid4(),))
+        no_title = db.create_edition(
+            Edition(work_id=db.create_work(Work(author="Prusak")).id, year=1890)
+        )
+        db.conn.execute("INSERT INTO collection (id) VALUES (%s)", (no_title.id,))
+        # stored, but not in the collection
+        outside = db.create_work(Work(author="Prus Outside", title="Not listed"))
+        db.create_edition(Edition(work_id=outside.id, year=1890))
+        set_page(PaginatedPage[CollectionEdition])
+
+        def search(author=None, title=None, page=1, size=10):
+            with set_params(Params(page=page, size=size)):
+                result = db.search_collection(author, title)
+            return sorted((i.author, i.title) for i in result.items), result
+
+        return search
+
+    def test_by_author(self, found):
+        authors, _ = found(author="Prus")
+
+        assert authors == [
+            ("Bolesław Prus", "Faraon"),
+            ("Bolesław Prus", "Lalka"),
+            ("Prusak", None),
+        ]
+
+    def test_by_title(self, found):
+        titles, _ = found(title="tad")
+
+        assert titles == [("Adam Mickiewicz", "Pan Tadeusz")]
+
+    def test_with_both_both_must_match(self, found):
+        assert found(author="prus", title="lalka")[0] == [("Bolesław Prus", "Lalka")]
+        assert found(author="prus", title="potop")[0] == []
+
+    def test_without_regard_to_case_and_around_the_value(self, found):
+        assert found(author="  MICKIEWICZ ")[0] == [
+            ("Adam Mickiewicz", "100% polski_tytuł"),
+            ("Adam Mickiewicz", "Pan Tadeusz"),
+        ]
+
+    def test_percent_and_underscore_are_not_wildcards(self, found):
+        assert found(title="%")[0] == [("Adam Mickiewicz", "100% polski_tytuł")]
+        assert found(title="_")[0] == [("Adam Mickiewicz", "100% polski_tytuł")]
+        assert found(title="l_lka")[0] == []
+        assert found(title="a%a")[0] == []
+
+    def test_a_backslash_is_an_ordinary_character(self, found):
+        assert found(title="\\")[0] == []
+
+    def test_only_the_collection_and_only_stored_editions(self, found):
+        # "Prus Outside" is not in the collection, and the edition that is not
+        # stored has no author: neither is found
+        assert ("Prus Outside", "Not listed") not in found(author="Prus")[0]
+        assert len(found(author="")[1].items) == 7 - 1  # all of the stored ones
+
+    def test_is_paged_and_counts_all_the_matches(self, found):
+        _, first = found(author="Prus", page=1, size=2)
+        _, second = found(author="Prus", page=2, size=2)
+
+        assert (first.total, first.pages, len(first.items)) == (3, 2, 2)
+        assert len(second.items) == 1
+        assert not {i.id for i in first.items} & {i.id for i in second.items}
+
+    def test_nothing_found(self, found):
+        items, result = found(author="Nobody")
+
+        assert (items, result.total) == ([], 0)
+
+
 def test_list_collection_has_the_author_and_title_of_the_work(db):
     work = db.create_work(Work(author="Kraszewski", title="Stara baśń"))
     stored = db.create_edition(Edition(work_id=work.id, year=1876))

@@ -228,6 +228,77 @@ main.login-page {
   }
 }
 
+/* The search: a small round button in the top right corner of the sheet, above the
+   title; it shows a box with the two fields. */
+.editions-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.5rem;
+}
+
+.search-toggle {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--charcoal);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+.search-toggle:hover,
+.search-toggle:focus-visible,
+.search-toggle:active,
+.search-toggle[aria-expanded='true'] {
+  border-color: #e0a800;
+  box-shadow: 0 0 0 3px rgba(255, 214, 10, 0.5);
+}
+
+.editions-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.6rem 0.7rem;
+  background: rgba(246, 239, 223, 0.85);
+  border: 1px solid rgba(90, 80, 64, 0.35);
+  border-radius: 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.editions-search .styled-input {
+  font-size: 0.95rem;
+}
+
+.editions-search-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* the buttons are the pills of review-styled; pressed, the glow is the stronger */
+.editions-search-buttons button:active:not(:disabled) {
+  border-color: #e0a800;
+  background: #ffefa8;
+  box-shadow: 0 0 0 4px rgba(255, 214, 10, 0.65);
+}
+
+.editions-search-buttons button:disabled {
+  opacity: 0.5;
+}
+
+.editions-found {
+  margin: 0 0 0.5rem;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
 .editions-pages {
   display: flex;
   align-items: center;

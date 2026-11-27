@@ -235,8 +235,13 @@ def test_every_endpoint_but_the_public_ones_needs_a_login():
         assert response.json()["detail"] == "Login required", (method, path)
 
 
-def test_the_public_endpoints_are_only_the_main_page_health_and_login():
-    assert {("GET", "/editions"), ("GET", "/health"), ("POST", "/auth/login")} == PUBLIC
+def test_the_public_endpoints_are_only_the_main_page_its_search_health_and_login():
+    assert {
+        ("GET", "/editions"),
+        ("GET", "/editions/search"),
+        ("GET", "/health"),
+        ("POST", "/auth/login"),
+    } == PUBLIC
     assert set(endpoints()) >= PUBLIC  # and they exist (no stale entry)
 
 
@@ -244,6 +249,14 @@ def test_the_list_of_editions_needs_no_login(monkeypatch):
     monkeypatch.setattr(db, "list_collection", lambda: paginate([]))
 
     assert client.get("/editions").status_code == 200
+
+
+def test_the_search_of_editions_needs_no_login(monkeypatch):
+    monkeypatch.setattr(
+        db, "search_collection", lambda author=None, title=None: paginate([])
+    )
+
+    assert client.get("/editions/search", params={"author": "Prus"}).status_code == 200
 
 
 def test_health_needs_no_login(monkeypatch):

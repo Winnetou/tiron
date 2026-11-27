@@ -379,6 +379,102 @@ class TestListEditions:
         assert client.get(f"/editions/{uuid4()}/pages/x").status_code == 422
 
 
+class TestSearchEditions:
+    @pytest.fixture
+    def search(self, monkeypatch):
+        """Records what the endpoint asks the database, and answers 3 editions."""
+        asked = []
+        items = [
+            {"id": uuid4(), "author": "Prus", "title": f"Lalka {n}"} for n in range(3)
+        ]
+
+        def search_collection(author=None, title=None):
+            asked.append((author, title))
+            return paginate(items)
+
+        monkeypatch.setattr(db, "search_collection", search_collection)
+        return asked, items
+
+    def test_asks_for_the_author_and_the_title(self, search):
+        asked, _ = search
+
+        client.get("/editions/search", params={"author": "Prus", "title": "Lal"})
+
+        assert asked == [("Prus", "Lal")]
+
+    def test_the_author_alone_or_the_title_alone(self, search):
+        asked, _ = search
+
+        client.get("/editions/search", params={"author": "Prus"})
+        client.get("/editions/search", params={"title": "Lalka"})
+
+        assert asked == [("Prus", None), (None, "Lalka")]
+
+    def test_answers_in_the_form_of_the_list(self, search):
+        _, items = search
+
+        body = client.get("/editions/search", params={"author": "Prus"}).json()
+
+        assert body["items"] == [
+            {"id": str(i["id"]), "author": i["author"], "title": i["title"]}
+            for i in items
+        ]
+        assert (body["total"], body["page"], body["size"], body["pages"]) == (
+            3,
+            1,
+            100,
+            1,
+        )
+
+    def test_is_paged_like_the_list(self, search):
+        assert client.get("/editions/search?author=a&size=2").json()["pages"] == 2
+        assert client.get("/editions/search?author=a&size=101").status_code == 422
+        assert client.get("/editions/search?author=a&page=0").status_code == 422
+
+    @pytest.mark.parametrize(
+        "params",
+        [{}, {"author": ""}, {"author": "  ", "title": ""}, {"title": " \t"}],
+    )
+    def test_422_without_an_author_or_a_title(self, search, params):
+        asked, _ = search
+
+        response = client.get("/editions/search", params=params)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Give an author or a title"
+        assert asked == []
+
+    def test_a_blank_one_does_not_matter_if_the_other_is_given(self, search):
+        asked, _ = search
+
+        response = client.get(
+            "/editions/search", params={"author": " ", "title": "Lalka"}
+        )
+
+        assert response.status_code == 200
+        assert asked == [(" ", "Lalka")]
+
+    def test_a_value_cannot_be_longer_than_200(self, search):
+        assert (
+            client.get("/editions/search", params={"author": "a" * 201}).status_code
+            == 422
+        )
+
+    def test_nothing_found_is_an_empty_list(self, monkeypatch):
+        monkeypatch.setattr(
+            db, "search_collection", lambda author=None, title=None: paginate([])
+        )
+
+        response = client.get("/editions/search", params={"author": "Nobody"})
+
+        assert response.status_code == 200
+        assert (response.json()["items"], response.json()["total"]) == ([], 0)
+
+    def test_is_not_taken_for_an_edition(self, search):
+        # /editions/search is not /editions/{id}: the id routes still want a uuid
+        assert client.get(f"/editions/{uuid4()}/pages/x").status_code == 422
+
+
 def test_old_page_route_removed():
     assert client.get(f"/pages/{uuid4()}").status_code == 404
 

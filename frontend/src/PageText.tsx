@@ -224,9 +224,9 @@ interface WordEditorProps {
  * The word as a text field, to be edited in place. Enter confirms and Escape
  * (or leaving the field) cancels. Nothing is sent if the text is empty or is
  * the same as before. A misspelled word also has a "Legal spelling" button next
- * to the field, to say that the spelling as it is, is legal in the edition, and
- * the replacements that the backend suggests (if it does), each a button that
- * corrects the word to it.
+ * to the field (always the first), to say that the spelling as it is, is legal in
+ * the edition, and the replacements that the backend suggests (if it does), each a
+ * button that corrects the word to it, after the fixed buttons.
  * ("Legal", not "correct": the dictionary is a modern one, and what was correct
  * in the 19th century often is not anymore; we have no better word for it.)
  * Next to a word that has another one right before or after it, with only a
@@ -372,19 +372,6 @@ function WordEditor({
         role="group"
         aria-label={`Actions for "${word.text}"`}
       >
-        {suggestions.map((suggestion) => (
-          <button
-            key={suggestion}
-            type="button"
-            className="suggestion-button"
-            title={`Correct "${word.text}" to "${suggestion}"`}
-            disabled={busy}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onSubmit(suggestion)}
-          >
-            {suggestion}
-          </button>
-        ))}
         {!word.correct && (
           <button
             type="button"
@@ -399,6 +386,20 @@ function WordEditor({
           </button>
         )}
         {!word.correct && continuedButton}
+        {/* appended after the fixed buttons, as the backend answers */}
+        {suggestions.map((suggestion) => (
+          <button
+            key={suggestion}
+            type="button"
+            className="suggestion-button"
+            title={`Correct "${word.text}" to "${suggestion}"`}
+            disabled={busy}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onSubmit(suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
         {moreVisible && (
           <>
           {onJoinPrevious && (

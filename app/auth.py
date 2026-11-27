@@ -24,9 +24,14 @@ from app.config import is_prod
 COOKIE_NAME = "tiron_session"
 SESSION_SECONDS = 24 * 60 * 60
 
-# The endpoints that need no login: the list of the editions (the main page), the
-# check that the backend works, and the login itself.
-PUBLIC = {("GET", "/editions"), ("GET", "/health"), ("POST", "/auth/login")}
+# The endpoints that need no login: the list of the editions (the main page) and its
+# search, the check that the backend works, and the login itself.
+PUBLIC = {
+    ("GET", "/editions"),
+    ("GET", "/editions/search"),
+    ("GET", "/health"),
+    ("POST", "/auth/login"),
+}
 
 # What the secret is when SESSION_SECRET is not set and PROD is false (development,
 # tests). Anyone can read it here: never in production, where the backend does not

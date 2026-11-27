@@ -1115,3 +1115,55 @@ class Database:
             total=total["n"],
             params=params,
         )
+
+    def search_collection(
+        self, author: str | None = None, title: str | None = None
+    ) -> Any:
+        """A page of the editions in the collection whose work has the given author
+        and/or title, in the order of their ids, in the same form as
+        `list_collection` (and paged the same way).
+
+        What is given is looked for anywhere in the author or the title, without
+        regard to case (`ILIKE`); with both, both must match. A value that is
+        None or only blank is not searched for; with neither, nothing is
+        asked and every edition is found, so the caller is to refuse that. The
+        `%` and `_` of the value are not wildcards, they are looked for as they
+        are. An edition that is not stored, or whose work has no author (or no
+        title), never matches a search for it."""
+        conditions, values = [], []
+        for column, wanted in (("w.author", author), ("w.title", title)):
+            if wanted is not None and wanted.strip():
+                escaped = (
+                    wanted.strip()
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                conditions.append(f"{column} ILIKE %s ESCAPE '\\'")
+                values.append(f"%{escaped}%")
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        source = (
+            " FROM collection c"
+            " JOIN editions e ON e.id = c.id"
+            " JOIN works w ON w.id = e.work_id"
+        )
+        params = resolve_params()
+        raw = params.to_raw_params().as_limit_offset()
+        rows = self.conn.execute(
+            "SELECT c.id, w.author, w.title"
+            + source
+            + where
+            + " ORDER BY c.id LIMIT %s OFFSET %s",
+            (*values, raw.limit, raw.offset),
+        ).fetchall()
+        total = self.conn.execute(
+            "SELECT count(*) AS n" + source + where, values
+        ).fetchone()
+        return create_page(
+            [
+                {"id": row["id"], "author": row["author"], "title": row["title"]}
+                for row in rows
+            ],
+            total=total["n"],
+            params=params,
+        )

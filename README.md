@@ -209,6 +209,18 @@ title is not known). An edition whose book is not known at all, neither author n
 title, is linked by its id. (This is done by the frontend, in
 `editionLabel.ts`; the endpoint gives the author and title as they are stored.)
 
+**Search.** `GET /editions/search?author=&title=` finds the editions of the collection
+whose work has that author and/or title: at least one of them (422 `Give an author or a
+title` if both are missing or blank); with both, both must match. Each is looked for
+anywhere in the author or the title, without regard to case (`mick` finds
+`Mickiewicz`; the spaces at its ends are ignored, `%` and `_` are ordinary characters),
+and at most 200 characters. **Diacritics count**: `Slowacki` does not find `Słowacki`
+(PostgreSQL's `unaccent` is an extension, and the database user may not create one). The
+response is the same as that of `GET /editions`, with `?page=` and `?size=` and in the
+order of the ids; nothing found is an empty list, not an error. Like the list it needs
+no login, since the main page has the search. Only the editions of the collection that
+are stored with their work are found (the join is not an outer one, unlike the list's).
+
 ### Editing the metadata of an edition
 
 The metadata that is fetched from Polona is not always complete, so it can be
@@ -535,7 +547,8 @@ spellings of the edition count as correct). The response is `{"suggestions": ["k
 - 422 if the characters at the offsets are not one word (a sign, part of a word, or
   several words), 503 if the dictionary is not available. Nothing is stored.
 - **In the frontend**, the field that opens when a misspelled word is clicked asks for
-  the suggestions and shows them as green buttons next to "Legal spelling". A click
+  the suggestions and shows them as green buttons after "Legal spelling" and
+  "Continued on next line -" (which stay first). A click
   corrects the word exactly as if it was typed (the correction is recorded, and the
   new spelling is made a legal one, as always). If there are none, or they cannot be
   had, nothing is shown and the word can be typed as before.
@@ -1222,7 +1235,21 @@ text.
 
 The main page (`/`) lists the editions of the collection as links, 100 on a page
 (`GET /editions`), with Previous and Next to move between the pages of the list
-(`/?page=2`, ...). There is no field to type a uuid in. Each link goes to the
+(`/?page=2`, ...). There is no field to type a uuid in.
+
+**The search.** A small round magnifying-glass button is in the top right corner of the
+list, above the title "Editions". It shows (and hides) a box with two round fields, with
+**Author** and **Title** as their placeholders (no labels besides them), and a round
+**Search** button, which has the yellowish effect of the other buttons when the pointer
+is over it, on a key, and when it is pressed. It is inactive while both fields are empty or
+blank and active as soon as one has something in it (Enter in a field searches too). The
+editions that are found take the place of the list, in the same form and with the same
+Previous and Next, under the line "N editions found." (or "No edition found."); **Clear
+search** (in the box, while there is a search) brings the whole list back. The search is
+in the address (`/?author=Prus&title=Lalka&page=2`), so a reload or a copied link shows
+the same results. While the search runs, or if it fails, the box stays on the page, to
+try again. See "The main page: the editions of the collection" for the endpoint.
+ Each link goes to the
 first page of its edition, `/editions/{uuid}/pages/0`: the address of a page in
 the browser is the same as the endpoint's, and opening it shows that page. If the
 page cannot be loaded (for example, the number is past the last page), the reason is
@@ -1407,9 +1434,10 @@ clicking one does not cancel the edit.
 
 **A misspelled word shows only two buttons, and a cog wheel for the rest.** A word in
 red is the one that is clicked most, and at the end of a line it could have five buttons,
-which is too many. So the group of a misspelled word has, on view, the replacements that
-the backend suggests, **Legal spelling** and **Continued on next line -** (the two that
-are used most), and a small round **cog wheel** (`aria-label="More actions"`) at the
+which is too many. So the group of a misspelled word has, on view, **Legal spelling**
+(always the first) and **Continued on next line -** (the two that are used most), then
+the replacements that the backend suggests (they are added after those two, when the
+backend answers), and a small round **cog wheel** (`aria-label="More actions"`) at the
 bottom right of the group. Clicking it shows the others, after those: "← Join with
 previous", "Join with next →", "↑ Add line above", "↵ New line here" and "Remove line
 break" / "Remove empty line"; clicking it again hides them. It does not close the editor
@@ -1722,7 +1750,7 @@ the backend rejects it and the frontend shows that error instead of its text.
 ### Login
 
 Everything needs a login except the **main page** (the list of editions, `GET
-/editions`), `GET /health` and the login itself. It is for a handful of people: the
+/editions`, and its search, `GET /editions/search`), `GET /health` and the login itself. It is for a handful of people: the
 users are put into the database by hand, and there is no registration, no password
 reset and no reminder.
 
