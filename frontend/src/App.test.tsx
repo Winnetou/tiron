@@ -132,6 +132,13 @@ interface Options {
   patchMetadata?: (fields: Partial<EditionMetadata>) => EditionMetadata | Error
   /** Answer of GET /editions?page=N; defaults to 250 editions. */
   editions?: (page: number) => { items: EditionItem[]; pages: number } | Error
+  /**
+   * Answer of GET /editions/search?author=&title=&page=N; defaults to two editions
+   * (of "Prus" and "Lalka", whatever is asked).
+   */
+  found?: (
+    query: { author?: string; title?: string; page: number },
+  ) => { items: EditionItem[]; total?: number; pages?: number } | Error
   /** Answer of POST /tei/entities; defaults to the entities marked in the XML. */
   marked?: (xml: string) => Entity[] | Error
   /** Answer of POST .../tokens; defaults to putting the token in the text. */
@@ -257,7 +264,7 @@ function fakeBackend(options: Options = {}) {
       }
       return failure(401, new Error('Wrong username or password'))
     }
-    if (!session && !url.startsWith('/editions?page=')) {
+    if (!session && !url.startsWith('/editions?page=') && !url.startsWith('/editions/search?')) {
       return failure(401, new Error('Login required'))
     }
     if (url.endsWith('/metadata')) {
@@ -276,6 +283,33 @@ function fakeBackend(options: Options = {}) {
       return answer instanceof Error
         ? failure(422, answer)
         : reply(true, 200, answer)
+    }
+    if (url.startsWith('/editions/search?')) {
+      const query = new URLSearchParams(url.split('?')[1])
+      const asked = {
+        author: query.get('author') ?? undefined,
+        title: query.get('title') ?? undefined,
+        page: Number(query.get('page') ?? 1),
+      }
+      if (asked.author === undefined && asked.title === undefined) {
+        return failure(422, new Error('Give an author or a title'))
+      }
+      const answer = options.found
+        ? options.found(asked)
+        : {
+            items: editionIds(1)
+              .slice(0, 2)
+              .map((id) => ({ id, author: 'Prus, Bolesław', title: 'Lalka' })),
+          }
+      return answer instanceof Error
+        ? failure(500, answer)
+        : reply(true, 200, {
+            total: answer.items.length,
+            page: asked.page,
+            size: 100,
+            pages: 1,
+            ...answer,
+          })
     }
     if (url.startsWith('/editions?page=')) {
       const page = Number(url.split('=')[1])
@@ -930,6 +964,299 @@ describe('the main page', () => {
     openMainPage({ editions: () => new Error('Database down') })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Database down')
+  })
+})
+
+describe('searching the editions on the main page', () => {
+  const links = () =>
+    within(screen.getByRole('navigation', { name: 'Editions' })).getAllByRole('link')
+  const toggle = () => screen.getByRole('button', { name: 'Search the editions' })
+  const box = () => screen.getByRole('search', { name: 'Search the editions' })
+  const searchButton = () => within(box()).getByRole('button', { name: 'Search' })
+  const author = () => within(box()).getByRole('textbox', { name: 'Author' })
+  const title = () => within(box()).getByRole('textbox', { name: 'Title' })
+  const searchCalls = () => calls.filter((c) => c.url.startsWith('/editions/search?'))
+
+  async function openList(options?: Options, address = '') {
+    openMainPage(options, address)
+    await screen.findByRole('navigation', { name: 'Editions' })
+  }
+
+  it('has a small search button above the title, in the top right corner, and no box yet', async () => {
+    await openList()
+
+    const nav = screen.getByRole('navigation', { name: 'Editions' })
+    const tools = toggle().parentElement!
+    expect(tools).toHaveClass('editions-tools')
+    expect(getComputedStyle(tools).justifyContent).toBe('flex-end')
+    expect(tools.compareDocumentPosition(screen.getByRole('heading', { name: 'Editions' }))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    expect(nav.firstElementChild).toBe(tools)
+    expect(toggle().querySelector('svg')).not.toBeNull()
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('search')).toBeNull()
+  })
+
+  it('shows a box with the fields Author and Title when it is clicked, and hides it again', async () => {
+    await openList()
+
+    await userEvent.click(toggle())
+
+    expect(box()).toBeInTheDocument()
+    expect(author()).toHaveValue('')
+    expect(title()).toHaveValue('')
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true')
+    expect(author()).toHaveFocus()
+
+    await userEvent.click(toggle())
+
+    expect(screen.queryByRole('search')).toBeNull()
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('has round fields with the names as placeholders, and the buttons of the tools', async () => {
+    await openList()
+
+    await userEvent.click(toggle())
+
+    expect(author()).toHaveAttribute('placeholder', 'Author')
+    expect(title()).toHaveAttribute('placeholder', 'Title')
+    expect(author()).toHaveClass('styled-input') // round, with the yellowish frame
+    expect(title()).toHaveClass('styled-input')
+    expect(within(box()).queryByText('Author')).toBeNull() // no label besides the placeholder
+    expect(box()).toHaveClass('review-styled') // the round buttons with the yellowish effect
+  })
+
+  it('has the Search button inactive while both fields are empty or blank', async () => {
+    await openList()
+    await userEvent.click(toggle())
+
+    expect(searchButton()).toBeDisabled()
+
+    await userEvent.type(author(), '   ')
+    await userEvent.type(title(), '  ')
+
+    expect(searchButton()).toBeDisabled()
+  })
+
+  it('has the Search button active with an author, with a title, or with both', async () => {
+    await openList()
+    await userEvent.click(toggle())
+
+    await userEvent.type(author(), 'Prus')
+    expect(searchButton()).toBeEnabled()
+
+    await userEvent.clear(author())
+    expect(searchButton()).toBeDisabled()
+
+    await userEvent.type(title(), 'Lalka')
+    expect(searchButton()).toBeEnabled()
+
+    await userEvent.type(author(), 'Prus')
+    expect(searchButton()).toBeEnabled()
+  })
+
+  it('does nothing on Enter while both fields are empty', async () => {
+    await openList()
+    await userEvent.click(toggle())
+
+    await userEvent.type(author(), '{Enter}')
+
+    expect(searchCalls()).toHaveLength(0)
+  })
+
+  it('searches with the author and the title, without the spaces around them', async () => {
+    await openList()
+    await userEvent.click(toggle())
+    await userEvent.type(author(), '  Prus ')
+    await userEvent.type(title(), 'Lalka')
+
+    await userEvent.click(searchButton())
+
+    await waitFor(() => expect(searchCalls()).toHaveLength(1))
+    expect(searchCalls()[0].url).toBe('/editions/search?author=Prus&title=Lalka&page=1')
+  })
+
+  it('leaves a blank field out of the request', async () => {
+    await openList()
+    await userEvent.click(toggle())
+    await userEvent.type(title(), 'Pan Tadeusz')
+
+    await userEvent.click(searchButton())
+
+    await waitFor(() => expect(searchCalls()).toHaveLength(1))
+    expect(searchCalls()[0].url).toBe('/editions/search?title=Pan+Tadeusz&page=1')
+  })
+
+  it('searches on Enter in a field', async () => {
+    await openList()
+    await userEvent.click(toggle())
+
+    await userEvent.type(author(), 'Prus{Enter}')
+
+    await waitFor(() => expect(searchCalls()).toHaveLength(1))
+  })
+
+  it('shows what is found in the form of the list, in place of it', async () => {
+    const [first, second] = editionIds(1)
+    await openList({
+      found: () => ({
+        items: [
+          { id: first, author: 'Prus, Bolesław (1847-1912)', title: 'Lalka' },
+          { id: second, author: 'Prus, Bolesław (1847-1912)', title: 'Faraon' },
+        ],
+      }),
+    })
+    expect(links()).toHaveLength(100)
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+
+    await userEvent.click(searchButton())
+
+    await waitFor(() => expect(links()).toHaveLength(2))
+    expect(links().map((a) => a.textContent)).toEqual(['Prus B.; Lalka', 'Prus B.; Faraon'])
+    expect(links()[0]).toHaveAttribute('href', `/editions/${first}/pages/0`)
+    expect(screen.getByRole('heading', { name: 'Editions' })).toBeInTheDocument()
+    expect(screen.getByText('Page 1 of 1')).toBeInTheDocument()
+    expect(screen.getByText('2 editions found.')).toBeInTheDocument()
+  })
+
+  it('says so when one edition is found, and when none is', async () => {
+    await openList({ found: ({ author }) => ({ items: author === 'Nobody' ? [] : [{ id: UUID, author: null, title: null }] }) })
+    await userEvent.click(toggle())
+
+    await userEvent.type(author(), 'Prus')
+    await userEvent.click(searchButton())
+    expect(await screen.findByText('1 edition found.')).toBeInTheDocument()
+
+    await userEvent.clear(author())
+    await userEvent.type(author(), 'Nobody')
+    await userEvent.click(searchButton())
+
+    expect(await screen.findByText('No edition found.')).toBeInTheDocument()
+    expect(screen.queryAllByRole('link')).toHaveLength(0)
+  })
+
+  it('keeps the search box and its fields while the editions are being searched for', async () => {
+    let answer: (found: { items: EditionItem[] }) => void = () => {}
+    await openList()
+    const pending = new Promise<{ items: EditionItem[] }>((resolve) => (answer = resolve))
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const before = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(async (input, init) =>
+      String(input).startsWith('/editions/search?')
+        ? ({ ok: true, status: 200, json: async () => ({ ...(await pending), total: 0, page: 1, size: 100, pages: 1 }) } as Response)
+        : before(input, init),
+    )
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+
+    await userEvent.click(searchButton())
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Searching')
+    expect(author()).toHaveValue('Prus')
+    answer({ items: [] })
+    expect(await screen.findByText('No edition found.')).toBeInTheDocument()
+  })
+
+  it('shows the error of the search and keeps the box, to try again', async () => {
+    await openList({ found: () => new Error('Database down') })
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+
+    await userEvent.click(searchButton())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Database down')
+    expect(author()).toHaveValue('Prus')
+    expect(searchButton()).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
+  })
+
+  it('has Clear search once there is a search, which brings the whole list back', async () => {
+    await openList()
+    await userEvent.click(toggle())
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull()
+    await userEvent.type(author(), 'Prus')
+    await userEvent.click(searchButton())
+    await waitFor(() => expect(links()).toHaveLength(2))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+
+    await waitFor(() => expect(links()).toHaveLength(100))
+    expect(author()).toHaveValue('')
+    expect(searchButton()).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull()
+    expect(screen.queryByText(/found\./)).toBeNull()
+    expect(window.location.search).toBe('')
+  })
+
+  it('moves between the pages of the results, keeping the search', async () => {
+    await openList({
+      found: ({ page }) => ({
+        items: editionIds(page).slice(0, 3).map((id) => ({ id, author: 'Prus', title: 'Lalka' })),
+        total: 5,
+        pages: 2,
+      }),
+    })
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+    await userEvent.click(searchButton())
+    await screen.findByText('Page 1 of 2')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    await screen.findByText('Page 2 of 2')
+    expect(searchCalls().map((c) => c.url)).toEqual([
+      '/editions/search?author=Prus&page=1',
+      '/editions/search?author=Prus&page=2',
+    ])
+    expect(links().map((a) => a.getAttribute('href'))).toEqual(
+      editionIds(2).slice(0, 3).map((id) => `/editions/${id}/pages/0`),
+    )
+    expect(window.location.search).toBe('?author=Prus&page=2')
+  })
+
+  it('puts the search in the address, and a new search starts on the first page', async () => {
+    await openList()
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+    await userEvent.type(title(), 'Lalka')
+
+    await userEvent.click(searchButton())
+
+    await waitFor(() => expect(links()).toHaveLength(2))
+    expect(window.location.search).toBe('?author=Prus&title=Lalka')
+  })
+
+  it('opens on the search that the address names, with its box and fields filled', async () => {
+    await openList({}, '?author=Prus&title=Lalka&page=1')
+
+    expect(searchCalls().map((c) => c.url)).toEqual(['/editions/search?author=Prus&title=Lalka&page=1'])
+    expect(calls.some((c) => c.url.startsWith('/editions?page='))).toBe(false)
+    expect(author()).toHaveValue('Prus')
+    expect(title()).toHaveValue('Lalka')
+    expect(links()).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
+  })
+
+  it('ignores an address with only blank search values', async () => {
+    await openList({}, '?author=%20&title=')
+
+    expect(searchCalls()).toHaveLength(0)
+    expect(screen.queryByRole('search')).toBeNull()
+    expect(links()).toHaveLength(100)
+  })
+
+  it('works without a login, like the list', async () => {
+    await openList()
+    await userEvent.click(toggle())
+    await userEvent.type(author(), 'Prus')
+
+    await userEvent.click(searchButton())
+
+    await waitFor(() => expect(links()).toHaveLength(2))
+    expect(screen.queryByRole('textbox', { name: 'Username' })).toBeNull()
   })
 })
 
@@ -9827,7 +10154,26 @@ describe('the cog wheel of the buttons of a word', () => {
     await open('tey', { suggest: () => ['tej'] })
 
     await waitFor(() => expect(names('tey')).toContain('tej'))
-    expect(names('tey')).toEqual(['tej', 'Legal spelling', 'Continued on next line -', 'More actions'])
+    expect(names('tey')).toEqual(['Legal spelling', 'Continued on next line -', 'tej', 'More actions'])
+  })
+
+  it('"Legal spelling" stays the first, the suggestions come after the fixed buttons', async () => {
+    await open('tey', { suggest: () => ['tej', 'tez'] })
+    await waitFor(() => expect(names('tey')).toContain('tez'))
+
+    expect(names('tey')).toEqual(['Legal spelling', 'Continued on next line -', 'tej', 'tez', 'More actions'])
+
+    await userEvent.click(cog('tey')!)
+    expect(names('tey')).toEqual([
+      'Legal spelling',
+      'Continued on next line -',
+      'tej',
+      'tez',
+      '← Join with previous',
+      '↵ New line here',
+      'Remove line break ↓',
+      'More actions',
+    ])
   })
 
   it('"Legal spelling" and "Continued on next line" work without opening it', async () => {

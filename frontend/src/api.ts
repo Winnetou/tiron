@@ -110,6 +110,28 @@ export function getEditions(page: number = 1): Promise<EditionsPage> {
   return request<EditionsPage>(`/editions?page=${page}`)
 }
 
+/** What the editions are searched for: the author and/or the title (not both blank). */
+export interface EditionSearch {
+  author: string
+  title: string
+}
+
+/**
+ * Calls GET /editions/search?author=&title=&page=: the editions of the collection
+ * whose work has that author and/or title, in the form of `getEditions`. A blank
+ * one is left out of the request, which needs at least one.
+ */
+export function searchEditions(
+  { author, title }: EditionSearch,
+  page: number = 1,
+): Promise<EditionsPage> {
+  const query = new URLSearchParams()
+  if (author.trim()) query.set('author', author.trim())
+  if (title.trim()) query.set('title', title.trim())
+  query.set('page', String(page))
+  return request<EditionsPage>(`/editions/search?${query}`)
+}
+
 /** Calls GET /editions/{editionId}/pages/{number}. */
 export function getPage(
   editionId: string,

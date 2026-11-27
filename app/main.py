@@ -242,6 +242,31 @@ def list_editions() -> CollectionPage:
     return db.list_collection()
 
 
+@app.get("/editions/search", response_model=CollectionPage)
+def search_editions(
+    author: str | None = Query(None, max_length=200),
+    title: str | None = Query(None, max_length=200),
+) -> CollectionPage:
+    """The editions of the collection whose work has the given author and/or title:
+    the search of the main page. Like the list, it needs no login.
+
+    `?author=` and `?title=`, at least one of them (422 `Give an author or a title`
+    if both are missing or only blank; with both, both must match). Each is looked
+    for anywhere in the author or the title, without regard to case, so `mick` finds
+    `Mickiewicz`; spaces at its ends are ignored, and `%` and `_` are ordinary
+    characters. Diacritics count: `Slowacki` does not find `Słowacki`. The response
+    is the same as that of `GET /editions` (`{"items": [{"id", "author", "title"}],
+    "total", "page", "size", "pages"}`, `?page=` and `?size=` as there, in the order
+    of the ids), so the client shows it in the same way. No edition found is an
+    empty list, not an error.
+    """
+    if not (author and author.strip()) and not (title and title.strip()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Give an author or a title"
+        )
+    return db.search_collection(author, title)
+
+
 @app.get("/editions/{edition_id}/metadata", response_model=EditionMetadata)
 def get_edition_metadata(edition_id: UUID) -> EditionMetadata:
     """What is known of a stored edition: `{"id": ..., "work_id": ..., "work_editions":
