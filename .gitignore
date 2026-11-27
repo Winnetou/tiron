@@ -153,6 +153,8 @@ activemq-data/
 .env
 # the settings of a production deployment (see .env.prod.example)
 .env.prod
+# the server CA of the production database (see .env.prod.example)
+certs/
 .envrc
 .venv
 env/
@@ -220,3 +222,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# macOS
+.DS_Store

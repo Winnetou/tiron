@@ -47,6 +47,15 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # The Python version is pinned in three places that must agree: the image,
+      # .python-version and requires-python (and the dependencies in uv.lock must
+      # have wheels for it). A bump of the image alone breaks the build, so move
+      # to a new Python by hand.
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
   - package-ecosystem: docker
     directory: /frontend
     schedule:

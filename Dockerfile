@@ -1,4 +1,4 @@
-FROM python:3.15-slim
+FROM python:3.14-slim
 
 # libenchant and the Polish Hunspell dictionary: the spell check uses Hunspell, the C
 # library, through pyenchant (some fifty times faster than the pure Python one that

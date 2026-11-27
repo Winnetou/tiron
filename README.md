@@ -165,8 +165,15 @@ What differs from `docker-compose.yml`, which is for development:
 - The backend's health check is `GET /health`, which asks the database `SELECT 1`:
   the container is unhealthy while the database cannot be reached.
 
-TLS to the database is optional (`POSTGRES_SSLMODE`, `POSTGRES_SSLROOTCERT`, see
-"The database connection"). **The app has no login**: as it is, anyone who can reach
+TLS to the database is `verify-ca` here: the connection is encrypted, and the server
+must be the one that the Cloud SQL server CA signed (`POSTGRES_SSLMODE`,
+`POSTGRES_SSLROOTCERT`, see "The database connection"). **Download that CA once** (Cloud
+SQL, Connections, Security, "Download server CA certificate") **to `certs/server-ca.pem`**
+(not committed): compose mounts it read-only into the backend and the worker at
+`/certs/server-ca.pem`, and **they do not start without the file**. The CA of an
+instance expires and is rotated at times: then download the new one.
+
+**The app has no login**: as it is, anyone who can reach
 the port can read and edit everything, and HTTPS does not change that (it only
 encrypts). Restrict it (the firewall to your address, Identity-Aware Proxy, or a login
 in front of the app) before you rely on it.
@@ -1838,7 +1845,10 @@ database that is not in Docker, such as Cloud SQL, there are two optional ones:
 `POSTGRES_SSLMODE` (`require`, `verify-ca` or `verify-full`; unset, libpq's default
 `prefer` is used) and `POSTGRES_SSLROOTCERT` (the CA certificate for the last two).
 They are only in the connection string if they are set. The Cloud SQL Auth Proxy
-encrypts by itself, so it needs neither.
+encrypts by itself, so it needs neither. `require` encrypts but does not check who
+answers; `verify-ca` does, and is what `docker-compose.prod.yml` is set up for.
+`verify-full` also checks the host name, which the certificate of a Cloud SQL instance
+does not have for its IP address.
 
 A connection attempt gives up after 10 seconds, and TCP keepalives are on, so that a
 connection that a firewall dropped silently is noticed.

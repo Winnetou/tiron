@@ -28,13 +28,27 @@ x-database: &database
   POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
   POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-  # TLS to the database, if it is not in the VPC / behind the proxy; empty is unset
+  # TLS to the database: verify-ca, with the CA file mounted below (database-ca) at
+  # POSTGRES_SSLROOTCERT=/certs/server-ca.pem; empty is unset
   POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-}
   POSTGRES_SSLROOTCERT: ${POSTGRES_SSLROOTCERT:-}
   # not from the environment: production does not create the schema
   PROD: "true"
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-tiron}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}@rabbitmq:5672//
+
+x-database-ca: &database-ca
+  # The server CA of the Cloud SQL instance, for POSTGRES_SSLMODE=verify-ca. Download it
+  # (Cloud SQL, Connections, Security, "Download server CA certificate") to
+  # certs/server-ca.pem next to this file. Without the file the containers do not
+  # start (compose would otherwise make an empty directory of it), and a server
+  # that is not the one this CA signed is refused.
+  - type: bind
+    source: ./certs/server-ca.pem
+    target: /certs/server-ca.pem
+    read_only: true
+    bind:
+      create_host_path: false
 
 services:
   backend:
@@ -49,6 +63,7 @@ services:
       # What the login sessions are signed with: the backend does not start without
       # it (the worker does not use it). A new one logs everybody out.
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET, e.g. openssl rand -hex 32}
+    volumes: *database-ca
     # Not published: Caddy reaches it as backend:8000.
     expose:
       - "8000"
@@ -80,6 +95,7 @@ services:
       rabbitmq:
         condition: service_healthy
     environment: *database
+    volumes: *database-ca
 
   rabbitmq:
     image: rabbitmq:4
