@@ -12,7 +12,7 @@ COPY . .
 # tsc -b, then vite build: the files are in /app/dist
 RUN npm run build
 
-FROM caddy:2.10-alpine
+FROM caddy:2.11-alpine
 
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
