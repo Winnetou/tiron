@@ -1824,6 +1824,25 @@ Not done: there is no limit on how often a password may be tried (scrypt makes e
 try cost the attacker about 50 ms, but that is all), so use long passwords and, in
 production, keep the VM behind a firewall as well.
 
+### External editions
+
+Public-domain 19th-century classics (from wolnelektury.pl) are ready and need no
+correction, so they are not `editions`. They are kept all the same, because their
+spellings are legal spellings for the literature of that time. An **external edition**
+is the table `external_edition` (`ExternalEdition` in `app/persistence/ontology.py`):
+`id` (uuid), `isbn` (optional), `author`, `title` and `year` (1500 to 2030); none of the
+text fields is empty. `Database` has `create_external_edition`, `get_external_edition`
+(None if there is none) and `update_external_edition` (the fields that are given; the
+`isbn` can be cleared with None, the others cannot; None if there is no such edition).
+Its spellings are in the table `external_edition_spelling` (`external_edition_id`,
+`spelling`; the pair is the primary key; the spelling is not empty), like
+`legal_spellings` but for an external edition. `ExternalEditionSpelling` is its model
+(the same `Spelling` rules as `LegalSpelling`), and
+`Database.create_external_edition_spelling` stores one: True if it was added, False if
+the external edition had it already; an unknown external edition is a
+`ForeignKeyViolation`. Nothing reads them yet: `get_legal_spellings` does not look at
+them.
+
 ### The schema of the database
 
 The SQL of the schema is in `app/persistence/schema.py` (`SCHEMA`, and `TABLES`, the

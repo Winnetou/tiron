@@ -7,6 +7,8 @@ from app.persistence.ontology import (
     Collection,
     Correction,
     Edition,
+    ExternalEdition,
+    ExternalEditionSpelling,
     LegalSpelling,
     Page,
     Work,
@@ -258,3 +260,52 @@ class TestLegalSpelling:
     def test_the_edition_must_be_a_uuid(self):
         with pytest.raises(ValidationError):
             LegalSpelling(edition_id="not-a-uuid", spelling="jey")
+
+
+def test_external_edition_generates_uuid_and_the_isbn_is_optional():
+    external = ExternalEdition(author="Bolesław Prus", title="Lalka", year=1890)
+
+    assert isinstance(external.id, UUID)
+    assert external.isbn is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"author": ""}, {"title": ""}, {"isbn": ""}, {"year": 1499}, {"year": 2031}],
+)
+def test_external_edition_refuses_bad_values(bad):
+    values = {"author": "A", "title": "T", "year": 1900} | bad
+    with pytest.raises(ValidationError):
+        ExternalEdition(**values)
+
+
+@pytest.mark.parametrize("missing", ["author", "title", "year"])
+def test_external_edition_needs_author_title_and_year(missing):
+    values = {"author": "A", "title": "T", "year": 1900}
+    del values[missing]
+    with pytest.raises(ValidationError):
+        ExternalEdition(**values)
+
+
+class TestExternalEditionSpelling:
+    def test_holds_the_external_edition_and_the_spelling(self):
+        external_id = uuid4()
+        spelling = ExternalEditionSpelling(
+            external_edition_id=external_id, spelling="jey"
+        )
+
+        assert (spelling.external_edition_id, spelling.spelling) == (external_id, "jey")
+
+    @pytest.mark.parametrize("spelling", ["", "two words", "a\nb", "x" * 101])
+    def test_refuses_a_bad_spelling(self, spelling):
+        with pytest.raises(ValidationError):
+            ExternalEditionSpelling(external_edition_id=uuid4(), spelling=spelling)
+
+    def test_case_matters(self):
+        assert ExternalEditionSpelling(
+            external_edition_id=UUID(int=1), spelling="Jey"
+        ) != ExternalEditionSpelling(external_edition_id=UUID(int=1), spelling="jey")
+
+    def test_needs_a_uuid(self):
+        with pytest.raises(ValidationError):
+            ExternalEditionSpelling(external_edition_id="nope", spelling="jey")
