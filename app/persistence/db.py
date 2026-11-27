@@ -35,6 +35,8 @@ from app.persistence.ontology import (
     EditionMetadata,
     EntityForm,
     EntityMatch,
+    ExternalEdition,
+    ExternalEditionSpelling,
     LegalSpelling,
     MissingHyphen,
     Page,
@@ -289,6 +291,84 @@ class Database:
             "SELECT * FROM works WHERE id = %s", (work_id,)
         ).fetchone()
         return Work.model_validate(row) if row else None
+
+    # External editions
+
+    def create_external_edition(self, external: ExternalEdition) -> ExternalEdition:
+        row = self.conn.execute(
+            "INSERT INTO external_edition (id, isbn, author, title, year)"
+            " VALUES (%s, %s, %s, %s, %s) RETURNING *",
+            (
+                external.id,
+                external.isbn,
+                external.author,
+                external.title,
+                external.year,
+            ),
+        ).fetchone()
+        return ExternalEdition.model_validate(row)
+
+    def get_external_edition(self, external_id: UUID) -> ExternalEdition | None:
+        row = self.conn.execute(
+            "SELECT * FROM external_edition WHERE id = %s", (external_id,)
+        ).fetchone()
+        return ExternalEdition.model_validate(row) if row else None
+
+    def update_external_edition(
+        self,
+        external_id: UUID,
+        *,
+        isbn: str | None = UNSET,
+        author: str = UNSET,
+        title: str = UNSET,
+        year: int = UNSET,
+    ) -> ExternalEdition | None:
+        """Change the given fields of an external edition (the others are not
+        touched) and return the updated edition (None if there is no such edition).
+
+        isbn=None clears the ISBN; the other fields cannot be None. Raises ValueError
+        if no field is given, or one that cannot be None is None.
+        """
+        changes = {
+            column: value
+            for column, value in (
+                ("isbn", isbn),
+                ("author", author),
+                ("title", title),
+                ("year", year),
+            )
+            if value is not UNSET
+        }
+        if not changes:
+            raise ValueError("Give at least one field to update")
+        if any(value is None for column, value in changes.items() if column != "isbn"):
+            raise ValueError("Only the isbn can be cleared")
+        query = sql.SQL(
+            "UPDATE external_edition SET {} WHERE id = %s RETURNING *"
+        ).format(
+            sql.SQL(", ").join(
+                sql.SQL("{} = %s").format(sql.Identifier(column)) for column in changes
+            )
+        )
+        row = self.conn.execute(query, (*changes.values(), external_id)).fetchone()
+        return ExternalEdition.model_validate(row) if row else None
+
+    def create_external_edition_spelling(
+        self, spelling: ExternalEditionSpelling
+    ) -> bool:
+        """Store a spelling as legal in an external edition.
+
+        Returns True if it was added, and False if the external edition already had
+        that spelling (the pair is unique), in which case nothing is changed. The
+        external edition must be stored: otherwise psycopg raises
+        ForeignKeyViolation.
+        """
+        row = self.conn.execute(
+            "INSERT INTO external_edition_spelling (external_edition_id, spelling)"
+            " VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING external_edition_id",
+            (spelling.external_edition_id, spelling.spelling),
+        ).fetchone()
+        return row is not None
 
     # Editions
 

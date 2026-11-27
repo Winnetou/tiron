@@ -18,6 +18,8 @@ from app.persistence.ontology import (
     Correction,
     Edition,
     EditionMetadata,
+    ExternalEdition,
+    ExternalEditionSpelling,
     LegalSpelling,
     Page,
     Work,
@@ -41,8 +43,8 @@ def db(monkeypatch):
     database = Database()
     SchemaCreator(database).create_schema()
     database.conn.execute(
-        "TRUNCATE collection, corrections, legal_spellings, pages, editions, works,"
-        " users"
+        "TRUNCATE collection, corrections, legal_spellings, external_edition_spelling,"
+        " external_edition, pages, editions, works, users"
         " RESTART IDENTITY CASCADE"
     )
     yield database
@@ -1303,3 +1305,129 @@ def test_create_user_refuses_a_username_that_is_taken(db):
 
     assert db.check_user("anna", "secret") is True  # nothing was changed
     assert db.check_user("anna", "other") is False
+
+
+class TestExternalEdition:
+    def test_creates_and_gets_an_external_edition(self, db):
+        external = ExternalEdition(
+            isbn="978-83-7327-000-0", author="Bolesław Prus", title="Lalka", year=1890
+        )
+        assert db.create_external_edition(external) == external
+        assert db.get_external_edition(external.id) == external
+
+    def test_the_isbn_is_optional(self, db):
+        external = db.create_external_edition(
+            ExternalEdition(author="Adam Mickiewicz", title="Pan Tadeusz", year=1834)
+        )
+        assert db.get_external_edition(external.id).isbn is None
+
+    def test_get_of_an_unknown_id_is_none(self, db):
+        assert db.get_external_edition(uuid4()) is None
+
+    def test_updates_only_the_given_fields(self, db):
+        external = db.create_external_edition(
+            ExternalEdition(isbn="1", author="A", title="T", year=1900)
+        )
+        updated = db.update_external_edition(external.id, title="U", year=1901)
+        assert updated == external.model_copy(update={"title": "U", "year": 1901})
+        assert db.get_external_edition(external.id) == updated
+
+    def test_the_isbn_can_be_cleared(self, db):
+        external = db.create_external_edition(
+            ExternalEdition(isbn="1", author="A", title="T", year=1900)
+        )
+        assert db.update_external_edition(external.id, isbn=None).isbn is None
+
+    def test_update_of_an_unknown_id_is_none(self, db):
+        assert db.update_external_edition(uuid4(), year=1900) is None
+
+    def test_update_needs_a_field(self, db):
+        with pytest.raises(ValueError, match="at least one"):
+            db.update_external_edition(uuid4())
+
+    @pytest.mark.parametrize("field", ["author", "title", "year"])
+    def test_a_required_field_cannot_be_cleared(self, db, field):
+        with pytest.raises(ValueError, match="isbn"):
+            db.update_external_edition(uuid4(), **{field: None})
+
+    @pytest.mark.parametrize(
+        "bad",
+        [{"isbn": ""}, {"author": ""}, {"title": ""}, {"year": 1499}, {"year": 2031}],
+    )
+    def test_the_database_refuses_bad_values(self, db, bad):
+        external = db.create_external_edition(
+            ExternalEdition(author="A", title="T", year=1900)
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.update_external_edition(external.id, **bad)
+
+
+class TestExternalEditionSpellings:
+    @pytest.fixture
+    def external(self, db):
+        return db.create_external_edition(
+            ExternalEdition(author="Bolesław Prus", title="Lalka", year=1890)
+        )
+
+    def rows(self, db):
+        return db.conn.execute(
+            "SELECT external_edition_id, spelling FROM external_edition_spelling"
+            " ORDER BY spelling"
+        ).fetchall()
+
+    def test_adds_a_spelling(self, db, external):
+        added = db.create_external_edition_spelling(
+            ExternalEditionSpelling(external_edition_id=external.id, spelling="jey")
+        )
+
+        assert added is True
+        assert self.rows(db) == [
+            {"external_edition_id": external.id, "spelling": "jey"}
+        ]
+
+    def test_the_same_spelling_again_is_not_added_twice(self, db, external):
+        spelling = ExternalEditionSpelling(
+            external_edition_id=external.id, spelling="jey"
+        )
+
+        first = db.create_external_edition_spelling(spelling)
+        second = db.create_external_edition_spelling(spelling)
+
+        assert (first, second) == (True, False)
+        assert len(self.rows(db)) == 1
+
+    def test_case_makes_another_spelling(self, db, external):
+        for text in ("jey", "Jey"):
+            db.create_external_edition_spelling(
+                ExternalEditionSpelling(external_edition_id=external.id, spelling=text)
+            )
+
+        assert {row["spelling"] for row in self.rows(db)} == {"Jey", "jey"}
+
+    def test_the_same_spelling_can_be_in_many_external_editions(self, db, external):
+        other = db.create_external_edition(
+            ExternalEdition(author="Other", title="Book", year=1900)
+        )
+
+        added = [
+            db.create_external_edition_spelling(
+                ExternalEditionSpelling(external_edition_id=e.id, spelling="jey")
+            )
+            for e in (external, other)
+        ]
+
+        assert added == [True, True]
+
+    def test_an_unknown_external_edition_is_refused(self, db):
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            db.create_external_edition_spelling(
+                ExternalEditionSpelling(external_edition_id=uuid4(), spelling="jey")
+            )
+
+    def test_an_empty_spelling_is_refused_by_the_table(self, db, external):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.conn.execute(
+                "INSERT INTO external_edition_spelling (external_edition_id, spelling)"
+                " VALUES (%s, '')",
+                (external.id,),
+            )

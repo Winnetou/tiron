@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS legal_spellings (
     PRIMARY KEY (edition_id, spelling)
 );
 
+-- a ready edition from outside (a public-domain classic from wolnelektury.pl): it is
+-- not corrected here, it is only kept for the spellings it gives
+CREATE TABLE IF NOT EXISTS external_edition (
+    id uuid PRIMARY KEY,
+    isbn text CHECK (isbn <> ''),
+    author text NOT NULL CHECK (author <> ''),
+    title text NOT NULL CHECK (title <> ''),
+    year integer NOT NULL CHECK (year BETWEEN 1500 AND 2030)
+);
+
+-- spellings that are legal in an external edition, like legal_spellings; each
+-- external edition has each spelling once
+CREATE TABLE IF NOT EXISTS external_edition_spelling (
+    external_edition_id uuid NOT NULL REFERENCES external_edition (id),
+    spelling text NOT NULL CHECK (spelling <> ''),
+    PRIMARY KEY (external_edition_id, spelling)
+);
+
 -- the people who may log in; they are added by hand (see passwords.py), there is no
 -- registration. Only a hash of the password is kept.
 CREATE TABLE IF NOT EXISTS users (
@@ -72,5 +90,7 @@ TABLES = (
     "corrections",
     "collection",
     "legal_spellings",
+    "external_edition",
+    "external_edition_spelling",
     "users",
 )

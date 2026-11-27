@@ -21,6 +21,19 @@ class Edition(BaseModel):
     page_count: int | None = Field(default=None, ge=1)
 
 
+class ExternalEdition(BaseModel):
+    """A ready edition from outside Tiron, such as a public-domain classic from
+    wolnelektury.pl. It needs no correction, so it is not an `Edition` (and has no
+    pages); it is kept because its spellings are legal ones. The `isbn` is optional,
+    the other fields are all required."""
+
+    id: UUID = Field(default_factory=uuid4)
+    isbn: str | None = Field(default=None, min_length=1)
+    author: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    year: int = Field(ge=1500, le=2030)
+
+
 class EditionMetadata(BaseModel):
     """What is known of an edition: the `author` and `title` belong to its work
     (`work_id`; `work_editions` is how many editions the work has, this one
@@ -283,4 +296,13 @@ class LegalSpelling(BaseModel):
     correct in the 19th century often is not anymore. We have no better word."""
 
     edition_id: UUID
+    spelling: Spelling
+
+
+class ExternalEditionSpelling(BaseModel):
+    """A spelling that is legal in an external edition (the words of a ready text
+    are the legal spellings of its time). Like `LegalSpelling`, but for an
+    `ExternalEdition`; each spelling can be given once for an edition."""
+
+    external_edition_id: UUID
     spelling: Spelling
