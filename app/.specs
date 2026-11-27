@@ -1,0 +1,82 @@
+we are ona new branch:
+
+t-107-ready-editions-cru 
+
+First: i will explain the reason why we need that chnage
+We have texts from XIX century in public domain. 
+Plenty of them. All of Polish classics
+yet, we don't need to add the to Editions because thery are
+ready, corrected and need no work
+but we still want to have them  into the db
+because they provide us legal spellings for XIX cent literature
+
+
+we will start from creating a schema of a new db table
+ExternalEdition 
+author
+title
+year
+
+next, a model to represent it: ExternalEdition 
+next, a change in db.py - the class should have  3 new methods that will allow to create, update and get the instance of 
+ExternalEdition
+next, ExternalEditionSpelling
+a schema of a new db table - just like for legal spelling but
+references ExternalEdition, not edition
+next, a model to represent it:
+ExternalEditionSpelling
+next, a change in db.py - the make one method that will 
+create it
+
+
+
+============
+t-109-
+============
+
+
+============
+
+https://wolnelektury.pl/media/book/txt/ksiegi-narodu-polskiego-i-pielgrzymstwa-polskiego.txt
+
+
+t-108-cli-for-ready-editions
+build a sript in python
+it will work as a cli
+i will start it
+it will prompt me for a link
+i will provide a link
+it checks if the link
+startswith "https://wolnelektury.pl/media/book/txt/"
+and endswith "txt"
+it will open and fetch the text
+first line is the author following the Format: first name, last name
+the script splits into name and surname and asks the user to confirm - user can accept, edit or cancel everything
+next is a blank line
+next line - one or more - is the title, it may come into many lines until the next blank line
+the script fetches is asks the user to confirm just as before - user can accept, edit or cancel everything
+next, sometimes comes ISBN, but not always. We skip it
+next, the script asks the user for the year. user need to copy it from another source by hand
+next comes the body of the work. 
+on the bottom of each page there is a footnote section
+it always starts with fee blank lines followed by:
+"""
+-----
+Ta lektura, podobnie jak tysiące innych, dostępna jest na stronie wolnelektury.pl."""
+That is: five dashes, newline and the sentence "Ta lektura, podobnie jak tysiące innych, dostępna jest na stronie wolnelektury.pl."
+the work ends before the 5 dashes so we ignore everythin that comes after - and ignore the empty lines in between.
+The text is saved as ExternalEdition instance
+next, every word as ExternalEditionSpelling
+ 
+
+
+
+
+
+t-110-make-use
+Edition has page count
+So on the edition page, we can display it as: "Page x of N"
+And the button to show "next page" should be inactive
+when there is no more pages - when page count equals current page
+
+and we can also add a second 

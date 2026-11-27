@@ -3,7 +3,7 @@ PORT ?= 8000
 ENV_FILE ?= .env
 BACKEND_URL ?= http://localhost:$(PORT)
 
-.PHONY: build run frontend up down prod-up prod-down prod-config
+.PHONY: build run frontend up down prod-up prod-down prod-config external-edition
 
 build:
 	docker build -t $(IMAGE) .
@@ -46,3 +46,9 @@ into_shell:
 	docker exec -it tiron-backend-1  /bin/bash
 restart:
 	docker compose restart backend
+
+# Import an external edition (a ready text of wolnelektury.pl) into the database of the
+# POSTGRES_* variables of $(ENV_FILE) (see app/external_editions/cli.py). It asks for
+# the link, the author, the title and the year.
+external-edition:
+	set -a && . ./$(ENV_FILE) && set +a && uv run python -m app.external_editions

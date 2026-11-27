@@ -13,7 +13,12 @@ import pytest
 from fastapi_pagination import Page as PaginatedPage
 from fastapi_pagination import Params, set_page, set_params
 
-from app.persistence.db import Database, WorkExists, get_conninfo
+from app.persistence.db import (
+    Database,
+    ExternalEditionExists,
+    WorkExists,
+    get_conninfo,
+)
 from app.persistence.ontology import (
     Correction,
     Edition,
@@ -1516,3 +1521,168 @@ class TestExternalEditionSpellings:
                 " VALUES (%s, '')",
                 (external.id,),
             )
+
+
+class TestImportOfAnExternalEdition:
+    """The command line (`app.external_editions.cli`) with a real database."""
+
+    def test_saves_the_edition_and_each_word_once(self, db):
+        from app.external_editions.cli import run
+        from tests.external_editions.test_parsing import LINK, SAMPLE
+
+        answers = iter([LINK, "", "", "1832"])
+
+        external = run(
+            db,
+            input_=lambda prompt: next(answers),
+            print_=lambda line: None,
+            fetch=lambda link: SAMPLE.read_text(encoding="utf-8"),
+        )
+
+        assert db.get_external_edition(external.id) == external
+        rows = db.conn.execute(
+            "SELECT spelling FROM external_edition_spelling"
+            " WHERE external_edition_id = %s",
+            (external.id,),
+        ).fetchall()
+        spellings = {row["spelling"] for row in rows}
+        assert len(rows) == len(spellings) == 4441
+        assert {"pielgrzym", "Pielgrzym"} <= spellings
+
+
+class TestExternalEditionIsUnique:
+    def external(self, **values):
+        return ExternalEdition(
+            **{"author": "Adam Mickiewicz", "title": "Dziady", "year": 1832} | values
+        )
+
+    def test_the_same_author_title_and_year_is_refused(self, db):
+        db.create_external_edition(self.external())
+
+        with pytest.raises(ExternalEditionExists):
+            db.create_external_edition(self.external(isbn="978-1"))
+        count = db.conn.execute("SELECT count(*) AS n FROM external_edition").fetchone()
+        assert count["n"] == 1
+
+    def test_case_does_not_matter(self, db):
+        db.create_external_edition(self.external())
+
+        with pytest.raises(ExternalEditionExists):
+            db.create_external_edition(
+                self.external(author="ADAM MICKIEWICZ", title="dziady")
+            )
+
+    @pytest.mark.parametrize(
+        "other", [{"year": 1833}, {"title": "Pan Tadeusz"}, {"author": "Juliusz"}]
+    )
+    def test_another_year_title_or_author_is_another_edition(self, db, other):
+        db.create_external_edition(self.external())
+
+        db.create_external_edition(self.external(**other))
+
+    def test_the_isbn_does_not_count(self, db):
+        db.create_external_edition(self.external(isbn="1"))
+
+        with pytest.raises(ExternalEditionExists):
+            db.create_external_edition(self.external(isbn="2"))
+
+    def test_an_update_to_the_data_of_another_is_refused_and_changes_nothing(self, db):
+        db.create_external_edition(self.external())
+        other = db.create_external_edition(self.external(year=1833))
+
+        with pytest.raises(ExternalEditionExists):
+            db.update_external_edition(other.id, year=1832)
+        assert db.get_external_edition(other.id).year == 1833
+
+    def test_an_update_that_keeps_its_own_data_is_fine(self, db):
+        edition = db.create_external_edition(self.external())
+
+        assert db.update_external_edition(edition.id, year=1832, isbn="1").isbn == "1"
+
+    def test_it_is_a_value_error_too(self):
+        assert issubclass(ExternalEditionExists, ValueError)
+
+    def test_the_import_of_the_same_text_twice_saves_the_second_time_nothing(self, db):
+        from app.external_editions.cli import run
+        from tests.external_editions.test_parsing import LINK, SAMPLE
+
+        def importing():
+            answers = iter([LINK, "", "", "1832"])
+            said = []
+            result = run(
+                db,
+                input_=lambda prompt: next(answers),
+                print_=said.append,
+                fetch=lambda link: SAMPLE.read_text(encoding="utf-8"),
+            )
+            return result, said
+
+        first, _ = importing()
+        second, said = importing()
+
+        assert first is not None and second is None
+        assert "is in the database already" in said[-1]
+        assert db.conn.execute(
+            "SELECT count(*) AS n FROM external_edition"
+        ).fetchone() == {"n": 1}
+
+
+class TestExternalEditionSpellingsInBatch:
+    @pytest.fixture
+    def external(self, db):
+        return db.create_external_edition(
+            ExternalEdition(author="Bolesław Prus", title="Lalka", year=1890)
+        )
+
+    def stored(self, db):
+        return {
+            row["spelling"]
+            for row in db.conn.execute(
+                "SELECT spelling FROM external_edition_spelling"
+            ).fetchall()
+        }
+
+    def test_stores_all_and_counts_them(self, db, external):
+        added = db.create_external_edition_spellings(external.id, ["jey", "tey", "Jey"])
+
+        assert added == 3
+        assert self.stored(db) == {"jey", "tey", "Jey"}
+
+    def test_repeats_and_what_is_there_already_are_stored_once(self, db, external):
+        db.create_external_edition_spelling(
+            ExternalEditionSpelling(external_edition_id=external.id, spelling="jey")
+        )
+
+        added = db.create_external_edition_spellings(
+            external.id, ["jey", "tey", "tey", "raczey"]
+        )
+
+        assert added == 2
+        assert self.stored(db) == {"jey", "tey", "raczey"}
+
+    def test_accepts_any_iterable_and_nothing(self, db, external):
+        assert db.create_external_edition_spellings(external.id, iter(["a"])) == 1
+        assert db.create_external_edition_spellings(external.id, []) == 0
+
+    @pytest.mark.parametrize("bad", ["", "two words", "a\nb", "x" * 101])
+    def test_a_bad_spelling_stores_nothing(self, db, external, bad):
+        with pytest.raises(ValueError):
+            db.create_external_edition_spellings(external.id, ["jey", bad])
+        assert self.stored(db) == set()
+
+    def test_an_unknown_external_edition_is_refused(self, db):
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            db.create_external_edition_spellings(uuid4(), ["jey"])
+
+    def test_the_same_spelling_in_two_external_editions(self, db, external):
+        other = db.create_external_edition(
+            ExternalEdition(author="Other", title="Book", year=1900)
+        )
+
+        assert db.create_external_edition_spellings(external.id, ["jey"]) == 1
+        assert db.create_external_edition_spellings(other.id, ["jey"]) == 1
+
+    def test_many_at_once(self, db, external):
+        spellings = [f"word{i}" for i in range(20000)]
+
+        assert db.create_external_edition_spellings(external.id, spellings) == 20000
