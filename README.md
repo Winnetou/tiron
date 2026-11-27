@@ -1840,8 +1840,37 @@ Its spellings are in the table `external_edition_spelling` (`external_edition_id
 (the same `Spelling` rules as `LegalSpelling`), and
 `Database.create_external_edition_spelling` stores one: True if it was added, False if
 the external edition had it already; an unknown external edition is a
-`ForeignKeyViolation`. Nothing reads them yet: `get_legal_spellings` does not look at
+`ForeignKeyViolation` (and see below for storing many). Nothing reads them yet: `get_legal_spellings` does not look at
 them.
+
+**Importing one** is a command line, `make external-edition` (or
+`python -m app.external_editions` with the `POSTGRES_*` variables set; `make` reads them
+from `.env`, or from `ENV_FILE`). It asks for the link to a `.txt` of wolnelektury.pl
+(it must start with `https://wolnelektury.pl/media/book/txt/` and end with `txt`), and
+fetches it. The text has the author on the first line (first name(s), last name), the
+title (one line or more, up to a blank line), an `ISBN` line that is skipped when it
+is there, and then the work, which ends before the footer, five dashes and "Ta lektura,
+podobnie jak tysiące innych, dostępna jest na stronie wolnelektury.pl." (what comes after
+is ignored). The script shows the author, split into first name(s) and last name, and
+the title: Enter accepts, `e` edits (Enter keeps what it is), `c` cancels everything;
+a cancel at any question saves nothing. The year is not in the text, so it is asked
+for (1500 to 2030). Then, in one transaction, the `ExternalEdition` is saved (the
+author as the catalogue writes it, "Mickiewicz, Adam"; the text itself is not kept) and
+every different word of the work as an `ExternalEditionSpelling` (case matters; words
+with digits and ones longer than 100 letters are left out; a word the dictionary knows
+is stored too). The code is in `app/external_editions/` (`parsing.py`, `cli.py`); its
+tests use a copy of the text of "Księgi narodu polskiego i pielgrzymstwa polskiego" in
+`tests/external_editions/`, so they need no network.
+
+An external edition is **one per author, title and year**, case aside (the unique index
+`external_edition_author_title_year_key`; the isbn does not count). A second import of
+the same text is not saved: `create_external_edition` raises `ExternalEditionExists` (a
+`ValueError`; `update_external_edition` too, if the change would make two the same), and
+the script says it is there already and stops. The words are saved in one statement,
+`Database.create_external_edition_spellings(external_edition_id, spellings)`: it checks
+each spelling (a bad one is a `ValueError` and nothing is stored), stores repeats and
+the ones that are there once, and returns how many it added.
+In a database whose schema is made by hand (production) create that index too.
 
 ### The schema of the database
 

@@ -17,7 +17,7 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from typing import Any
 from uuid import UUID
@@ -212,9 +212,15 @@ class WorkExists(ValueError):
     """Another work has the author and title that were asked for."""
 
 
+class ExternalEditionExists(ValueError):
+    """Another external edition has the author, title and year that were asked for."""
+
+
 class UserExists(ValueError):
     """There is a user with that username already."""
 
+
+_EXTERNAL_EXISTS = "Another external edition has this author, title and year already"
 
 UNSET: Any = object()  # "leave this column as it is" (None is a real value)
 
@@ -295,17 +301,23 @@ class Database:
     # External editions
 
     def create_external_edition(self, external: ExternalEdition) -> ExternalEdition:
-        row = self.conn.execute(
-            "INSERT INTO external_edition (id, isbn, author, title, year)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING *",
-            (
-                external.id,
-                external.isbn,
-                external.author,
-                external.title,
-                external.year,
-            ),
-        ).fetchone()
+        """Store an external edition. An external edition is one per author, title
+        and year (case does not matter), so if another has them already nothing is
+        stored and ExternalEditionExists is raised."""
+        try:
+            row = self.conn.execute(
+                "INSERT INTO external_edition (id, isbn, author, title, year)"
+                " VALUES (%s, %s, %s, %s, %s) RETURNING *",
+                (
+                    external.id,
+                    external.isbn,
+                    external.author,
+                    external.title,
+                    external.year,
+                ),
+            ).fetchone()
+        except psycopg.errors.UniqueViolation as exc:
+            raise ExternalEditionExists(_EXTERNAL_EXISTS) from exc
         return ExternalEdition.model_validate(row)
 
     def get_external_edition(self, external_id: UUID) -> ExternalEdition | None:
@@ -327,7 +339,9 @@ class Database:
         touched) and return the updated edition (None if there is no such edition).
 
         isbn=None clears the ISBN; the other fields cannot be None. Raises ValueError
-        if no field is given, or one that cannot be None is None.
+        if no field is given, or one that cannot be None is None, and
+        ExternalEditionExists (a ValueError too) if the change would give it the
+        author, title and year of another external edition.
         """
         changes = {
             column: value
@@ -350,7 +364,10 @@ class Database:
                 sql.SQL("{} = %s").format(sql.Identifier(column)) for column in changes
             )
         )
-        row = self.conn.execute(query, (*changes.values(), external_id)).fetchone()
+        try:
+            row = self.conn.execute(query, (*changes.values(), external_id)).fetchone()
+        except psycopg.errors.UniqueViolation as exc:
+            raise ExternalEditionExists(_EXTERNAL_EXISTS) from exc
         return ExternalEdition.model_validate(row) if row else None
 
     def create_external_edition_spelling(
@@ -369,6 +386,33 @@ class Database:
             (spelling.external_edition_id, spelling.spelling),
         ).fetchone()
         return row is not None
+
+    def create_external_edition_spellings(
+        self, external_edition_id: UUID, spellings: Iterable[str]
+    ) -> int:
+        """Store many spellings as legal in an external edition, in one statement
+        (not one for each). Each must be a valid spelling (see `Spelling`), else
+        ValueError is raised and nothing is stored. The ones that the external
+        edition has already, and repeats in `spellings`, are stored once.
+
+        Returns how many were added. The external edition must be stored: otherwise
+        psycopg raises ForeignKeyViolation.
+        """
+        checked = list(
+            dict.fromkeys(
+                ExternalEditionSpelling(
+                    external_edition_id=external_edition_id, spelling=spelling
+                ).spelling
+                for spelling in spellings
+            )
+        )
+        if not checked:
+            return 0
+        return self.conn.execute(
+            "INSERT INTO external_edition_spelling (external_edition_id, spelling)"
+            " SELECT %s, unnest(%s::text[]) ON CONFLICT DO NOTHING",
+            (external_edition_id, checked),
+        ).rowcount
 
     # Editions
 

@@ -80,6 +80,11 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS works_author_title_key
     ON works (lower(author), lower(title))
     WHERE author IS NOT NULL AND title IS NOT NULL;
+
+-- one external edition per (author, title, year), case-insensitive: the same text
+-- cannot be imported twice
+CREATE UNIQUE INDEX IF NOT EXISTS external_edition_author_title_year_key
+    ON external_edition (lower(author), lower(title), year);
 """
 
 # The tables that the schema creates: a database has the schema if it has them all.
